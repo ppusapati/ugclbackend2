@@ -9,8 +9,10 @@ import (
 
 // DprSite represents a DPR Site form submission.
 type DprSite struct {
-	ID                                    uuid.UUID      `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
-	NameOfSite                            string         `gorm:"not null" json:"nameOfSite"`
+	ID                                    uuid.UUID        `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
+	BusinessVerticalID                    uuid.UUID        `gorm:"type:uuid;index;not null" json:"businessVerticalId"`
+	BusinessVertical                      BusinessVertical `gorm:"foreignKey:BusinessVerticalID" json:"businessVertical,omitempty"`
+	NameOfSite                            string           `gorm:"not null" json:"nameOfSite"`
 	LabelNumber                           string         `gorm:"not null" json:"labelNumber"`
 	ClassOfPipes                          string         `gorm:"not null" json:"classOfPipes"`
 	MaterialOfPipe                        string         `gorm:"not null" json:"materialOfPipe"`

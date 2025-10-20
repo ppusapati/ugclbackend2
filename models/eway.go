@@ -9,8 +9,10 @@ import (
 
 // Eway represents a submitted E-Way Bill form.
 type Eway struct {
-	ID                     uuid.UUID `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
-	BillNo                 string    `gorm:"not null" json:"billNo"`
+	ID                     uuid.UUID        `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
+	BusinessVerticalID     uuid.UUID        `gorm:"type:uuid;index;not null" json:"businessVerticalId"`
+	BusinessVertical       BusinessVertical `gorm:"foreignKey:BusinessVerticalID" json:"businessVertical,omitempty"`
+	BillNo                 string           `gorm:"not null" json:"billNo"`
 	GeneratedDate          JSONTime  `gorm:"not null" json:"generatedDate"`
 	GeneratedBy            string    `gorm:"not null" json:"generatedBy"`
 	ValidUpto              *JSONTime `json:"validUpto,omitempty"`

@@ -35,7 +35,7 @@ func main() {
 	if err := config.Migrations(config.DB); err != nil {
 		log.Fatalf("could not run migrations: %v", err)
 	}
-	handler := routes.RegisterRoutes()
+	handler := routes.RegisterRoutesV2()
 	handlerWithCORS := enableCORS(handler)
 	log.Println("Server starting at port", port)
 	log.Fatal(http.ListenAndServe(":"+port, handlerWithCORS))

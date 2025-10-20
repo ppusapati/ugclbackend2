@@ -8,10 +8,12 @@ import (
 	"gorm.io/gorm"
 )
 
-// StockReport represents one “stock” form submission.
+// StockReport represents one "stock" form submission.
 type Stock struct {
-	ID                     uuid.UUID      `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
-	InOut                  string         `gorm:"column:in_out;not null"               json:"inOut"`
+	ID                     uuid.UUID        `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
+	BusinessVerticalID     uuid.UUID        `gorm:"type:uuid;index;not null" json:"businessVerticalId"`
+	BusinessVertical       BusinessVertical `gorm:"foreignKey:BusinessVerticalID" json:"businessVertical,omitempty"`
+	InOut                  string           `gorm:"column:in_out;not null"               json:"inOut"`
 	YardName               string         `gorm:"column:yard_name;not null"            json:"yardName"`
 	InvoiceDate            JSONTime       `gorm:"column:invoice_date;not null"         json:"invoiceDate"`
 	CompanyName            string         `gorm:"column:company_name;not null"         json:"companyName"`

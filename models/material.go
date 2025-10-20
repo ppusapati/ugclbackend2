@@ -8,10 +8,12 @@ import (
 	"gorm.io/gorm"
 )
 
-// MaterialIndent represents a “Material Indent” form submission.
+// MaterialIndent represents a "Material Indent" form submission.
 type Material struct {
-	ID                     uuid.UUID      `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
-	NameOfSite             string         `gorm:"not null" json:"nameOfSite"`
+	ID                     uuid.UUID        `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
+	BusinessVerticalID     uuid.UUID        `gorm:"type:uuid;index;not null" json:"businessVerticalId"`
+	BusinessVertical       BusinessVertical `gorm:"foreignKey:BusinessVerticalID" json:"businessVertical,omitempty"`
+	NameOfSite             string           `gorm:"not null" json:"nameOfSite"`
 	MaterialOrService      datatypes.JSON `gorm:"type:jsonb;not null" json:"materialOrService"` // e.g. ["Material","Service"]
 	Description            string         `gorm:"not null" json:"description"`
 	QtyRequiredNow         string         `gorm:"not null" json:"qtyRequiredNow"`

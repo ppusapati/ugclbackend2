@@ -8,10 +8,12 @@ import (
 	"gorm.io/gorm"
 )
 
-// WaterReport represents one “water” form submission.
+// WaterReport represents one "water" form submission.
 type Water struct {
-	ID                  uuid.UUID      `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
-	SiteName            string         `gorm:"column:site_name;not null"              json:"siteName"`
+	ID                  uuid.UUID        `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
+	BusinessVerticalID  uuid.UUID        `gorm:"type:uuid;index;not null" json:"businessVerticalId"`
+	BusinessVertical    BusinessVertical `gorm:"foreignKey:BusinessVerticalID" json:"businessVertical,omitempty"`
+	SiteName            string           `gorm:"column:site_name;not null"              json:"siteName"`
 	Purpose             string         `gorm:"column:purpose;not null"                json:"purpose"`
 	PlaceOfSupply       *string        `gorm:"column:place_of_supply"                 json:"placeOfSupply,omitempty"`
 	TankerVehicleNumber string         `gorm:"column:tanker_vehicle_number;not null"  json:"tankerVehicleNumber"`

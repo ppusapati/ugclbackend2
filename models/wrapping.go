@@ -8,10 +8,12 @@ import (
 	"gorm.io/gorm"
 )
 
-// WrappingReport represents one “wrapping” form submission.
+// WrappingReport represents one "wrapping" form submission.
 type Wrapping struct {
-	ID                uuid.UUID      `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
-	YardName          string         `gorm:"column:yard_name;not null"              json:"yardName"`
+	ID                 uuid.UUID        `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
+	BusinessVerticalID uuid.UUID        `gorm:"type:uuid;index;not null" json:"businessVerticalId"`
+	BusinessVertical   BusinessVertical `gorm:"foreignKey:BusinessVerticalID" json:"businessVertical,omitempty"`
+	YardName           string           `gorm:"column:yard_name;not null"              json:"yardName"`
 	ContractorName    string         `gorm:"column:contractor_name;not null"        json:"contractorName"`
 	Activity          string         `gorm:"column:activity;not null"               json:"activity"`
 	PipeNo            string         `gorm:"column:pipe_no;not null"                json:"pipeNo"`

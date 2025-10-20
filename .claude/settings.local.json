@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go run .)",
+      "Bash(timeout 10 go run .)",
+      "Bash(timeout 15 go run .)",
+      "Bash(timeout 30 go run .)",
+      "Bash(timeout 35 go run .)",
+      "Bash(go build -o /dev/null .)",
+      "Bash(psql -U postgres -d ugcl -c \"SELECT id FROM migrations ORDER BY id;\")"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

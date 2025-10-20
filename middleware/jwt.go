@@ -41,6 +41,7 @@ func GenerateToken(userID, role, name, phone string) (string, error) {
 		Name:   name,
 		Phone:  phone,
 		Role:   role,
+
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),

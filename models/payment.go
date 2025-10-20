@@ -8,10 +8,12 @@ import (
 	"gorm.io/gorm"
 )
 
-// PaymentReport represents a “payment” form submission.
+// PaymentReport represents a "payment" form submission.
 type Payment struct {
-	ID                uuid.UUID      `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
-	NameOfSite        string         `gorm:"column:name_of_site;not null"         json:"nameOfSite"`
+	ID                uuid.UUID        `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
+	BusinessVerticalID uuid.UUID       `gorm:"type:uuid;index;not null" json:"businessVerticalId"`
+	BusinessVertical  BusinessVertical `gorm:"foreignKey:BusinessVerticalID" json:"businessVertical,omitempty"`
+	NameOfSite        string           `gorm:"column:name_of_site;not null"         json:"nameOfSite"`
 	RequestType       string         `gorm:"column:request_type;not null"        json:"requestType"`
 	Purpose           string         `gorm:"column:purpose;not null"             json:"purpose"`
 	BeneficiaryName   string         `gorm:"column:beneficiary_name;not null"    json:"beneficiaryName"`

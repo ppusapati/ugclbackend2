@@ -23,4 +23,15 @@ func Connect() {
 	if err != nil {
 		log.Fatal("Failed to connect to database:", err)
 	}
+
+	// Run migrations
+	if err := Migrations(DB); err != nil {
+		log.Fatal("Failed to run migrations:", err)
+	}
+
+	// Seed permissions and roles
+	// SeedPermissions()
+
+	// Seed business verticals
+	SeedBusinessVerticals()
 }
