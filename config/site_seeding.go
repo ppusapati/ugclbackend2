@@ -35,30 +35,30 @@ func SeedSites() {
 func seedWaterSites(businessVerticalID uuid.UUID) {
 	waterSites := []models.Site{
 		{
-			Name:               "Water Site A",
-			Code:               "WATER_SITE_A",
-			Description:        "Primary water distribution site",
+			Name:               "Ramanagara",
+			Code:               "RAMANAGARA",
+			Description:        "Ramanagara water distribution site",
 			BusinessVerticalID: businessVerticalID,
 			IsActive:           true,
 		},
 		{
-			Name:               "Water Site B",
-			Code:               "WATER_SITE_B",
-			Description:        "Secondary water distribution site",
+			Name:               "Magadi",
+			Code:               "MAGADI",
+			Description:        "Magadi water distribution site",
 			BusinessVerticalID: businessVerticalID,
 			IsActive:           true,
 		},
 		{
-			Name:               "Water Site C",
-			Code:               "WATER_SITE_C",
-			Description:        "Water treatment facility",
+			Name:               "VG Doddi",
+			Code:               "VG_DODDI",
+			Description:        "VG Doddi water distribution site",
 			BusinessVerticalID: businessVerticalID,
 			IsActive:           true,
 		},
 		{
-			Name:               "Water Site D",
-			Code:               "WATER_SITE_D",
-			Description:        "Reserve water storage site",
+			Name:               "Mallipatna",
+			Code:               "MALLIPATNA",
+			Description:        "Mallipatna water distribution site",
 			BusinessVerticalID: businessVerticalID,
 			IsActive:           true,
 		},
@@ -83,18 +83,10 @@ func seedWaterSites(businessVerticalID uuid.UUID) {
 // seedSolarSites creates 12 default sites for Solar Works
 func seedSolarSites(businessVerticalID uuid.UUID) {
 	solarSites := []models.Site{
-		{Name: "Solar Site 01", Code: "SOLAR_SITE_01", Description: "Solar panel array 01", BusinessVerticalID: businessVerticalID, IsActive: true},
-		{Name: "Solar Site 02", Code: "SOLAR_SITE_02", Description: "Solar panel array 02", BusinessVerticalID: businessVerticalID, IsActive: true},
-		{Name: "Solar Site 03", Code: "SOLAR_SITE_03", Description: "Solar panel array 03", BusinessVerticalID: businessVerticalID, IsActive: true},
-		{Name: "Solar Site 04", Code: "SOLAR_SITE_04", Description: "Solar panel array 04", BusinessVerticalID: businessVerticalID, IsActive: true},
-		{Name: "Solar Site 05", Code: "SOLAR_SITE_05", Description: "Solar panel array 05", BusinessVerticalID: businessVerticalID, IsActive: true},
-		{Name: "Solar Site 06", Code: "SOLAR_SITE_06", Description: "Solar panel array 06", BusinessVerticalID: businessVerticalID, IsActive: true},
-		{Name: "Solar Site 07", Code: "SOLAR_SITE_07", Description: "Solar panel array 07", BusinessVerticalID: businessVerticalID, IsActive: true},
-		{Name: "Solar Site 08", Code: "SOLAR_SITE_08", Description: "Solar panel array 08", BusinessVerticalID: businessVerticalID, IsActive: true},
-		{Name: "Solar Site 09", Code: "SOLAR_SITE_09", Description: "Solar panel array 09", BusinessVerticalID: businessVerticalID, IsActive: true},
-		{Name: "Solar Site 10", Code: "SOLAR_SITE_10", Description: "Solar panel array 10", BusinessVerticalID: businessVerticalID, IsActive: true},
-		{Name: "Solar Site 11", Code: "SOLAR_SITE_11", Description: "Solar panel array 11", BusinessVerticalID: businessVerticalID, IsActive: true},
-		{Name: "Solar Site 12", Code: "SOLAR_SITE_12", Description: "Solar panel array 12", BusinessVerticalID: businessVerticalID, IsActive: true},
+		{Name: "Handigund", Code: "HANDIGUND", Description: "Solar farm Handigund site", BusinessVerticalID: businessVerticalID, IsActive: true},
+		{Name: "Itnal", Code: "ITNAL", Description: "Solar farm Itnal site", BusinessVerticalID: businessVerticalID, IsActive: true},
+		{Name: "Malabad", Code: "MALABAD", Description: "Solar farm Malabad site", BusinessVerticalID: businessVerticalID, IsActive: true},
+		{Name: "Nagarmunavali", Code: "NAGARMUNAVALI", Description: "Solar farm Nagarmunavali site", BusinessVerticalID: businessVerticalID, IsActive: true},
 	}
 
 	for _, site := range solarSites {

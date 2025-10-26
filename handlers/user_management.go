@@ -56,9 +56,6 @@ func UpdateUser(w http.ResponseWriter, r *http.Request) {
 	if req.Phone != "" {
 		user.Phone = req.Phone
 	}
-	if req.Role != "" {
-		user.Role = req.Role
-	}
 	if req.RoleID != "" {
 		roleID, err := uuid.Parse(req.RoleID)
 		if err != nil {

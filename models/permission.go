@@ -25,6 +25,7 @@ type Role struct {
 	Description string       `gorm:"size:255"`
 	IsActive    bool         `gorm:"default:true"`
 	IsGlobal    bool         `gorm:"default:true"` // Global roles vs business-specific roles
+	Level       int          `gorm:"default:5"`     // Hierarchy level (0=super_admin, 1=system_admin, etc.)
 	Permissions []Permission `gorm:"many2many:role_permissions;"`
 	CreatedAt   time.Time
 	UpdatedAt   time.Time

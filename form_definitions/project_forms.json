@@ -1,0 +1,575 @@
+{
+  "forms": [
+    {
+      "code": "project_create",
+      "title": "Create New Project",
+      "description": "Form to create a new project",
+      "module": "projects",
+      "route": "/projects/create",
+      "icon": "folder-plus",
+      "required_permission": "project:create",
+      "accessible_verticals": ["ALL"],
+      "form_schema": {
+        "fields": [
+          {
+            "name": "code",
+            "label": "Project Code",
+            "type": "text",
+            "required": true,
+            "placeholder": "e.g., PROJ-2025-001",
+            "validation": {
+              "pattern": "^[A-Z0-9-]+$",
+              "maxLength": 50
+            }
+          },
+          {
+            "name": "name",
+            "label": "Project Name",
+            "type": "text",
+            "required": true,
+            "placeholder": "Enter project name",
+            "validation": {
+              "maxLength": 255
+            }
+          },
+          {
+            "name": "description",
+            "label": "Description",
+            "type": "textarea",
+            "required": false,
+            "placeholder": "Enter project description",
+            "rows": 4
+          },
+          {
+            "name": "business_vertical_id",
+            "label": "Business Vertical",
+            "type": "select",
+            "required": true,
+            "data_source": "api:/api/v1/verticals",
+            "value_field": "id",
+            "label_field": "name"
+          },
+          {
+            "name": "start_date",
+            "label": "Start Date",
+            "type": "date",
+            "required": false
+          },
+          {
+            "name": "end_date",
+            "label": "End Date",
+            "type": "date",
+            "required": false,
+            "validation": {
+              "after_field": "start_date"
+            }
+          },
+          {
+            "name": "total_budget",
+            "label": "Total Budget",
+            "type": "number",
+            "required": false,
+            "placeholder": "0.00",
+            "validation": {
+              "min": 0
+            }
+          },
+          {
+            "name": "currency",
+            "label": "Currency",
+            "type": "select",
+            "required": false,
+            "default": "INR",
+            "options": [
+              {"value": "INR", "label": "INR (₹)"},
+              {"value": "USD", "label": "USD ($)"},
+              {"value": "EUR", "label": "EUR (€)"}
+            ]
+          }
+        ]
+      },
+      "steps": [
+        {
+          "step": 1,
+          "title": "Basic Information",
+          "fields": ["code", "name", "description", "business_vertical_id"]
+        },
+        {
+          "step": 2,
+          "title": "Timeline & Budget",
+          "fields": ["start_date", "end_date", "total_budget", "currency"]
+        }
+      ]
+    },
+    {
+      "code": "task_create",
+      "title": "Create New Task",
+      "description": "Form to create and allocate a new task",
+      "module": "projects",
+      "route": "/tasks/create",
+      "icon": "task-add",
+      "required_permission": "task:create",
+      "accessible_verticals": ["ALL"],
+      "form_schema": {
+        "fields": [
+          {
+            "name": "code",
+            "label": "Task Code",
+            "type": "text",
+            "required": true,
+            "placeholder": "e.g., TASK-001",
+            "validation": {
+              "pattern": "^[A-Z0-9-]+$",
+              "maxLength": 50
+            }
+          },
+          {
+            "name": "title",
+            "label": "Task Title",
+            "type": "text",
+            "required": true,
+            "placeholder": "Enter task title",
+            "validation": {
+              "maxLength": 255
+            }
+          },
+          {
+            "name": "description",
+            "label": "Description",
+            "type": "textarea",
+            "required": false,
+            "placeholder": "Enter task description",
+            "rows": 4
+          },
+          {
+            "name": "project_id",
+            "label": "Project",
+            "type": "select",
+            "required": true,
+            "data_source": "api:/api/v1/projects",
+            "value_field": "id",
+            "label_field": "name",
+            "on_change": "load_zones_and_nodes"
+          },
+          {
+            "name": "zone_id",
+            "label": "Zone (Optional)",
+            "type": "select",
+            "required": false,
+            "data_source": "api:/api/v1/projects/{project_id}/zones",
+            "value_field": "id",
+            "label_field": "name",
+            "depends_on": "project_id"
+          },
+          {
+            "name": "start_node_id",
+            "label": "Start Node",
+            "type": "select",
+            "required": true,
+            "data_source": "api:/api/v1/projects/{project_id}/nodes?node_type=start&status=available",
+            "value_field": "id",
+            "label_field": "name",
+            "depends_on": "project_id"
+          },
+          {
+            "name": "stop_node_id",
+            "label": "Stop Node",
+            "type": "select",
+            "required": true,
+            "data_source": "api:/api/v1/projects/{project_id}/nodes?node_type=stop&status=available",
+            "value_field": "id",
+            "label_field": "name",
+            "depends_on": "project_id"
+          },
+          {
+            "name": "priority",
+            "label": "Priority",
+            "type": "select",
+            "required": true,
+            "default": "medium",
+            "options": [
+              {"value": "low", "label": "Low", "color": "green"},
+              {"value": "medium", "label": "Medium", "color": "yellow"},
+              {"value": "high", "label": "High", "color": "orange"},
+              {"value": "critical", "label": "Critical", "color": "red"}
+            ]
+          },
+          {
+            "name": "planned_start_date",
+            "label": "Planned Start Date",
+            "type": "date",
+            "required": false
+          },
+          {
+            "name": "planned_end_date",
+            "label": "Planned End Date",
+            "type": "date",
+            "required": false,
+            "validation": {
+              "after_field": "planned_start_date"
+            }
+          },
+          {
+            "name": "allocated_budget",
+            "label": "Allocated Budget",
+            "type": "number",
+            "required": false,
+            "placeholder": "0.00",
+            "validation": {
+              "min": 0
+            }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "step": 1,
+          "title": "Task Details",
+          "fields": ["code", "title", "description", "priority"]
+        },
+        {
+          "step": 2,
+          "title": "Location & Allocation",
+          "fields": ["project_id", "zone_id", "start_node_id", "stop_node_id"]
+        },
+        {
+          "step": 3,
+          "title": "Timeline & Budget",
+          "fields": ["planned_start_date", "planned_end_date", "allocated_budget"]
+        }
+      ]
+    },
+    {
+      "code": "task_assignment",
+      "title": "Assign Task to Users",
+      "description": "Form to assign users to a task",
+      "module": "projects",
+      "route": "/tasks/assign",
+      "icon": "user-add",
+      "required_permission": "task:assign",
+      "accessible_verticals": ["ALL"],
+      "form_schema": {
+        "fields": [
+          {
+            "name": "task_id",
+            "label": "Task",
+            "type": "select",
+            "required": true,
+            "data_source": "api:/api/v1/tasks?status=pending,assigned",
+            "value_field": "id",
+            "label_field": "title"
+          },
+          {
+            "name": "assignments",
+            "label": "User Assignments",
+            "type": "repeater",
+            "required": true,
+            "min_items": 1,
+            "max_items": 10,
+            "fields": [
+              {
+                "name": "user_id",
+                "label": "User",
+                "type": "select",
+                "required": true,
+                "data_source": "api:/api/v1/users",
+                "value_field": "id",
+                "label_field": "name"
+              },
+              {
+                "name": "user_type",
+                "label": "User Type",
+                "type": "select",
+                "required": true,
+                "options": [
+                  {"value": "employee", "label": "Employee"},
+                  {"value": "contractor", "label": "Contractor"},
+                  {"value": "supervisor", "label": "Supervisor"}
+                ]
+              },
+              {
+                "name": "role",
+                "label": "Role",
+                "type": "select",
+                "required": true,
+                "options": [
+                  {"value": "worker", "label": "Worker"},
+                  {"value": "supervisor", "label": "Supervisor"},
+                  {"value": "manager", "label": "Manager"},
+                  {"value": "approver", "label": "Approver"}
+                ]
+              },
+              {
+                "name": "can_edit",
+                "label": "Can Edit Task",
+                "type": "checkbox",
+                "default": false
+              },
+              {
+                "name": "can_approve",
+                "label": "Can Approve Task",
+                "type": "checkbox",
+                "default": false
+              },
+              {
+                "name": "notes",
+                "label": "Notes",
+                "type": "text",
+                "required": false
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "code": "task_approval",
+      "title": "Task Approval",
+      "description": "Workflow form for task approvals",
+      "module": "projects",
+      "route": "/tasks/approval",
+      "icon": "check-circle",
+      "required_permission": "task:approve",
+      "accessible_verticals": ["ALL"],
+      "workflow_id": null,
+      "initial_state": "draft",
+      "form_schema": {
+        "fields": [
+          {
+            "name": "task_id",
+            "label": "Task ID",
+            "type": "text",
+            "required": true,
+            "readonly": true
+          },
+          {
+            "name": "code",
+            "label": "Task Code",
+            "type": "text",
+            "required": true,
+            "readonly": true
+          },
+          {
+            "name": "title",
+            "label": "Task Title",
+            "type": "text",
+            "required": true,
+            "readonly": true
+          },
+          {
+            "name": "status",
+            "label": "Current Status",
+            "type": "text",
+            "required": true,
+            "readonly": true
+          },
+          {
+            "name": "progress",
+            "label": "Progress (%)",
+            "type": "number",
+            "required": true,
+            "readonly": true
+          }
+        ]
+      }
+    },
+    {
+      "code": "budget_allocation",
+      "title": "Budget Allocation",
+      "description": "Form to allocate budget to projects or tasks",
+      "module": "projects",
+      "route": "/budget/allocate",
+      "icon": "currency-dollar",
+      "required_permission": "budget:allocate",
+      "accessible_verticals": ["ALL"],
+      "form_schema": {
+        "fields": [
+          {
+            "name": "allocation_type",
+            "label": "Allocation Type",
+            "type": "radio",
+            "required": true,
+            "options": [
+              {"value": "project", "label": "Project Level"},
+              {"value": "task", "label": "Task Level"}
+            ],
+            "on_change": "toggle_allocation_fields"
+          },
+          {
+            "name": "project_id",
+            "label": "Project",
+            "type": "select",
+            "required": false,
+            "data_source": "api:/api/v1/projects",
+            "value_field": "id",
+            "label_field": "name",
+            "show_if": "allocation_type === 'project'"
+          },
+          {
+            "name": "task_id",
+            "label": "Task",
+            "type": "select",
+            "required": false,
+            "data_source": "api:/api/v1/tasks",
+            "value_field": "id",
+            "label_field": "title",
+            "show_if": "allocation_type === 'task'"
+          },
+          {
+            "name": "category",
+            "label": "Budget Category",
+            "type": "select",
+            "required": true,
+            "options": [
+              {"value": "labor", "label": "Labor"},
+              {"value": "material", "label": "Material"},
+              {"value": "equipment", "label": "Equipment"},
+              {"value": "overhead", "label": "Overhead"},
+              {"value": "contingency", "label": "Contingency"}
+            ]
+          },
+          {
+            "name": "description",
+            "label": "Description",
+            "type": "textarea",
+            "required": false,
+            "rows": 3
+          },
+          {
+            "name": "planned_amount",
+            "label": "Planned Amount",
+            "type": "number",
+            "required": true,
+            "placeholder": "0.00",
+            "validation": {
+              "min": 0.01
+            }
+          },
+          {
+            "name": "currency",
+            "label": "Currency",
+            "type": "select",
+            "required": false,
+            "default": "INR",
+            "options": [
+              {"value": "INR", "label": "INR (₹)"},
+              {"value": "USD", "label": "USD ($)"},
+              {"value": "EUR", "label": "EUR (€)"}
+            ]
+          },
+          {
+            "name": "allocation_date",
+            "label": "Allocation Date",
+            "type": "date",
+            "required": true,
+            "default": "today"
+          },
+          {
+            "name": "start_date",
+            "label": "Start Date",
+            "type": "date",
+            "required": false
+          },
+          {
+            "name": "end_date",
+            "label": "End Date",
+            "type": "date",
+            "required": false,
+            "validation": {
+              "after_field": "start_date"
+            }
+          },
+          {
+            "name": "notes",
+            "label": "Notes",
+            "type": "textarea",
+            "required": false,
+            "rows": 2
+          }
+        ]
+      },
+      "steps": [
+        {
+          "step": 1,
+          "title": "Allocation Target",
+          "fields": ["allocation_type", "project_id", "task_id"]
+        },
+        {
+          "step": 2,
+          "title": "Budget Details",
+          "fields": ["category", "description", "planned_amount", "currency"]
+        },
+        {
+          "step": 3,
+          "title": "Timeline",
+          "fields": ["allocation_date", "start_date", "end_date", "notes"]
+        }
+      ]
+    },
+    {
+      "code": "project_role_assignment",
+      "title": "Assign Project Role",
+      "description": "Form to assign roles to users for a project",
+      "module": "projects",
+      "route": "/projects/assign-role",
+      "icon": "user-shield",
+      "required_permission": "user:assign",
+      "accessible_verticals": ["ALL"],
+      "form_schema": {
+        "fields": [
+          {
+            "name": "user_id",
+            "label": "User",
+            "type": "select",
+            "required": true,
+            "data_source": "api:/api/v1/users",
+            "value_field": "id",
+            "label_field": "name"
+          },
+          {
+            "name": "project_id",
+            "label": "Project",
+            "type": "select",
+            "required": true,
+            "data_source": "api:/api/v1/projects",
+            "value_field": "id",
+            "label_field": "name"
+          },
+          {
+            "name": "role_id",
+            "label": "Role",
+            "type": "select",
+            "required": true,
+            "data_source": "api:/api/v1/project-roles?is_active=true",
+            "value_field": "id",
+            "label_field": "name",
+            "description_field": "description"
+          },
+          {
+            "name": "valid_from",
+            "label": "Valid From",
+            "type": "date",
+            "required": false,
+            "default": "today"
+          },
+          {
+            "name": "valid_until",
+            "label": "Valid Until",
+            "type": "date",
+            "required": false,
+            "validation": {
+              "after_field": "valid_from"
+            }
+          },
+          {
+            "name": "notes",
+            "label": "Notes",
+            "type": "textarea",
+            "required": false,
+            "rows": 3
+          }
+        ]
+      }
+    }
+  ]
+}

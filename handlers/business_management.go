@@ -81,21 +81,68 @@ func GetAllBusinessVerticals(w http.ResponseWriter, r *http.Request) {
 	var total int64
 	config.DB.Model(&models.BusinessVertical{}).Where("is_active = ?", true).Count(&total)
 
+	// Get counts in a single query using aggregation
+	type CountResult struct {
+		BusinessVerticalID uuid.UUID
+		UserCount          int64
+		RoleCount          int64
+	}
+
+	// Get user counts for all businesses in one query
+	userCounts := make(map[uuid.UUID]int64)
+	var userCountResults []struct {
+		BusinessVerticalID uuid.UUID
+		Count              int64
+	}
+	config.DB.Model(&models.User{}).
+		Select("business_vertical_id, COUNT(*) as count").
+		Where("business_vertical_id IN ?", func() []uuid.UUID {
+			ids := make([]uuid.UUID, len(businesses))
+			for i, b := range businesses {
+				ids[i] = b.ID
+			}
+			return ids
+		}()).
+		Group("business_vertical_id").
+		Scan(&userCountResults)
+
+	for _, result := range userCountResults {
+		userCounts[result.BusinessVerticalID] = result.Count
+	}
+
+	// Get role counts for all businesses in one query
+	roleCounts := make(map[uuid.UUID]int64)
+	var roleCountResults []struct {
+		BusinessVerticalID uuid.UUID
+		Count              int64
+	}
+	config.DB.Model(&models.BusinessRole{}).
+		Select("business_vertical_id, COUNT(*) as count").
+		Where("business_vertical_id IN ? AND is_active = ?", func() []uuid.UUID {
+			ids := make([]uuid.UUID, len(businesses))
+			for i, b := range businesses {
+				ids[i] = b.ID
+			}
+			return ids
+		}(), true).
+		Group("business_vertical_id").
+		Scan(&roleCountResults)
+
+	for _, result := range roleCountResults {
+		roleCounts[result.BusinessVerticalID] = result.Count
+	}
+
 	// Convert to response format with counts
 	businessResponses := make([]businessResponse, len(businesses))
 	for i, business := range businesses {
-		var userCount, roleCount int64
-		config.DB.Model(&models.User{}).Where("business_vertical_id = ?", business.ID).Count(&userCount)
-		config.DB.Model(&models.BusinessRole{}).Where("business_vertical_id = ? AND is_active = ?", business.ID, true).Count(&roleCount)
-
 		businessResponses[i] = businessResponse{
 			ID:          business.ID,
 			Name:        business.Name,
 			Code:        business.Code,
 			Description: business.Description,
 			IsActive:    business.IsActive,
-			UserCount:   userCount,
-			RoleCount:   roleCount,
+			UserCount:   userCounts[business.ID],
+			RoleCount:   roleCounts[business.ID],
 		}
 	}
 
@@ -167,6 +214,28 @@ func GetBusinessRoles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Get user counts for all roles in a single query
+	userCountsByRole := make(map[uuid.UUID]int64)
+	var roleUserCounts []struct {
+		BusinessRoleID uuid.UUID
+		Count          int64
+	}
+	config.DB.Model(&models.UserBusinessRole{}).
+		Select("business_role_id, COUNT(*) as count").
+		Where("business_role_id IN ? AND is_active = ?", func() []uuid.UUID {
+			ids := make([]uuid.UUID, len(roles))
+			for i, r := range roles {
+				ids[i] = r.ID
+			}
+			return ids
+		}(), true).
+		Group("business_role_id").
+		Scan(&roleUserCounts)
+
+	for _, result := range roleUserCounts {
+		userCountsByRole[result.BusinessRoleID] = result.Count
+	}
+
 	// Convert to response format
 	roleResponses := make([]businessRoleResponse, len(roles))
 	for i, role := range roles {
@@ -181,9 +250,6 @@ func GetBusinessRoles(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		var userCount int64
-		config.DB.Model(&models.UserBusinessRole{}).Where("business_role_id = ? AND is_active = ?", role.ID, true).Count(&userCount)
-
 		roleResponses[i] = businessRoleResponse{
 			ID:                 role.ID,
 			Name:               role.Name,
@@ -193,7 +259,7 @@ func GetBusinessRoles(w http.ResponseWriter, r *http.Request) {
 			BusinessVerticalID: role.BusinessVerticalID,
 			BusinessVertical:   role.BusinessVertical.Name,
 			Permissions:        permissions,
-			UserCount:          userCount,
+			UserCount:          userCountsByRole[role.ID],
 		}
 	}
 
@@ -346,14 +412,50 @@ func GetBusinessUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var userBusinessRoles []models.UserBusinessRole
-	if err := config.DB.Preload("User").
-		Preload("BusinessRole").
+	// Parse pagination parameters
+	pageStr := r.URL.Query().Get("page")
+	limitStr := r.URL.Query().Get("limit")
+
+	page := 1
+	limit := 50 // Default limit for users list
+
+	if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
+		page = p
+	}
+	if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 500 {
+		limit = l
+	}
+	offset := (page - 1) * limit
+
+	// Get total count of unique users
+	var totalUsers int64
+	config.DB.Table("user_business_roles").
+		Select("DISTINCT user_id").
 		Joins("JOIN business_roles ON user_business_roles.business_role_id = business_roles.id").
 		Where("business_roles.business_vertical_id = ? AND user_business_roles.is_active = ?", businessID, true).
-		Find(&userBusinessRoles).Error; err != nil {
-		http.Error(w, "DB error: "+err.Error(), http.StatusInternalServerError)
-		return
+		Count(&totalUsers)
+
+	// Get paginated user IDs first
+	var userIDs []uuid.UUID
+	config.DB.Table("user_business_roles").
+		Select("DISTINCT user_business_roles.user_id").
+		Joins("JOIN business_roles ON user_business_roles.business_role_id = business_roles.id").
+		Where("business_roles.business_vertical_id = ? AND user_business_roles.is_active = ?", businessID, true).
+		Limit(limit).
+		Offset(offset).
+		Pluck("user_id", &userIDs)
+
+	// Get all roles for these users
+	var userBusinessRoles []models.UserBusinessRole
+	if len(userIDs) > 0 {
+		if err := config.DB.Preload("User").
+			Preload("BusinessRole").
+			Joins("JOIN business_roles ON user_business_roles.business_role_id = business_roles.id").
+			Where("user_business_roles.user_id IN ? AND business_roles.business_vertical_id = ? AND user_business_roles.is_active = ?", userIDs, businessID, true).
+			Find(&userBusinessRoles).Error; err != nil {
+			http.Error(w, "DB error: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	// Group by user
@@ -386,8 +488,16 @@ func GetBusinessUsers(w http.ResponseWriter, r *http.Request) {
 		users = append(users, user)
 	}
 
+	// Return paginated response
+	response := map[string]interface{}{
+		"total": totalUsers,
+		"page":  page,
+		"limit": limit,
+		"data":  users,
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(users)
+	json.NewEncoder(w).Encode(response)
 }
 
 // createDefaultBusinessRoles creates default roles for a new business vertical
@@ -474,7 +584,8 @@ func GetUserBusinessAccess(w http.ResponseWriter, r *http.Request) {
 	var accessibleBusinesses []map[string]interface{}
 
 	// Check if user is super admin
-	if user.HasPermission("admin_all") || user.Role == "super_admin" || user.Role == "Super Admin" {
+	isSuperAdmin := user.RoleModel != nil && user.RoleModel.Name == "super_admin"
+	if user.HasPermission("admin_all") || isSuperAdmin {
 		// Super admin can access all business verticals
 		var allBusinesses []models.BusinessVertical
 		if err := config.DB.Where("is_active = ?", true).Find(&allBusinesses).Error; err != nil {
@@ -525,11 +636,16 @@ func GetUserBusinessAccess(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	globalRoleName := ""
+	if user.RoleModel != nil {
+		globalRoleName = user.RoleModel.Name
+	}
+
 	response := map[string]interface{}{
 		"user_id":              claims.UserID,
 		"user_name":           claims.Name,
-		"user_role":           user.Role,
-		"is_super_admin":      user.HasPermission("admin_all") || user.Role == "super_admin" || user.Role == "Super Admin",
+		"global_role":         globalRoleName,
+		"is_super_admin":      isSuperAdmin,
 		"accessible_businesses": accessibleBusinesses,
 		"total_businesses":     len(accessibleBusinesses),
 	}
@@ -553,7 +669,8 @@ func GetSuperAdminDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Verify super admin access
-	if !user.HasPermission("admin_all") && user.Role != "super_admin" && user.Role != "Super Admin" {
+	isSuperAdmin2 := user.RoleModel != nil && user.RoleModel.Name == "super_admin"
+	if !user.HasPermission("admin_all") && !isSuperAdmin2 {
 		http.Error(w, "super admin access required", http.StatusForbidden)
 		return
 	}
@@ -565,22 +682,57 @@ func GetSuperAdminDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Get user counts for all businesses in a single query
+	dashboardUserCounts := make(map[uuid.UUID]int64)
+	var dashboardUserCountResults []struct {
+		BusinessVerticalID uuid.UUID
+		Count              int64
+	}
+	config.DB.Table("user_business_roles").
+		Select("business_roles.business_vertical_id, COUNT(DISTINCT user_business_roles.user_id) as count").
+		Joins("JOIN business_roles ON user_business_roles.business_role_id = business_roles.id").
+		Where("business_roles.business_vertical_id IN ? AND user_business_roles.is_active = ?", func() []uuid.UUID {
+			ids := make([]uuid.UUID, len(businesses))
+			for i, b := range businesses {
+				ids[i] = b.ID
+			}
+			return ids
+		}(), true).
+		Group("business_roles.business_vertical_id").
+		Scan(&dashboardUserCountResults)
+
+	for _, result := range dashboardUserCountResults {
+		dashboardUserCounts[result.BusinessVerticalID] = result.Count
+	}
+
+	// Get role counts for all businesses in a single query
+	dashboardRoleCounts := make(map[uuid.UUID]int64)
+	var dashboardRoleCountResults []struct {
+		BusinessVerticalID uuid.UUID
+		Count              int64
+	}
+	config.DB.Model(&models.BusinessRole{}).
+		Select("business_vertical_id, COUNT(*) as count").
+		Where("business_vertical_id IN ? AND is_active = ?", func() []uuid.UUID {
+			ids := make([]uuid.UUID, len(businesses))
+			for i, b := range businesses {
+				ids[i] = b.ID
+			}
+			return ids
+		}(), true).
+		Group("business_vertical_id").
+		Scan(&dashboardRoleCountResults)
+
+	for _, result := range dashboardRoleCountResults {
+		dashboardRoleCounts[result.BusinessVerticalID] = result.Count
+	}
+
 	var businessStats []map[string]interface{}
 	var totalUsers, totalRoles int64
 
 	for _, business := range businesses {
-		var userCount, roleCount int64
-		
-		// Count users in this business
-		config.DB.Model(&models.UserBusinessRole{}).
-			Joins("JOIN business_roles ON user_business_roles.business_role_id = business_roles.id").
-			Where("business_roles.business_vertical_id = ? AND user_business_roles.is_active = ?", business.ID, true).
-			Count(&userCount)
-		
-		// Count roles in this business
-		config.DB.Model(&models.BusinessRole{}).
-			Where("business_vertical_id = ? AND is_active = ?", business.ID, true).
-			Count(&roleCount)
+		userCount := dashboardUserCounts[business.ID]
+		roleCount := dashboardRoleCounts[business.ID]
 
 		businessStats = append(businessStats, map[string]interface{}{
 			"id":          business.ID,
@@ -601,11 +753,16 @@ func GetSuperAdminDashboard(w http.ResponseWriter, r *http.Request) {
 	config.DB.Model(&models.User{}).Where("is_active = ?", true).Count(&globalUserCount)
 	config.DB.Model(&models.Role{}).Where("is_active = ?", true).Count(&globalRoleCount)
 
+	globalRole := ""
+	if user.RoleModel != nil {
+		globalRole = user.RoleModel.Name
+	}
+
 	response := map[string]interface{}{
 		"super_admin": map[string]interface{}{
-			"user_id":   claims.UserID,
-			"name":      claims.Name,
-			"role":      user.Role,
+			"user_id":     claims.UserID,
+			"name":        claims.Name,
+			"global_role": globalRole,
 		},
 		"global_stats": map[string]interface{}{
 			"total_users":              globalUserCount,

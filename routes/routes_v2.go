@@ -9,6 +9,7 @@ import (
 	"p9e.in/ugcl/handlers"
 	kpi_handlers "p9e.in/ugcl/handlers/kpis"
 	"p9e.in/ugcl/middleware"
+	"p9e.in/ugcl/handlers/masters"
 )
 
 // RegisterRoutesV2 uses the new permission-based authorization system
@@ -34,11 +35,17 @@ func RegisterRoutesV2() http.Handler {
 		user := middleware.GetUser(r)
 		permissions := middleware.GetUserPermissions(r)
 
+		var globalRoleName string
+		if user.RoleModel != nil {
+			globalRoleName = user.RoleModel.Name
+		}
+
 		response := map[string]interface{}{
 			"userID":      claims.UserID,
 			"name":        user.Name,
 			"phone":       user.Phone,
-			"role":        user.Role,
+			"role_id":     user.RoleID,
+			"global_role": globalRoleName,
 			"permissions": permissions,
 		}
 		json.NewEncoder(w).Encode(response)
@@ -138,13 +145,16 @@ func RegisterRoutesV2() http.Handler {
 	api.Handle("/kpi/diesel", middleware.RequirePermission("read_kpis")(
 		http.HandlerFunc(kpi_handlers.GetDieselKPIs))).Methods("GET")
 
-	// File uploads
+	// File uploads (auto-detects GCS for production, local storage for dev)
 	api.Handle("/files/upload", middleware.RequireAnyPermission([]string{"create_reports", "create_materials"})(
-		http.HandlerFunc(handlers.UploadFile))).Methods("POST")
+		http.HandlerFunc(handlers.UploadFileHandler))).Methods("POST")
 
 	// Admin routes (require specific admin permissions)
 	admin := api.PathPrefix("/admin").Subrouter()
 
+	admin.Handle("/masters/modules", middleware.RequirePermission("masters:module:create")(
+		http.HandlerFunc(masters.CreateModule))).Methods("POST")
+	
 	// User management
 	admin.Handle("/users", middleware.RequirePermission("read_users")(
 		http.HandlerFunc(handlers.GetAllUsers))).Methods("GET")

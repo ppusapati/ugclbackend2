@@ -7,7 +7,15 @@
       "Bash(timeout 30 go run .)",
       "Bash(timeout 35 go run .)",
       "Bash(go build -o /dev/null .)",
-      "Bash(psql -U postgres -d ugcl -c \"SELECT id FROM migrations ORDER BY id;\")"
+      "Bash(psql -U postgres -d ugcl -c \"SELECT id FROM migrations ORDER BY id;\")",
+      "Read(//d/Maheshwari/UGCL/web/v1/server/**)",
+      "Bash(dir:*)",
+      "Read(//d/Maheshwari/UGCL/web/v1/**)",
+      "Read(//d/Maheshwari/UGCL/web/**)",
+      "Bash(find:*)",
+      "Bash(cat:*)",
+      "Read(//d/Maheshwari/UGCL/docs/kmz parzer/**)",
+      "Read(//d/Maheshwari/UGCL/docs/Julia_maps/**)"
     ],
     "deny": [],
     "ask": []

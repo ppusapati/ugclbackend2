@@ -97,7 +97,15 @@ func Migrations(db *gorm.DB) error {
 				return nil
 			},
 		},
+		{
+			ID: "25102025_add_module_tables",
+			Migrate: func(tx *gorm.DB) error {
+				return tx.AutoMigrate(&models.Module{})
+			},
+		},
 	})
-
+	// MigrateSites()
+	// MigrateToNewRBAC()
+	// MigrateExistingUsers()
 	return m.Migrate()
 }

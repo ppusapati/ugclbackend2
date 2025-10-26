@@ -1,0 +1,193 @@
+{
+  "form_code": "water",
+  "title": "Water Supply Form",
+  "description": "Record daily water supply details",
+  "version": "1.0.0",
+  "module": "project",
+  "type": "multi_step",
+  "steps": [
+    {
+      "id": "basic_info",
+      "title": "Basic Information",
+      "description": "Enter basic details",
+      "fields": [
+        {
+          "id": "site",
+          "type": "dropdown",
+          "label": "Site Name",
+          "required": true,
+          "dataSource": "api",
+          "apiEndpoint": "business/{vertical}/sites/my-access",
+          "displayField": "name",
+          "valueField": "id",
+          "validation": {
+            "required": true,
+            "message": "Please select a site"
+          }
+        },
+        {
+          "id": "date",
+          "type": "date",
+          "label": "Date",
+          "required": true,
+          "defaultValue": "today",
+          "validation": {
+            "required": true,
+            "maxDate": "today",
+            "message": "Date cannot be in the future"
+          }
+        },
+        {
+          "id": "shift",
+          "type": "radio",
+          "label": "Shift",
+          "required": true,
+          "options": [
+            {"label": "Morning", "value": "morning"},
+            {"label": "Evening", "value": "evening"},
+            {"label": "Night", "value": "night"}
+          ]
+        }
+      ]
+    },
+    {
+      "id": "water_details",
+      "title": "Water Supply Details",
+      "description": "Enter water supply information",
+      "fields": [
+        {
+          "id": "tanker_number",
+          "type": "text",
+          "label": "Tanker Number",
+          "required": true,
+          "placeholder": "Enter tanker number",
+          "validation": {
+            "required": true,
+            "pattern": "^[A-Z0-9-]+$",
+            "message": "Invalid tanker number format"
+          }
+        },
+        {
+          "id": "quantity",
+          "type": "number",
+          "label": "Quantity (in litres)",
+          "required": true,
+          "min": 1,
+          "max": 100000,
+          "step": 1,
+          "suffix": "L",
+          "validation": {
+            "required": true,
+            "min": 1,
+            "max": 100000,
+            "message": "Quantity must be between 1 and 100,000 litres"
+          }
+        },
+        {
+          "id": "purpose",
+          "type": "dropdown",
+          "label": "Purpose",
+          "required": true,
+          "options": [
+            {"label": "Construction", "value": "construction"},
+            {"label": "Drinking Water", "value": "drinking"},
+            {"label": "Cleaning", "value": "cleaning"},
+            {"label": "Testing", "value": "testing"},
+            {"label": "Other", "value": "other"}
+          ]
+        },
+        {
+          "id": "purpose_other",
+          "type": "text",
+          "label": "Please specify other purpose",
+          "required": true,
+          "visible": {
+            "field": "purpose",
+            "operator": "equals",
+            "value": "other"
+          }
+        }
+      ]
+    },
+    {
+      "id": "attachments",
+      "title": "Attachments",
+      "description": "Upload supporting documents (optional)",
+      "fields": [
+        {
+          "id": "photos",
+          "type": "file_upload",
+          "label": "Photos",
+          "required": false,
+          "multiple": true,
+          "accept": "image/*",
+          "maxFiles": 5,
+          "maxSizePerFile": 5242880,
+          "hint": "Upload up to 5 photos (max 5MB each)"
+        },
+        {
+          "id": "remarks",
+          "type": "textarea",
+          "label": "Remarks",
+          "required": false,
+          "placeholder": "Enter any additional remarks",
+          "rows": 4,
+          "maxLength": 500
+        }
+      ]
+    }
+  ],
+  "validations": {
+    "cross_field": [
+      {
+        "rule": "if field 'purpose' is 'other', then 'purpose_other' is required",
+        "fields": ["purpose", "purpose_other"],
+        "condition": "purpose === 'other' && !purpose_other",
+        "message": "Please specify the purpose"
+      }
+    ]
+  },
+  "workflow": {
+    "initial_state": "draft",
+    "states": [
+      "draft",
+      "submitted",
+      "approved",
+      "rejected"
+    ],
+    "transitions": [
+      {
+        "from": "draft",
+        "to": "submitted",
+        "action": "submit",
+        "permission": "project:create"
+      },
+      {
+        "from": "submitted",
+        "to": "approved",
+        "action": "approve",
+        "permission": "project:approve"
+      },
+      {
+        "from": "submitted",
+        "to": "rejected",
+        "action": "reject",
+        "permission": "project:approve"
+      }
+    ]
+  },
+  "permissions": {
+    "create": "project:create",
+    "read": "project:read",
+    "update": "project:update",
+    "delete": "project:delete",
+    "approve": "project:approve"
+  },
+  "ui_config": {
+    "show_progress": true,
+    "allow_save_draft": true,
+    "submit_button_text": "Submit Water Form",
+    "success_message": "Water form submitted successfully!",
+    "error_message": "Failed to submit form. Please try again."
+  }
+}

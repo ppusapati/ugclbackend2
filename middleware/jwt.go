@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/models"
 )
 
@@ -140,12 +141,20 @@ func GetUserID(r *http.Request) string {
 
 func GetUser(r *http.Request) models.User {
 	if c := GetClaims(r); c != nil {
+		// Load full user from database to get role relationships
+		var user models.User
+		if err := config.DB.
+			Preload("RoleModel").
+			Preload("UserBusinessRoles.BusinessRole").
+			First(&user, "id = ?", c.UserID).Error; err == nil {
+			return user
+		}
+		// Fallback: return minimal user from claims
 		User := models.User{
 			Name:  c.Name,
 			Phone: c.Phone,
-			Role:  c.Role,
 		}
-		return User // or return c.Username if you have that field
+		return User
 	}
 	return models.User{} // return zero value if no claims found
 }
@@ -168,7 +177,8 @@ var apiKeyConfigs = map[string]APIClientConfig{
 		AppName:      "MobileApp",
 		AllowedPaths: []string{"/api/v1"},
 		AllowedMethods: map[string]bool{
-			http.MethodPost: true,
+			http.MethodGet:  true, // Allow GET for fetching business verticals, sites, etc.
+			http.MethodPost: true, // Allow POST for form submissions
 		},
 		SkipIPCheck: true,
 	},

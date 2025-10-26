@@ -227,15 +227,10 @@ func GetUserBusinessContext(r *http.Request) map[string]interface{} {
 	}
 }
 
-// isSuperAdmin checks if user has super admin role (legacy or new system)
+// isSuperAdmin checks if user has super admin role
 func isSuperAdmin(user models.User) bool {
-	// Check legacy role system
-	if user.Role == "super_admin" || user.Role == "Super Admin" {
-		return true
-	}
-
-	// Check new role system
-	if user.RoleModel != nil && (user.RoleModel.Name == "super_admin" || user.RoleModel.Name == "Super Admin") {
+	// Check role system
+	if user.RoleModel != nil && user.RoleModel.Name == "super_admin" {
 		return true
 	}
 

@@ -23,11 +23,11 @@ type loginPayload struct {
 }
 
 type registerReq struct {
-	Name     string `json:"name"`
-	Email    string `json:"email"`
-	Phone    string `json:"phone"`
-	Password string `json:"password"`
-	Role     string `json:"role"`
+	Name     string     `json:"name"`
+	Email    string     `json:"email"`
+	Phone    string     `json:"phone"`
+	Password string     `json:"password"`
+	RoleID   *uuid.UUID `json:"role_id"` // Global role ID (optional)
 }
 
 func Register(w http.ResponseWriter, r *http.Request) {
@@ -47,7 +47,7 @@ func Register(w http.ResponseWriter, r *http.Request) {
 		Email:        req.Email,
 		Phone:        req.Phone,
 		PasswordHash: string(hash),
-		Role:         req.Role,
+		RoleID:       req.RoleID,
 	}
 	if err := config.DB.Create(&u).Error; err != nil {
 		if strings.Contains(err.Error(), "duplicate key") {
@@ -70,11 +70,11 @@ type loginResp struct {
 	User  userPayload `json:"user"`
 }
 type userPayload struct {
-	ID    uuid.UUID `json:"id"`
-	Name  string    `json:"name"`
-	Email string    `json:"email"`
-	Phone string    `json:"phone"`
-	Role  string    `json:"role"`
+	ID     uuid.UUID  `json:"id"`
+	Name   string     `json:"name"`
+	Email  string     `json:"email"`
+	Phone  string     `json:"phone"`
+	RoleID *uuid.UUID `json:"role_id"`
 }
 
 func Login(w http.ResponseWriter, r *http.Request) {
@@ -85,7 +85,7 @@ func Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var u models.User
-	if err := config.DB.Where("phone = ?", req.Phone).First(&u).Error; err != nil {
+	if err := config.DB.Preload("RoleModel").Where("phone = ?", req.Phone).First(&u).Error; err != nil {
 		http.Error(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
@@ -93,7 +93,14 @@ func Login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
-	token, err := middleware.GenerateToken(u.ID.String(), u.Role, u.Name, u.Phone)
+
+	// Determine role name for token
+	roleName := "user" // default
+	if u.RoleModel != nil {
+		roleName = u.RoleModel.Name
+	}
+
+	token, err := middleware.GenerateToken(u.ID.String(), roleName, u.Name, u.Phone)
 	if err != nil {
 		http.Error(w, "couldn't create token", http.StatusInternalServerError)
 		return
@@ -102,15 +109,16 @@ func Login(w http.ResponseWriter, r *http.Request) {
 	out := loginResp{
 		Token: token,
 		User: userPayload{
-			ID:    u.ID,
-			Name:  u.Name,
-			Email: u.Email,
-			Phone: u.Phone,
-			Role:  u.Role,
+			ID:     u.ID,
+			Name:   u.Name,
+			Email:  u.Email,
+			Phone:  u.Phone,
+			RoleID: u.RoleID,
 		},
 	}
 	json.NewEncoder(w).Encode(out)
 }
+
 
 func GetCurrentUser(w http.ResponseWriter, r *http.Request) {
 	// 1) Extract token
@@ -132,20 +140,76 @@ func GetCurrentUser(w http.ResponseWriter, r *http.Request) {
 	}
 	claims := token.Claims.(*models.JWTClaims)
 
-	// 3) Fetch user record
+	// 3) Load user with all relationships
 	var user models.User
-	if err := config.DB.First(&user, "id = ?", claims.UserID).Error; err != nil {
+	if err := config.DB.
+		Preload("RoleModel.Permissions").
+		Preload("UserBusinessRoles.BusinessRole.Permissions").
+		Preload("UserBusinessRoles.BusinessRole.BusinessVertical").
+		First(&user, "id = ?", claims.UserID).Error; err != nil {
 		http.Error(w, "User not found", http.StatusNotFound)
 		return
 	}
 
-	// 4) Return only the fields you need
+	// 4) Collect permissions from all sources
+	permissions := []string{}
+	businessRoles := []map[string]interface{}{}
+
+	// Check for Super Admin wildcard first
+	if user.RoleModel != nil && user.RoleModel.Name == "super_admin" {
+		permissions = append(permissions, "*:*:*")
+	} else {
+		// Collect from global role
+		if user.RoleModel != nil {
+			for _, perm := range user.RoleModel.Permissions {
+				permissions = append(permissions, perm.Name)
+			}
+		}
+
+		// Collect from business roles
+		permMap := make(map[string]bool) // To avoid duplicates
+		for _, p := range permissions {
+			permMap[p] = true
+		}
+
+		for _, ubr := range user.UserBusinessRoles {
+			if ubr.IsActive && ubr.BusinessRole.ID != uuid.Nil {
+				// Add permissions from this business role
+				for _, perm := range ubr.BusinessRole.Permissions {
+					if !permMap[perm.Name] {
+						permissions = append(permissions, perm.Name)
+						permMap[perm.Name] = true
+					}
+				}
+
+				// Build business role info for frontend
+				businessRoles = append(businessRoles, map[string]interface{}{
+					"role_id":       ubr.BusinessRole.ID,
+					"role_name":     ubr.BusinessRole.DisplayName,
+					"vertical_id":   ubr.BusinessRole.BusinessVerticalID,
+					"vertical_name": ubr.BusinessRole.BusinessVertical.Name,
+					"vertical_code": ubr.BusinessRole.BusinessVertical.Code,
+					"level":         ubr.BusinessRole.Level,
+				})
+			}
+		}
+	}
+
+	// 5) Return enhanced user info
+	var globalRoleName string
+	if user.RoleModel != nil {
+		globalRoleName = user.RoleModel.Name
+	}
+
 	resp := map[string]interface{}{
-		"id":    user.ID,
-		"name":  user.Name,
-		"phone": user.Phone,
-		"email": user.Email,
-		"roles": user.Role,
+		"id":             user.ID,
+		"name":           user.Name,
+		"phone":          user.Phone,
+		"email":          user.Email,
+		"role_id":        user.RoleID,
+		"global_role":    globalRoleName,
+		"permissions":    permissions,
+		"business_roles": businessRoles,
 	}
 	json.NewEncoder(w).Encode(resp)
 }
@@ -167,8 +231,8 @@ func GetAllUsers(w http.ResponseWriter, r *http.Request) {
 
 	var users []models.User
 	if err := config.DB.
+		Preload("RoleModel").
 		Where("is_active = ?", true).
-		Where("role <> ?", "Super Admin").
 		Limit(limit).
 		Offset(offset).
 		Find(&users).Error; err != nil {
@@ -180,28 +244,33 @@ func GetAllUsers(w http.ResponseWriter, r *http.Request) {
 	if err := config.DB.
 		Model(&models.User{}).
 		Where("is_active = ?", true).
-		Where("role <> ?", "Super Admin").
 		Count(&total).Error; err != nil {
 		http.Error(w, "DB count error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	type userOut struct {
-		ID    uuid.UUID `json:"id"`
-		Name  string    `json:"name"`
-		Email string    `json:"email"`
-		Phone string    `json:"phone"`
-		Role  string    `json:"role"`
+		ID         uuid.UUID  `json:"id"`
+		Name       string     `json:"name"`
+		Email      string     `json:"email"`
+		Phone      string     `json:"phone"`
+		RoleID     *uuid.UUID `json:"role_id"`
+		GlobalRole string     `json:"global_role"`
 	}
 
 	out := make([]userOut, len(users))
 	for i, u := range users {
+		globalRoleName := ""
+		if u.RoleModel != nil {
+			globalRoleName = u.RoleModel.Name
+		}
 		out[i] = userOut{
-			ID:    u.ID,
-			Name:  u.Name,
-			Email: u.Email,
-			Phone: u.Phone,
-			Role:  u.Role,
+			ID:         u.ID,
+			Name:       u.Name,
+			Email:      u.Email,
+			Phone:      u.Phone,
+			RoleID:     u.RoleID,
+			GlobalRole: globalRoleName,
 		}
 	}
 

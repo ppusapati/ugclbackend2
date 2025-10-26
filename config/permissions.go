@@ -14,6 +14,9 @@ import (
 func SeedPermissions() {
 	// Define default permissions
 	permissions := []models.Permission{
+		// ===== Super Admin Wildcard =====
+		{ID: uuid.New(), Name: "*:*:*", Resource: "*", Action: "*", Description: "Super Admin wildcard - all permissions"},
+
 		// ===== Project Management =====
 		{ID: uuid.New(), Name: "project:create", Resource: "project", Action: "create", Description: "Create project"},
 		{ID: uuid.New(), Name: "project:read", Resource: "project", Action: "read", Description: "View project details"},
@@ -96,6 +99,10 @@ func SeedPermissions() {
 		{ID: uuid.New(), Name: "contractor:project_read", Resource: "project", Action: "read", Description: "View projects (contractor)"},
 		{ID: uuid.New(), Name: "contractor:inventory_read", Resource: "inventory", Action: "read", Description: "View inventory (contractor)"},
 		{ID: uuid.New(), Name: "contractor:material_read", Resource: "materials", Action: "read", Description: "View materials (contractor)"},
+
+		// ===== Site Management =====
+		{ID: uuid.New(), Name: "site:manage_access", Resource: "site", Action: "manage", Description: "Manage user access to sites"},
+		{ID: uuid.New(), Name: "site:view", Resource: "site", Action: "read", Description: "View sites"},
 	}
 
 	// Create permissions if they don't exist
@@ -127,9 +134,25 @@ func SeedPermissions() {
 		{
 			Name:        "super_admin",
 			Description: "Full system access",
+			Level:       0, // Level 0 = highest privilege
 			Permissions: []models.Permission{
-				{Name: "admin_all"},
-				{Name: "manage_roles"},
+				{Name: "*:*:*"}, // Wildcard permission
+			},
+		},
+		{
+			Name:        "System_Admin",
+			Description: "User and role management across system",
+			IsGlobal:    true,
+			IsActive:    true,
+			Level:       1, // Level 1 = can assign roles 2-5
+			Permissions: []models.Permission{
+				{Name: "user:create"},
+				{Name: "user:read"},
+				{Name: "user:update"},
+				{Name: "user:delete"},
+				{Name: "role:read"},
+				{Name: "role:assign"},
+				{Name: "business:read"},
 			},
 		},
 		{
@@ -423,6 +446,20 @@ func createDefaultBusinessRoles(businessID uuid.UUID, businessCode string) {
 			Level:    4,
 			IsActive: true,
 		},
+		{
+			ID:                 uuid.New(),
+			Name:               "HO_Skilled_Worker",
+			DisplayName:        "Head Office Skilled Worker",
+			Description:        "Basic administrative tasks",
+			BusinessVerticalID: businessID,
+			Permissions: []models.Permission{
+				{Name: "project:read"},
+				{Name: "document:read"},
+				{Name: "report:read"},
+			},
+			Level:    5,
+			IsActive: true,
+		},
 	}
 
 	case "WATER": // Water Works roles
@@ -476,6 +513,10 @@ func createDefaultBusinessRoles(businessID uuid.UUID, businessCode string) {
 				{Name: "document:read"},
 				{Name: "document:update"},
 				{Name: "document:delete"},
+
+				// Site Management
+				{Name: "site:manage_access"},
+				{Name: "site:view"},
 			},
 			// all water-related permissions
 			Level:    1,
@@ -562,6 +603,20 @@ func createDefaultBusinessRoles(businessID uuid.UUID, businessCode string) {
 			Level:    5,
 			IsActive: true,
 		},
+		{
+			ID:                 uuid.New(),
+			Name:               "Skilled_Worker",
+			DisplayName:        "Water Skilled Worker",
+			Description:        "Basic field execution tasks",
+			BusinessVerticalID: businessID,
+			Permissions: []models.Permission{
+				{Name: "project:read"},
+				{Name: "inventory:read"},
+				{Name: "inventory:create"}, // Can log basic inventory
+			},
+			Level:    5,
+			IsActive: true,
+		},
 	}
 
 	case "SOLAR": // Solar Works roles
@@ -614,6 +669,10 @@ func createDefaultBusinessRoles(businessID uuid.UUID, businessCode string) {
 				{Name: "document:read"},
 				{Name: "document:update"},
 				{Name: "document:delete"},
+
+				// Site Management
+				{Name: "site:manage_access"},
+				{Name: "site:view"},
 			}, // all solar perms
 			Level:    1,
 			IsActive: true,
@@ -648,6 +707,21 @@ func createDefaultBusinessRoles(businessID uuid.UUID, businessCode string) {
 				{Name: "solar:maintenance"},
 			},
 			Level:    3,
+			IsActive: true,
+		},
+		{
+			ID:                 uuid.New(),
+			Name:               "Skilled_Worker",
+			DisplayName:        "Solar Skilled Worker",
+			Description:        "Basic field execution tasks",
+			BusinessVerticalID: businessID,
+			Permissions: []models.Permission{
+				{Name: "project:read"},
+				{Name: "inventory:read"},
+				{Name: "inventory:create"},
+				{Name: "solar:read_generation"},
+			},
+			Level:    5,
 			IsActive: true,
 		},
 	}

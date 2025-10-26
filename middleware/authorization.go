@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -13,15 +14,22 @@ func RequirePermission(permission string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			claims := GetClaims(r)
+			fmt.Println("Claims:", claims)
 			if claims == nil {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
-
 			// Get user with role information
 			var user models.User
 			if err := config.DB.Preload("RoleModel.Permissions").First(&user, "id = ?", claims.UserID).Error; err != nil {
 				http.Error(w, "user not found", http.StatusUnauthorized)
+				fmt.Println("Error after user fetch:", err)
+				return
+
+			}
+			// Super admins have all permissions
+			if claims.Role == "super_admin" {
+				next.ServeHTTP(w, r)
 				return
 			}
 
@@ -29,7 +37,6 @@ func RequirePermission(permission string) func(http.Handler) http.Handler {
 				http.Error(w, "insufficient permissions", http.StatusForbidden)
 				return
 			}
-
 			next.ServeHTTP(w, r)
 		})
 	}
@@ -48,6 +55,12 @@ func RequireAnyPermission(permissions []string) func(http.Handler) http.Handler 
 			var user models.User
 			if err := config.DB.Preload("RoleModel.Permissions").First(&user, "id = ?", claims.UserID).Error; err != nil {
 				http.Error(w, "user not found", http.StatusUnauthorized)
+				return
+			}
+
+			// Super admins have all permissions
+			if user.HasPermission("admin_all") {
+				next.ServeHTTP(w, r)
 				return
 			}
 
@@ -99,7 +112,7 @@ func RequireResourceOwnership(resourceType string) func(http.Handler) http.Handl
 			}
 
 			resourceID := pathParts[len(pathParts)-1]
-			
+
 			// Check ownership based on resource type
 			if !checkResourceOwnership(user.ID.String(), resourceType, resourceID) {
 				http.Error(w, "access denied - not resource owner", http.StatusForbidden)

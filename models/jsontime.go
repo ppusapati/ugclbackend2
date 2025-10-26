@@ -11,8 +11,8 @@ import (
 // JSON un/marshaling and SQL driver encoding.
 type JSONTime time.Time
 
-// UnmarshalJSON lets us parse either RFC3339 (“2025-05-16T15:32:25Z”)
-// or your shorter form (“2025-05-16T15:32:25.000”).
+// UnmarshalJSON lets us parse either RFC3339 ("2025-05-16T15:32:25Z")
+// or your shorter form ("2025-05-16T15:32:25.000") or microseconds ("2025-05-16T15:32:25.181226").
 func (jt *JSONTime) UnmarshalJSON(b []byte) error {
 	// strip quotes
 	s := string(b)
@@ -20,14 +20,35 @@ func (jt *JSONTime) UnmarshalJSON(b []byte) error {
 		s = s[1 : len(s)-1]
 	}
 
-	// try full RFC3339
+	// try full RFC3339 with nanoseconds (handles Z, +00:00, etc.)
+	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		*jt = JSONTime(t)
+		return nil
+	}
+
+	// try full RFC3339 (standard format with timezone)
 	if t, err := time.Parse(time.RFC3339, s); err == nil {
 		*jt = JSONTime(t)
 		return nil
 	}
-	// fallback to your millisecond‐precision form
-	const layout = "2006-01-02T15:04:05.000"
-	t, err := time.Parse(layout, s)
+
+	// try with microseconds (6 decimal places) - no timezone
+	const layoutMicro = "2006-01-02T15:04:05.999999"
+	if t, err := time.Parse(layoutMicro, s); err == nil {
+		*jt = JSONTime(t)
+		return nil
+	}
+
+	// fallback to millisecond-precision form (3 decimal places)
+	const layoutMilli = "2006-01-02T15:04:05.000"
+	if t, err := time.Parse(layoutMilli, s); err == nil {
+		*jt = JSONTime(t)
+		return nil
+	}
+
+	// try without fractional seconds
+	const layoutNoFrac = "2006-01-02T15:04:05"
+	t, err := time.Parse(layoutNoFrac, s)
 	if err != nil {
 		return fmt.Errorf("JSONTime.UnmarshalJSON: cannot parse %q: %w", s, err)
 	}

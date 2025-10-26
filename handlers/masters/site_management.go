@@ -1,8 +1,9 @@
-package handlers
+package masters
 
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
@@ -25,23 +26,49 @@ func GetAllSites(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Parse pagination parameters
+	pageStr := r.URL.Query().Get("page")
+	limitStr := r.URL.Query().Get("limit")
+
+	page := 1
+	limit := 100 // Default limit for sites
+
+	if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
+		page = p
+	}
+	if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 500 {
+		limit = l
+	}
+	offset := (page - 1) * limit
+
+	// Get total count
+	var total int64
+	config.DB.Model(&models.Site{}).Where("business_vertical_id = ? AND is_active = ?", businessID, true).Count(&total)
+
+	// Get paginated sites
 	var sites []models.Site
-	if err := config.DB.Where("business_vertical_id = ? AND is_active = ?", businessID, true).Find(&sites).Error; err != nil {
+	if err := config.DB.Where("business_vertical_id = ? AND is_active = ?", businessID, true).
+		Limit(limit).
+		Offset(offset).
+		Find(&sites).Error; err != nil {
 		http.Error(w, "failed to fetch sites", http.StatusInternalServerError)
 		return
 	}
 
+	response := map[string]interface{}{
+		"total": total,
+		"page":  page,
+		"limit": limit,
+		"data":  sites,
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(sites)
+	json.NewEncoder(w).Encode(response)
 }
 
 // GetUserSites returns all sites the current user has access to
 func GetUserSites(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUser(r)
-	if user == nil {
-		http.Error(w, "user not found", http.StatusUnauthorized)
-		return
-	}
 
 	businessContext := middleware.GetUserBusinessContext(r)
 	if businessContext == nil {
@@ -54,6 +81,29 @@ func GetUserSites(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid business context", http.StatusInternalServerError)
 		return
 	}
+
+	// Parse pagination parameters
+	pageStr := r.URL.Query().Get("page")
+	limitStr := r.URL.Query().Get("limit")
+
+	page := 1
+	limit := 100 // Default limit for sites
+
+	if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
+		page = p
+	}
+	if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 500 {
+		limit = l
+	}
+	offset := (page - 1) * limit
+
+	// Get total count
+	var total int64
+	config.DB.Table("user_site_accesses").
+		Joins("JOIN sites ON sites.id = user_site_accesses.site_id").
+		Where("user_site_accesses.user_id = ? AND sites.business_vertical_id = ? AND sites.is_active = ?",
+			user.ID, businessID, true).
+		Count(&total)
 
 	// Get sites with user's access information
 	type SiteWithAccess struct {
@@ -70,6 +120,8 @@ func GetUserSites(w http.ResponseWriter, r *http.Request) {
 		Joins("JOIN user_site_accesses ON user_site_accesses.site_id = sites.id").
 		Where("user_site_accesses.user_id = ? AND sites.business_vertical_id = ? AND sites.is_active = ?",
 			user.ID, businessID, true).
+		Limit(limit).
+		Offset(offset).
 		Scan(&result).Error
 
 	if err != nil {
@@ -77,8 +129,15 @@ func GetUserSites(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	response := map[string]interface{}{
+		"total": total,
+		"page":  page,
+		"limit": limit,
+		"data":  result,
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	json.NewEncoder(w).Encode(response)
 }
 
 // AssignUserSiteAccessRequest represents the request body for assigning site access
@@ -92,7 +151,7 @@ type AssignUserSiteAccessRequest struct {
 }
 
 // AssignUserSiteAccess assigns or updates a user's access to a site
-// Only business admins or users with business_manage_users permission can do this
+// Only business admins or users with site:manage_access permission can do this
 func AssignUserSiteAccess(w http.ResponseWriter, r *http.Request) {
 	var req AssignUserSiteAccessRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -100,9 +159,17 @@ func AssignUserSiteAccess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	currentUser := middleware.GetUser(r)
-	if currentUser == nil {
-		http.Error(w, "user not found", http.StatusUnauthorized)
+	// Get current user ID from JWT claims
+	claims := middleware.GetClaims(r)
+	if claims == nil {
+		http.Error(w, "user claims not found", http.StatusUnauthorized)
+		return
+	}
+
+	// Parse current user ID
+	currentUserID, err := uuid.Parse(claims.UserID)
+	if err != nil {
+		http.Error(w, "invalid user ID in claims", http.StatusInternalServerError)
 		return
 	}
 
@@ -127,7 +194,7 @@ func AssignUserSiteAccess(w http.ResponseWriter, r *http.Request) {
 
 	// Check if access already exists
 	var existing models.UserSiteAccess
-	err := config.DB.Where("user_id = ? AND site_id = ?", req.UserID, req.SiteID).First(&existing).Error
+	err = config.DB.Where("user_id = ? AND site_id = ?", req.UserID, req.SiteID).First(&existing).Error
 
 	if err != nil {
 		// Create new access
@@ -138,7 +205,7 @@ func AssignUserSiteAccess(w http.ResponseWriter, r *http.Request) {
 			CanCreate:  req.CanCreate,
 			CanUpdate:  req.CanUpdate,
 			CanDelete:  req.CanDelete,
-			AssignedBy: &currentUser.ID,
+			AssignedBy: &currentUserID,
 		}
 
 		if err := config.DB.Create(&access).Error; err != nil {
@@ -154,7 +221,7 @@ func AssignUserSiteAccess(w http.ResponseWriter, r *http.Request) {
 		existing.CanCreate = req.CanCreate
 		existing.CanUpdate = req.CanUpdate
 		existing.CanDelete = req.CanDelete
-		existing.AssignedBy = &currentUser.ID
+		existing.AssignedBy = &currentUserID
 
 		if err := config.DB.Save(&existing).Error; err != nil {
 			http.Error(w, "failed to update site access", http.StatusInternalServerError)
@@ -184,6 +251,27 @@ func GetSiteUsers(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	siteID := vars["siteId"]
 
+	// Parse pagination parameters
+	pageStr := r.URL.Query().Get("page")
+	limitStr := r.URL.Query().Get("limit")
+
+	page := 1
+	limit := 100 // Default limit for users
+
+	if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
+		page = p
+	}
+	if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 500 {
+		limit = l
+	}
+	offset := (page - 1) * limit
+
+	// Get total count
+	var total int64
+	config.DB.Table("user_site_accesses").
+		Where("user_site_accesses.site_id = ?", siteID).
+		Count(&total)
+
 	type UserAccess struct {
 		UserID    uuid.UUID `json:"userId"`
 		Name      string    `json:"name"`
@@ -199,6 +287,8 @@ func GetSiteUsers(w http.ResponseWriter, r *http.Request) {
 		Select("users.id as user_id, users.name, users.phone, user_site_accesses.can_read, user_site_accesses.can_create, user_site_accesses.can_update, user_site_accesses.can_delete").
 		Joins("JOIN users ON users.id = user_site_accesses.user_id").
 		Where("user_site_accesses.site_id = ?", siteID).
+		Limit(limit).
+		Offset(offset).
 		Scan(&users).Error
 
 	if err != nil {
@@ -206,6 +296,13 @@ func GetSiteUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	response := map[string]interface{}{
+		"total": total,
+		"page":  page,
+		"limit": limit,
+		"data":  users,
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(users)
+	json.NewEncoder(w).Encode(response)
 }
