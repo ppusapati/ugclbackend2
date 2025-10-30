@@ -2,11 +2,12 @@ package masters
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+
 	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/middleware"
 	"p9e.in/ugcl/models"
-	"fmt"
 )
 
 // GetModules returns all modules
@@ -20,12 +21,13 @@ func GetModules(w http.ResponseWriter, r *http.Request) {
 
 	var modules []models.Module
 	if err := config.DB.
-		Where("is_active = ?", true).
-		Order("display_order ASC").
+		Order("created_at DESC").
 		Find(&modules).Error; err != nil {
+		fmt.Println("Error fetching modules:", err)
 		http.Error(w, "failed to fetch modules", http.StatusInternalServerError)
 		return
 	}
+	fmt.Println("Fetched modules:", len(modules))
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -36,9 +38,9 @@ func GetModules(w http.ResponseWriter, r *http.Request) {
 
 func CreateModule(w http.ResponseWriter, r *http.Request) {
 	fmt.Println("CreateModule called")
-		claims := middleware.GetClaims(r)
+	claims := middleware.GetClaims(r)
 	fmt.Println("Claims:", claims)
-		if claims == nil {
+	if claims == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -47,7 +49,7 @@ func CreateModule(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-
+	fmt.Println("Module to create:", module)
 	if err := config.DB.Create(&module).Error; err != nil {
 		http.Error(w, "failed to create module", http.StatusInternalServerError)
 		return

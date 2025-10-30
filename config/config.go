@@ -60,14 +60,6 @@ func Connect() {
 		log.Fatal("Failed to run migrations:", err)
 	}
 
-	// Seed permissions and roles
-	// SeedPermissions()
-
-	// Seed business verticals
-	// SeedBusinessVerticals()
-
-	// Seed sites
-	SeedSites()
 }
 
 // getEnvAsInt reads an environment variable as int with a default value

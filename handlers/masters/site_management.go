@@ -2,6 +2,7 @@ package masters
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -12,8 +13,92 @@ import (
 	"p9e.in/ugcl/models"
 )
 
-// GetAllSites returns all sites for a business vertical
+// GetAllSites returns all sites irrespective of business vertical (Admin only)
 func GetAllSites(w http.ResponseWriter, r *http.Request) {
+	// Parse pagination parameters
+	pageStr := r.URL.Query().Get("page")
+	limitStr := r.URL.Query().Get("limit")
+
+	page := 1
+	limit := 100 // Default limit for sites
+
+	if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
+		page = p
+	}
+	if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 500 {
+		limit = l
+	}
+	offset := (page - 1) * limit
+
+	// Get total count of all active sites
+	var total int64
+	config.DB.Model(&models.Site{}).Where("sites.is_active = ?", true).Count(&total)
+
+	// Use JOIN to get sites with business vertical name in a single query
+	type SiteWithBusinessVertical struct {
+		models.Site
+		BusinessVerticalName string `json:"business_vertical_name"`
+		BusinessVerticalCode string `json:"business_vertical_code"`
+	}
+
+	var sites []SiteWithBusinessVertical
+	err := config.DB.Table("sites").
+		Select("sites.*, business_verticals.name as business_vertical_name, business_verticals.code as business_vertical_code").
+		Joins("LEFT JOIN business_verticals ON sites.business_vertical_id = business_verticals.id").
+		Where("sites.is_active = ?", true).
+		Order("sites.created_at DESC").
+		Limit(limit).
+		Offset(offset).
+		Scan(&sites).Error
+
+	if err != nil {
+		http.Error(w, "failed to fetch sites", http.StatusInternalServerError)
+		return
+	}
+
+	response := map[string]interface{}{
+		"total": total,
+		"page":  page,
+		"limit": limit,
+		"data":  sites,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func GetSiteByID(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	siteID := vars["siteId"]
+	var site models.Site
+	if err := config.DB.Where("id = ? AND is_active = ?", siteID, true).First(&site).Error; err != nil {
+		http.Error(w, "site not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(site)
+}
+
+func CreateSite(w http.ResponseWriter, r *http.Request) {
+	var site models.Site
+	fmt.Println(r.Body)
+	if err := json.NewDecoder(r.Body).Decode(&site); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	fmt.Println(site)
+	if err := config.DB.Create(&site).Error; err != nil {
+		fmt.Println(err)
+		http.Error(w, "failed to create site", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(site)
+
+}
+
+// GetBusinessSites returns all sites for a specific business vertical
+func GetBusinessSites(w http.ResponseWriter, r *http.Request) {
 	businessContext := middleware.GetUserBusinessContext(r)
 	if businessContext == nil {
 		http.Error(w, "business context not found", http.StatusBadRequest)
@@ -41,11 +126,11 @@ func GetAllSites(w http.ResponseWriter, r *http.Request) {
 	}
 	offset := (page - 1) * limit
 
-	// Get total count
+	// Get total count for this business
 	var total int64
 	config.DB.Model(&models.Site{}).Where("business_vertical_id = ? AND is_active = ?", businessID, true).Count(&total)
 
-	// Get paginated sites
+	// Get paginated sites for this business
 	var sites []models.Site
 	if err := config.DB.Where("business_vertical_id = ? AND is_active = ?", businessID, true).
 		Limit(limit).

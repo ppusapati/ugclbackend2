@@ -103,7 +103,50 @@ func Migrations(db *gorm.DB) error {
 				return tx.AutoMigrate(&models.Module{})
 			},
 		},
+		{
+			ID: "29102025_add_abac_tables",
+			Migrate: func(tx *gorm.DB) error {
+				// Create ABAC tables: attributes, user_attributes, resource_attributes
+				return tx.AutoMigrate(
+					&models.Attribute{},
+					&models.UserAttribute{},
+					&models.ResourceAttribute{},
+				)
+			},
+		},
+		{
+			ID: "29102025_add_policy_tables",
+			Migrate: func(tx *gorm.DB) error {
+				// Create Policy-based authorization tables
+				return tx.AutoMigrate(
+					&models.Policy{},
+					&models.PolicyRule{},
+					&models.PolicyEvaluation{},
+				)
+			},
+		},
+		{
+			ID: "29102025_add_policy_approval_tables",
+			Migrate: func(tx *gorm.DB) error {
+				// Create Policy approval workflow tables
+				return tx.AutoMigrate(
+					&models.PolicyVersion{},
+					&models.PolicyApprovalRequest{},
+					&models.PolicyApproval{},
+					&models.PolicyChangeLog{},
+					&models.PolicyApprovalWorkflow{},
+				)
+			},
+		},
 	})
+	// Seed permissions and roles
+	// SeedPermissions()
+
+	// Seed business verticals
+	// SeedBusinessVerticals()
+
+	// Seed sites
+	// SeedSites()
 	// MigrateSites()
 	// MigrateToNewRBAC()
 	// MigrateExistingUsers()

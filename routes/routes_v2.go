@@ -208,5 +208,8 @@ func RegisterRoutesV2() http.Handler {
 	// Register business vertical routes
 	RegisterBusinessRoutes(r)
 
+	// Register ABAC and Policy management routes
+	RegisterABACRoutes(api)
+
 	return r
 }

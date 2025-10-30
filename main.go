@@ -32,9 +32,9 @@ func main() {
 		port = "8080"
 	}
 
-	if err := config.Migrations(config.DB); err != nil {
-		log.Fatalf("could not run migrations: %v", err)
-	}
+	// if err := config.Migrations(config.DB); err != nil {
+	// 	log.Fatalf("could not run migrations: %v", err)
+	// }
 	handler := routes.RegisterRoutesV2()
 	handlerWithCORS := enableCORS(handler)
 	log.Println("Server starting at port", port)

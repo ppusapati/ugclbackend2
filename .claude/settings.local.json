@@ -15,7 +15,8 @@
       "Bash(find:*)",
       "Bash(cat:*)",
       "Read(//d/Maheshwari/UGCL/docs/kmz parzer/**)",
-      "Read(//d/Maheshwari/UGCL/docs/Julia_maps/**)"
+      "Read(//d/Maheshwari/UGCL/docs/Julia_maps/**)",
+      "Read(//d/Maheshwari/UGCL/**)"
     ],
     "deny": [],
     "ask": []

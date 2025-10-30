@@ -27,6 +27,16 @@ func RegisterBusinessRoutes(r *mux.Router) {
 	admin.Handle("/dashboard", middleware.RequirePermission("admin_all")(
 		http.HandlerFunc(handlers.GetSuperAdminDashboard))).Methods("GET")
 
+	// Site management (admin - all sites across all business verticals)
+	admin.Handle("/sites", middleware.RequirePermission("admin_all")(
+		http.HandlerFunc(masters.GetAllSites))).Methods("GET")
+	admin.Handle("/sites", middleware.RequirePermission("admin_all")(
+		http.HandlerFunc(masters.CreateSite))).Methods("POST")
+	admin.Handle("/sites/{siteId}", middleware.RequirePermission("admin_all")(
+		http.HandlerFunc(masters.GetSiteByID))).Methods("GET")
+	// admin.Handle("/sites/{siteId}", middleware.RequirePermission("admin_all")(
+	// 	http.HandlerFunc(masters.DeleteSite))).Methods("DELETE")
+
 	// Form management (admin only - unified system)
 	admin.Handle("/app-forms", middleware.RequirePermission("admin_all")(
 		http.HandlerFunc(handlers.GetAllAppForms))).Methods("GET")
@@ -109,7 +119,7 @@ func RegisterBusinessRoutes(r *mux.Router) {
 	// Site management endpoints
 	business.Handle("/sites",
 		middleware.RequireBusinessPermission("site:view")(
-			http.HandlerFunc(masters.GetAllSites))).Methods("GET")
+			http.HandlerFunc(masters.GetBusinessSites))).Methods("GET")
 	business.HandleFunc("/sites/my-access", masters.GetUserSites).Methods("GET")
 	business.Handle("/sites/access",
 		middleware.RequireBusinessPermission("site:manage_access")(

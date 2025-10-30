@@ -103,6 +103,13 @@ func SeedPermissions() {
 		// ===== Site Management =====
 		{ID: uuid.New(), Name: "site:manage_access", Resource: "site", Action: "manage", Description: "Manage user access to sites"},
 		{ID: uuid.New(), Name: "site:view", Resource: "site", Action: "read", Description: "View sites"},
+
+		// ===== ABAC & Policy Management =====
+		{ID: uuid.New(), Name: "manage_policies", Resource: "policy", Action: "manage", Description: "Manage access control policies"},
+		{ID: uuid.New(), Name: "manage_attributes", Resource: "attribute", Action: "manage", Description: "Manage attribute definitions"},
+		{ID: uuid.New(), Name: "manage_user_attributes", Resource: "user_attribute", Action: "manage", Description: "Assign attributes to users"},
+		{ID: uuid.New(), Name: "manage_resource_attributes", Resource: "resource_attribute", Action: "manage", Description: "Assign attributes to resources"},
+		{ID: uuid.New(), Name: "view_policy_evaluations", Resource: "policy_evaluation", Action: "read", Description: "View policy evaluation audit logs"},
 	}
 
 	// Create permissions if they don't exist
