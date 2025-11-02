@@ -34,6 +34,8 @@ func RegisterBusinessRoutes(r *mux.Router) {
 		http.HandlerFunc(masters.CreateSite))).Methods("POST")
 	admin.Handle("/sites/{siteId}", middleware.RequirePermission("admin_all")(
 		http.HandlerFunc(masters.GetSiteByID))).Methods("GET")
+	admin.Handle("/sites/{siteId}", middleware.RequirePermission("admin_all")(
+		http.HandlerFunc(masters.UpdateSite))).Methods("PUT")
 	// admin.Handle("/sites/{siteId}", middleware.RequirePermission("admin_all")(
 	// 	http.HandlerFunc(masters.DeleteSite))).Methods("DELETE")
 
@@ -50,6 +52,10 @@ func RegisterBusinessRoutes(r *mux.Router) {
 		http.HandlerFunc(handlers.GetAllWorkflows))).Methods("GET")
 	admin.Handle("/workflows", middleware.RequirePermission("admin_all")(
 		http.HandlerFunc(handlers.CreateWorkflowDefinition))).Methods("POST")
+	admin.Handle("/workflows/{workflowId}", middleware.RequirePermission("admin_all")(
+		http.HandlerFunc(handlers.UpdateWorkflowDefinition))).Methods("PUT")
+	admin.Handle("/workflows/{workflowId}", middleware.RequirePermission("admin_all")(
+		http.HandlerFunc(handlers.DeleteWorkflowDefinition))).Methods("DELETE")
 
 	// User's accessible businesses (any authenticated user)
 	api := r.PathPrefix("/api/v1").Subrouter()

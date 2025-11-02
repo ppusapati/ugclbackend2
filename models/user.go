@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"p9e.in/ugcl/utils"
 )
 
 type User struct {
@@ -34,7 +35,12 @@ func (u *User) BeforeCreate(tx *gorm.DB) (err error) {
 // HasPermission checks if user has a specific permission
 func (u *User) HasPermission(permissionName string) bool {
 	if u.RoleModel != nil {
-		return u.RoleModel.HasPermission(permissionName)
+		// Check for wildcard or exact match
+		for _, perm := range u.RoleModel.Permissions {
+			if utils.MatchesPermission(perm.Name, permissionName) {
+				return true
+			}
+		}
 	}
 	return false
 }
@@ -129,9 +135,9 @@ func (u *User) HasPermissionInVertical(permission string, verticalID uuid.UUID) 
 		if ubr.IsActive &&
 			ubr.BusinessRole.ID != uuid.Nil &&
 			ubr.BusinessRole.BusinessVerticalID == verticalID {
-			// Check if this business role has the permission
+			// Check if this business role has the permission (supports wildcards)
 			for _, perm := range ubr.BusinessRole.Permissions {
-				if perm.Name == permission {
+				if utils.MatchesPermission(perm.Name, permission) {
 					return true
 				}
 			}

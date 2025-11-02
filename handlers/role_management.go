@@ -303,3 +303,166 @@ func DeleteRole(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// UnifiedRoleResponse represents a role that could be either global or business-specific
+type UnifiedRoleResponse struct {
+	ID                 uuid.UUID            `json:"id"`
+	Name               string               `json:"name"`
+	DisplayName        string               `json:"display_name,omitempty"`
+	Description        string               `json:"description"`
+	Level              int                  `json:"level"`
+	IsActive           bool                 `json:"is_active"`
+	IsGlobal           bool                 `json:"is_global"`
+	BusinessVerticalID *uuid.UUID           `json:"business_vertical_id,omitempty"`
+	BusinessVertical   *BusinessVerticalInfo `json:"business_vertical,omitempty"`
+	Permissions        []permissionResponse `json:"permissions"`
+	UserCount          int64                `json:"user_count"`
+}
+
+type BusinessVerticalInfo struct {
+	ID   uuid.UUID `json:"id"`
+	Code string    `json:"code"`
+	Name string    `json:"name"`
+}
+
+// GetAllRolesUnified returns both global roles and business roles in a single response
+// Query params:
+//   - include_business=true|false (default: true) - Include business roles
+//   - business_vertical_id=uuid - Filter by specific vertical (optional)
+func GetAllRolesUnified(w http.ResponseWriter, r *http.Request) {
+	includeBusiness := r.URL.Query().Get("include_business") != "false" // Default true
+	businessVerticalID := r.URL.Query().Get("business_vertical_id")
+
+	var unifiedRoles []UnifiedRoleResponse
+
+	// 1. Fetch Global Roles
+	var globalRoles []models.Role
+	if err := config.DB.Preload("Permissions").
+		Where("is_active = ?", true).
+		Order("level ASC").
+		Find(&globalRoles).Error; err != nil {
+		http.Error(w, "Failed to fetch global roles: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Get user counts for global roles
+	globalRoleUserCounts := make(map[uuid.UUID]int64)
+	for _, role := range globalRoles {
+		var count int64
+		config.DB.Model(&models.User{}).Where("role_id = ?", role.ID).Count(&count)
+		globalRoleUserCounts[role.ID] = count
+	}
+
+	// Convert global roles to unified format
+	for _, role := range globalRoles {
+		permissions := make([]permissionResponse, len(role.Permissions))
+		for j, perm := range role.Permissions {
+			permissions[j] = permissionResponse{
+				ID:          perm.ID,
+				Name:        perm.Name,
+				Description: perm.Description,
+				Resource:    perm.Resource,
+				Action:      perm.Action,
+			}
+		}
+
+		unifiedRoles = append(unifiedRoles, UnifiedRoleResponse{
+			ID:                 role.ID,
+			Name:               role.Name,
+			DisplayName:        role.Name, // Global roles don't have separate display name
+			Description:        role.Description,
+			Level:              role.Level,
+			IsActive:           role.IsActive,
+			IsGlobal:           true,
+			BusinessVerticalID: nil,
+			BusinessVertical:   nil,
+			Permissions:        permissions,
+			UserCount:          globalRoleUserCounts[role.ID],
+		})
+	}
+
+	// 2. Fetch Business Roles (if requested)
+	if includeBusiness {
+		query := config.DB.Preload("Permissions").
+			Preload("BusinessVertical").
+			Where("is_active = ?", true)
+
+		// Filter by specific vertical if provided
+		if businessVerticalID != "" {
+			if verticalUUID, err := uuid.Parse(businessVerticalID); err == nil {
+				query = query.Where("business_vertical_id = ?", verticalUUID)
+			}
+		}
+
+		var businessRoles []models.BusinessRole
+		if err := query.Order("level ASC").Find(&businessRoles).Error; err != nil {
+			http.Error(w, "Failed to fetch business roles: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// Get user counts for business roles
+		businessRoleUserCounts := make(map[uuid.UUID]int64)
+		if len(businessRoles) > 0 {
+			roleIDs := make([]uuid.UUID, len(businessRoles))
+			for i, r := range businessRoles {
+				roleIDs[i] = r.ID
+			}
+
+			var roleUserCounts []struct {
+				BusinessRoleID uuid.UUID
+				Count          int64
+			}
+			config.DB.Model(&models.UserBusinessRole{}).
+				Select("business_role_id, COUNT(*) as count").
+				Where("business_role_id IN ? AND is_active = ?", roleIDs, true).
+				Group("business_role_id").
+				Scan(&roleUserCounts)
+
+			for _, result := range roleUserCounts {
+				businessRoleUserCounts[result.BusinessRoleID] = result.Count
+			}
+		}
+
+		// Convert business roles to unified format
+		for _, role := range businessRoles {
+			permissions := make([]permissionResponse, len(role.Permissions))
+			for j, perm := range role.Permissions {
+				permissions[j] = permissionResponse{
+					ID:          perm.ID,
+					Name:        perm.Name,
+					Description: perm.Description,
+					Resource:    perm.Resource,
+					Action:      perm.Action,
+				}
+			}
+
+			verticalInfo := &BusinessVerticalInfo{
+				ID:   role.BusinessVertical.ID,
+				Code: role.BusinessVertical.Code,
+				Name: role.BusinessVertical.Name,
+			}
+
+			unifiedRoles = append(unifiedRoles, UnifiedRoleResponse{
+				ID:                 role.ID,
+				Name:               role.Name,
+				DisplayName:        role.DisplayName,
+				Description:        role.Description,
+				Level:              role.Level,
+				IsActive:           role.IsActive,
+				IsGlobal:           false,
+				BusinessVerticalID: &role.BusinessVerticalID,
+				BusinessVertical:   verticalInfo,
+				Permissions:        permissions,
+				UserCount:          businessRoleUserCounts[role.ID],
+			})
+		}
+	}
+
+	response := map[string]interface{}{
+		"roles": unifiedRoles,
+		"total": len(unifiedRoles),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}

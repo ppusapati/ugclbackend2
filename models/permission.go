@@ -5,6 +5,7 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"p9e.in/ugcl/utils"
 )
 
 // Permission represents a specific action that can be performed
@@ -25,7 +26,7 @@ type Role struct {
 	Description string       `gorm:"size:255"`
 	IsActive    bool         `gorm:"default:true"`
 	IsGlobal    bool         `gorm:"default:true"` // Global roles vs business-specific roles
-	Level       int          `gorm:"default:5"`     // Hierarchy level (0=super_admin, 1=system_admin, etc.)
+	Level       int          `gorm:"default:5"`    // Hierarchy level (0=super_admin, 1=system_admin, etc.)
 	Permissions []Permission `gorm:"many2many:role_permissions;"`
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
@@ -48,10 +49,10 @@ func (r *Role) BeforeCreate(tx *gorm.DB) (err error) {
 	return
 }
 
-// HasPermission checks if a role has a specific permission
+// HasPermission checks if a role has a specific permission (supports wildcards)
 func (r *Role) HasPermission(permissionName string) bool {
 	for _, perm := range r.Permissions {
-		if perm.Name == permissionName {
+		if utils.MatchesPermission(perm.Name, permissionName) {
 			return true
 		}
 	}

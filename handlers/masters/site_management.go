@@ -11,6 +11,7 @@ import (
 	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/middleware"
 	"p9e.in/ugcl/models"
+	"p9e.in/ugcl/utils"
 )
 
 // GetAllSites returns all sites irrespective of business vertical (Admin only)
@@ -81,20 +82,98 @@ func GetSiteByID(w http.ResponseWriter, r *http.Request) {
 
 func CreateSite(w http.ResponseWriter, r *http.Request) {
 	var site models.Site
-	fmt.Println(r.Body)
 	if err := json.NewDecoder(r.Body).Decode(&site); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	fmt.Println(site)
-	if err := config.DB.Create(&site).Error; err != nil {
-		fmt.Println(err)
-		http.Error(w, "failed to create site", http.StatusInternalServerError)
+
+	// Validate geofencing data if provided
+	if site.Geofence != nil && *site.Geofence != "" {
+		if err := utils.ValidateGeofence(*site.Geofence); err != nil {
+			http.Error(w, fmt.Sprintf("invalid geofence data: %s", err.Error()), http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Validate required fields
+	if site.Name == "" {
+		http.Error(w, "site name is required", http.StatusBadRequest)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(site)
+	if site.Code == "" {
+		http.Error(w, "site code is required", http.StatusBadRequest)
+		return
+	}
+	if site.BusinessVerticalID == uuid.Nil {
+		http.Error(w, "business vertical ID is required", http.StatusBadRequest)
+		return
+	}
 
+	if err := config.DB.Create(&site).Error; err != nil {
+		http.Error(w, fmt.Sprintf("failed to create site: %s", err.Error()), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(site)
+}
+
+// UpdateSite updates an existing site including geofencing data
+func UpdateSite(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	siteID := vars["siteId"]
+
+	// Check if site exists
+	var existingSite models.Site
+	if err := config.DB.Where("id = ? AND is_active = ?", siteID, true).First(&existingSite).Error; err != nil {
+		http.Error(w, "site not found", http.StatusNotFound)
+		return
+	}
+
+	// Decode the update request
+	var updateData models.Site
+	if err := json.NewDecoder(r.Body).Decode(&updateData); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Validate geofencing data if provided
+	if updateData.Geofence != nil && *updateData.Geofence != "" {
+		if err := utils.ValidateGeofence(*updateData.Geofence); err != nil {
+			http.Error(w, fmt.Sprintf("invalid geofence data: %s", err.Error()), http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Update fields
+	if updateData.Name != "" {
+		existingSite.Name = updateData.Name
+	}
+	if updateData.Code != "" {
+		existingSite.Code = updateData.Code
+	}
+	if updateData.Description != "" {
+		existingSite.Description = updateData.Description
+	}
+	if updateData.Location != nil {
+		existingSite.Location = updateData.Location
+	}
+	if updateData.Geofence != nil {
+		existingSite.Geofence = updateData.Geofence
+	}
+	if updateData.BusinessVerticalID != uuid.Nil {
+		existingSite.BusinessVerticalID = updateData.BusinessVerticalID
+	}
+
+	// Save updates
+	if err := config.DB.Save(&existingSite).Error; err != nil {
+		http.Error(w, fmt.Sprintf("failed to update site: %s", err.Error()), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(existingSite)
 }
 
 // GetBusinessSites returns all sites for a specific business vertical

@@ -178,6 +178,16 @@ func (we *WorkflowEngine) TransitionState(
 	log.Printf("✅ Transitioned submission %s: %s -> %s (action: %s, actor: %s)",
 		submissionID, previousState, targetTransition.To, action, actorName)
 
+	// Process notifications (after transaction commit)
+	// Reload submission with relationships for notification context
+	we.db.Preload("Form").Preload("Workflow").Preload("BusinessVertical").First(&submission, submissionID)
+
+	notifService := NewNotificationService()
+	if err := notifService.ProcessTransitionNotifications(&submission, &transition, submission.Workflow, targetTransition, actorName); err != nil {
+		log.Printf("⚠️  Failed to process notifications: %v", err)
+		// Don't fail the transition if notifications fail
+	}
+
 	return &submission, nil
 }
 

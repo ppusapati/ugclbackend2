@@ -138,6 +138,31 @@ func Migrations(db *gorm.DB) error {
 				)
 			},
 		},
+		{
+			ID: "02112025_add_workflow_tables",
+			Migrate: func(tx *gorm.DB) error {
+				// Create workflow tables
+				// Note: WorkflowAction, WorkflowState, and WorkflowTransitionDef are NOT database tables
+				// They are helper structs stored as JSONB within workflow_definitions
+				return tx.AutoMigrate(
+					&models.WorkflowDefinition{},  // Table: workflow_definitions
+					&models.FormSubmission{},      // Table: form_submissions
+					&models.WorkflowTransition{},  // Table: workflow_transitions
+				)
+			},
+		},
+		{
+			ID: "02112025_add_notification_tables",
+			Migrate: func(tx *gorm.DB) error {
+				// Create notification system tables
+				return tx.AutoMigrate(
+					&models.NotificationRule{},       // Table: notification_rules
+					&models.NotificationRecipient{},  // Table: notification_recipients
+					&models.Notification{},           // Table: notifications
+					&models.NotificationPreference{}, // Table: notification_preferences
+				)
+			},
+		},
 	})
 	// Seed permissions and roles
 	// SeedPermissions()

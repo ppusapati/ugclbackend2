@@ -8,8 +8,8 @@ import (
 	_ "p9e.in/ugcl/docs"
 	"p9e.in/ugcl/handlers"
 	kpi_handlers "p9e.in/ugcl/handlers/kpis"
-	"p9e.in/ugcl/middleware"
 	"p9e.in/ugcl/handlers/masters"
+	"p9e.in/ugcl/middleware"
 )
 
 // RegisterRoutesV2 uses the new permission-based authorization system
@@ -154,10 +154,12 @@ func RegisterRoutesV2() http.Handler {
 
 	admin.Handle("/masters/modules", middleware.RequirePermission("masters:module:create")(
 		http.HandlerFunc(masters.CreateModule))).Methods("POST")
-	
+
 	// User management
 	admin.Handle("/users", middleware.RequirePermission("read_users")(
 		http.HandlerFunc(handlers.GetAllUsers))).Methods("GET")
+	admin.Handle("/users/{id}", middleware.RequirePermission("read_users")(
+		http.HandlerFunc(handlers.GetbyID))).Methods("GET")
 	admin.Handle("/users", middleware.RequirePermission("create_users")(
 		http.HandlerFunc(handlers.Register))).Methods("POST")
 	admin.Handle("/users/{id}", middleware.RequirePermission("update_users")(
@@ -168,6 +170,8 @@ func RegisterRoutesV2() http.Handler {
 	// Role and Permission management
 	admin.Handle("/roles", middleware.RequirePermission("manage_roles")(
 		http.HandlerFunc(handlers.GetAllRoles))).Methods("GET")
+	admin.Handle("/roles/unified", middleware.RequirePermission("manage_roles")(
+		http.HandlerFunc(handlers.GetAllRolesUnified))).Methods("GET")
 	admin.Handle("/roles", middleware.RequirePermission("manage_roles")(
 		http.HandlerFunc(handlers.CreateRole))).Methods("POST")
 	admin.Handle("/roles/{id}", middleware.RequirePermission("manage_roles")(
@@ -210,6 +214,9 @@ func RegisterRoutesV2() http.Handler {
 
 	// Register ABAC and Policy management routes
 	RegisterABACRoutes(api)
+
+	// Register notification routes
+	RegisterNotificationRoutes(api, admin)
 
 	return r
 }

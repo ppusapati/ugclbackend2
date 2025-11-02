@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 
@@ -160,11 +161,6 @@ func GetAllAppForms(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !user.HasPermission("admin_all") {
-		http.Error(w, "forbidden - admin access required", http.StatusForbidden)
-		return
-	}
-
 	var forms []models.AppForm
 	if err := config.DB.
 		Preload("Module").
@@ -202,7 +198,7 @@ func UpdateFormVerticalAccess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !user.HasPermission("admin_all") {
+	if !user.HasPermission("admin_all") || !user.HasPermission("super_admin") {
 		http.Error(w, "forbidden - admin access required", http.StatusForbidden)
 		return
 	}
@@ -249,6 +245,7 @@ func UpdateFormVerticalAccess(w http.ResponseWriter, r *http.Request) {
 // POST /api/v1/admin/forms
 func CreateForm(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetClaims(r)
+	fmt.Println(claims)
 	if claims == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -261,7 +258,7 @@ func CreateForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !user.HasPermission("admin_all") {
+	if !user.HasPermission("admin_all") || !user.HasPermission("super_admin") {
 		http.Error(w, "forbidden - admin access required", http.StatusForbidden)
 		return
 	}

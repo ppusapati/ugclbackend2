@@ -17,6 +17,7 @@ type Site struct {
 	BusinessVerticalID uuid.UUID        `gorm:"type:uuid;not null;index" json:"businessVerticalId"`
 	BusinessVertical   BusinessVertical `gorm:"foreignKey:BusinessVerticalID" json:"businessVertical,omitempty"`
 	Location           *string          `gorm:"type:jsonb" json:"location,omitempty"` // JSON with lat, lng, address
+	Geofence           *string          `gorm:"type:jsonb" json:"geofence,omitempty"` // JSON array of coordinates: [{lat, lng}, ...]
 	IsActive           bool             `gorm:"default:true" json:"isActive"`
 	CreatedAt          time.Time        `json:"createdAt"`
 	UpdatedAt          time.Time        `json:"updatedAt"`

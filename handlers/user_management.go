@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/gorilla/mux"
 	"github.com/google/uuid"
+	"github.com/gorilla/mux"
 	"golang.org/x/crypto/bcrypt"
 	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/middleware"
@@ -159,4 +159,28 @@ func ChangePassword(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"message": "password updated successfully"})
+}
+
+func GetbyID(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	userID := vars["id"]
+
+	// Parse UUID
+	id, err := uuid.Parse(userID)
+	if err != nil {
+		http.Error(w, "invalid user ID", http.StatusBadRequest)
+		return
+	}
+
+	// Get user
+	var user models.User
+	if err := config.DB.First(&user, "id = ?", id).Error; err != nil {
+		http.Error(w, "user not found", http.StatusNotFound)
+		return
+	}
+
+	// Return user (without password hash)
+	user.PasswordHash = ""
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(user)
 }

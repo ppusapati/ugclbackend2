@@ -11,7 +11,15 @@ import (
 	"p9e.in/ugcl/models"
 )
 
-var workflowEngine = NewWorkflowEngine()
+var workflowEngine *WorkflowEngine
+
+// getWorkflowEngine returns the workflow engine instance, initializing it if needed
+func getWorkflowEngine() *WorkflowEngine {
+	if workflowEngine == nil {
+		workflowEngine = NewWorkflowEngine()
+	}
+	return workflowEngine
+}
 
 // SubmitFormRequest represents the request body for form submission
 type SubmitFormRequest struct {
@@ -61,7 +69,7 @@ func CreateFormSubmission(w http.ResponseWriter, r *http.Request) {
 	log.Printf("📝 Creating form submission: %s for business: %s, user: %s", formCode, businessCode, claims.UserID)
 
 	// Create submission
-	submission, err := workflowEngine.CreateSubmission(
+	submission, err := getWorkflowEngine().CreateSubmission(
 		formCode,
 		businessID,
 		req.SiteID,
@@ -123,7 +131,7 @@ func GetFormSubmissions(w http.ResponseWriter, r *http.Request) {
 		filters["submitted_by"] = claims.UserID
 	}
 
-	submissions, err := workflowEngine.GetSubmissionsByForm(formCode, businessID, filters)
+	submissions, err := getWorkflowEngine().GetSubmissionsByForm(formCode, businessID, filters)
 	if err != nil {
 		log.Printf("❌ Error fetching submissions: %v", err)
 		http.Error(w, "failed to fetch submissions", http.StatusInternalServerError)
@@ -161,7 +169,7 @@ func GetFormSubmission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	submission, err := workflowEngine.GetSubmission(submissionID)
+	submission, err := getWorkflowEngine().GetSubmission(submissionID)
 	if err != nil {
 		log.Printf("❌ Error fetching submission: %v", err)
 		http.Error(w, "submission not found", http.StatusNotFound)
@@ -212,7 +220,7 @@ func UpdateFormSubmission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	submission, err := workflowEngine.UpdateSubmissionData(submissionID, req.FormData, claims.UserID)
+	submission, err := getWorkflowEngine().UpdateSubmissionData(submissionID, req.FormData, claims.UserID)
 	if err != nil {
 		log.Printf("❌ Error updating submission: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -257,7 +265,7 @@ func TransitionFormSubmission(w http.ResponseWriter, r *http.Request) {
 	userPermissions := middleware.GetUserPermissions(r)
 
 	// Validate transition
-	if err := workflowEngine.ValidateTransition(submissionID, req.Action, userPermissions); err != nil {
+	if err := getWorkflowEngine().ValidateTransition(submissionID, req.Action, userPermissions); err != nil {
 		log.Printf("❌ Transition validation failed: %v", err)
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
@@ -270,7 +278,7 @@ func TransitionFormSubmission(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Perform transition
-	submission, err := workflowEngine.TransitionState(
+	submission, err := getWorkflowEngine().TransitionState(
 		submissionID,
 		req.Action,
 		claims.UserID,
@@ -313,7 +321,7 @@ func GetWorkflowHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	history, err := workflowEngine.GetWorkflowHistory(submissionID)
+	history, err := getWorkflowEngine().GetWorkflowHistory(submissionID)
 	if err != nil {
 		log.Printf("❌ Error fetching history: %v", err)
 		http.Error(w, "failed to fetch history", http.StatusInternalServerError)
@@ -351,7 +359,7 @@ func GetWorkflowStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	stats, err := workflowEngine.GetWorkflowStats(formCode, businessID)
+	stats, err := getWorkflowEngine().GetWorkflowStats(formCode, businessID)
 	if err != nil {
 		log.Printf("❌ Error fetching stats: %v", err)
 		http.Error(w, "failed to fetch stats", http.StatusInternalServerError)
@@ -384,7 +392,7 @@ func CreateWorkflowDefinition(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := workflowEngine.db.Create(&workflow).Error; err != nil {
+	if err := getWorkflowEngine().db.Create(&workflow).Error; err != nil {
 		log.Printf("❌ Error creating workflow: %v", err)
 		http.Error(w, "failed to create workflow", http.StatusInternalServerError)
 		return
@@ -410,7 +418,7 @@ func GetAllWorkflows(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var workflows []models.WorkflowDefinition
-	if err := workflowEngine.db.Find(&workflows).Error; err != nil {
+	if err := getWorkflowEngine().db.Find(&workflows).Error; err != nil {
 		http.Error(w, "failed to fetch workflows", http.StatusInternalServerError)
 		return
 	}
@@ -420,4 +428,56 @@ func GetAllWorkflows(w http.ResponseWriter, r *http.Request) {
 		"workflows": workflows,
 		"count":     len(workflows),
 	})
+}
+
+func UpdateWorkflowDefinition(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetClaims(r)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	vars := mux.Vars(r)
+	workflowIdStr := vars["workflowId"]
+	// Fetch the existing workflow definition
+	var workflow models.WorkflowDefinition
+	if err := getWorkflowEngine().db.First(&workflow, "id = ?", workflowIdStr).Error; err != nil {
+		http.Error(w, "failed to fetch workflow", http.StatusInternalServerError)
+		return
+	}
+
+	// Update the workflow definition with the new data
+	if err := json.NewDecoder(r.Body).Decode(&workflow); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if err := getWorkflowEngine().db.Save(&workflow).Error; err != nil {
+		http.Error(w, "failed to update workflow", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message":  "workflow updated successfully",
+		"workflow": workflow,
+	})
+}
+
+func DeleteWorkflowDefinition(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetClaims(r)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	vars := mux.Vars(r)
+	workflowIdStr := vars["workflowId"]
+
+	// Delete the workflow definition
+	if err := getWorkflowEngine().db.Delete(&models.WorkflowDefinition{}, "id = ?", workflowIdStr).Error; err != nil {
+		http.Error(w, "failed to delete workflow", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }

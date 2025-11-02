@@ -119,7 +119,6 @@ func Login(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(out)
 }
 
-
 func GetCurrentUser(w http.ResponseWriter, r *http.Request) {
 	// 1) Extract token
 	auth := r.Header.Get("Authorization")
@@ -256,6 +255,7 @@ func GetAllUsers(w http.ResponseWriter, r *http.Request) {
 		Phone      string     `json:"phone"`
 		RoleID     *uuid.UUID `json:"role_id"`
 		GlobalRole string     `json:"global_role"`
+		IsActive   bool       `json:"is_active"`
 	}
 
 	out := make([]userOut, len(users))
@@ -271,6 +271,7 @@ func GetAllUsers(w http.ResponseWriter, r *http.Request) {
 			Phone:      u.Phone,
 			RoleID:     u.RoleID,
 			GlobalRole: globalRoleName,
+			IsActive:   u.IsActive,
 		}
 	}
 

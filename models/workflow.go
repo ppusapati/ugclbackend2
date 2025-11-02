@@ -43,12 +43,45 @@ type WorkflowState struct {
 
 // WorkflowTransitionDef represents a state transition definition
 type WorkflowTransitionDef struct {
-	From       string `json:"from"`
-	To         string `json:"to"`
-	Action     string `json:"action"`
-	Label      string `json:"label,omitempty"`
-	Permission string `json:"permission,omitempty"`
-	RequiresComment bool `json:"requires_comment,omitempty"`
+	From            string                      `json:"from"`
+	To              string                      `json:"to"`
+	Action          string                      `json:"action"`
+	Label           string                      `json:"label,omitempty"`
+	Permission      string                      `json:"permission,omitempty"`
+	RequiresComment bool                        `json:"requires_comment,omitempty"`
+
+	// Notification configuration
+	Notifications   []TransitionNotification    `json:"notifications,omitempty"`
+}
+
+// TransitionNotification defines notification config for a transition
+type TransitionNotification struct {
+	// Recipients - supports multiple targeting strategies
+	Recipients      []NotificationRecipientDef `json:"recipients"`
+
+	// Content
+	TitleTemplate   string                     `json:"title_template"`
+	BodyTemplate    string                     `json:"body_template"`
+	Priority        string                     `json:"priority,omitempty"`        // low, normal, high, critical
+
+	// Delivery
+	Channels        []string                   `json:"channels,omitempty"`        // in_app, email, sms, web_push
+
+	// Conditions (optional - send only if condition met)
+	Condition       map[string]interface{}     `json:"condition,omitempty"`
+}
+
+// NotificationRecipientDef defines who receives the notification
+type NotificationRecipientDef struct {
+	Type            string                 `json:"type"`                     // user, role, business_role, permission, attribute, policy, submitter, approver, field_value
+
+	// Type-specific values
+	Value           string                 `json:"value,omitempty"`          // For user (user_id), role (role_name), permission (perm_code), field_value (field_name)
+	RoleID          string                 `json:"role_id,omitempty"`        // For role targeting
+	BusinessRoleID  string                 `json:"business_role_id,omitempty"` // For business_role targeting
+	PermissionCode  string                 `json:"permission_code,omitempty"`  // For permission targeting
+	AttributeQuery  map[string]interface{} `json:"attribute_query,omitempty"` // For ABAC targeting
+	PolicyID        string                 `json:"policy_id,omitempty"`      // For PBAC targeting
 }
 
 // FormSubmission represents a submitted form instance with workflow state

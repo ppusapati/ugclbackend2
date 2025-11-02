@@ -1,0 +1,236 @@
+{
+  "code": "project_approval_with_notifications",
+  "name": "Project Approval Workflow with Smart Notifications",
+  "description": "Complete workflow demonstrating all notification targeting strategies",
+  "version": "1.0.0",
+  "initial_state": "draft",
+
+  "states": [
+    {
+      "code": "draft",
+      "name": "Draft",
+      "description": "Initial draft state",
+      "color": "#gray",
+      "icon": "edit",
+      "is_final": false
+    },
+    {
+      "code": "submitted",
+      "name": "Pending Review",
+      "description": "Submitted for manager review",
+      "color": "#blue",
+      "icon": "clock",
+      "is_final": false
+    },
+    {
+      "code": "under_review",
+      "name": "Under Technical Review",
+      "description": "Being reviewed by technical team",
+      "color": "#orange",
+      "icon": "search",
+      "is_final": false
+    },
+    {
+      "code": "approved",
+      "name": "Approved",
+      "description": "Project approved and ready for execution",
+      "color": "#green",
+      "icon": "check-circle",
+      "is_final": true
+    },
+    {
+      "code": "rejected",
+      "name": "Rejected",
+      "description": "Project rejected",
+      "color": "#red",
+      "icon": "x-circle",
+      "is_final": true
+    }
+  ],
+
+  "transitions": [
+    {
+      "from": "draft",
+      "to": "submitted",
+      "action": "submit",
+      "label": "Submit for Review",
+      "permission": "project:create",
+      "requires_comment": false,
+      "notifications": [
+        {
+          "recipients": [
+            {
+              "type": "business_role",
+              "business_role_id": "manager_role_uuid",
+              "comment": "Notify all managers in the business vertical"
+            },
+            {
+              "type": "permission",
+              "permission_code": "project:review",
+              "comment": "Also notify anyone with review permission"
+            },
+            {
+              "type": "field_value",
+              "value": "assigned_reviewer",
+              "comment": "If a specific reviewer was assigned in the form"
+            }
+          ],
+          "title_template": "New Project Submission: {{form_data.project_name}}",
+          "body_template": "{{submitter_name}} has submitted a new project '{{form_data.project_name}}' for your review.\n\nBusiness: {{business_vertical}}\nLocation: {{form_data.site_name}}\nEstimated Cost: {{form_data.estimated_cost}}\n\nPlease review and approve at your earliest convenience.",
+          "priority": "high",
+          "channels": ["in_app", "email"]
+        }
+      ]
+    },
+
+    {
+      "from": "submitted",
+      "to": "under_review",
+      "action": "start_review",
+      "label": "Start Technical Review",
+      "permission": "project:review",
+      "requires_comment": false,
+      "notifications": [
+        {
+          "recipients": [
+            {
+              "type": "submitter",
+              "comment": "Notify the person who submitted"
+            },
+            {
+              "type": "attribute",
+              "attribute_query": {
+                "department": "engineering",
+                "specialization": "solar"
+              },
+              "comment": "Notify engineers with solar specialization (ABAC)"
+            }
+          ],
+          "title_template": "Technical Review Started: {{form_data.project_name}}",
+          "body_template": "The technical review for project '{{form_data.project_name}}' has begun.\n\nReviewer: {{approver_name}}\nStatus: Under Review",
+          "priority": "normal",
+          "channels": ["in_app", "web_push"]
+        }
+      ]
+    },
+
+    {
+      "from": "under_review",
+      "to": "approved",
+      "action": "approve",
+      "label": "Approve Project",
+      "permission": "project:approve",
+      "requires_comment": false,
+      "notifications": [
+        {
+          "recipients": [
+            {
+              "type": "submitter",
+              "comment": "Always notify submitter of approval"
+            },
+            {
+              "type": "field_value",
+              "value": "project_manager",
+              "comment": "Notify assigned project manager"
+            },
+            {
+              "type": "field_value",
+              "value": "site_supervisor",
+              "comment": "Notify site supervisor"
+            },
+            {
+              "type": "permission",
+              "permission_code": "project:execute",
+              "comment": "Notify execution team"
+            }
+          ],
+          "title_template": "✅ Project Approved: {{form_data.project_name}}",
+          "body_template": "Great news! Your project '{{form_data.project_name}}' has been approved by {{approver_name}}.\n\nYou can now proceed with project execution.\n\nNext Steps:\n1. Review final specifications\n2. Coordinate with site team\n3. Begin procurement\n\nApproval Date: {{current_date}}\nProject Code: {{submission_id}}",
+          "priority": "high",
+          "channels": ["in_app", "email", "web_push"]
+        },
+        {
+          "recipients": [
+            {
+              "type": "business_role",
+              "business_role_id": "finance_role_uuid",
+              "comment": "Notify finance team separately for budget allocation"
+            }
+          ],
+          "title_template": "Budget Allocation Required: {{form_data.project_name}}",
+          "body_template": "A new project has been approved and requires budget allocation.\n\nProject: {{form_data.project_name}}\nEstimated Cost: {{form_data.estimated_cost}}\nBusiness Unit: {{business_vertical}}\n\nPlease process the budget allocation in the finance system.",
+          "priority": "high",
+          "channels": ["in_app", "email"]
+        }
+      ]
+    },
+
+    {
+      "from": "submitted",
+      "to": "rejected",
+      "action": "reject",
+      "label": "Reject Project",
+      "permission": "project:approve",
+      "requires_comment": true,
+      "notifications": [
+        {
+          "recipients": [
+            {
+              "type": "submitter"
+            }
+          ],
+          "title_template": "❌ Project Rejected: {{form_data.project_name}}",
+          "body_template": "Unfortunately, your project '{{form_data.project_name}}' has been rejected.\n\nReviewer: {{approver_name}}\nReason: {{comment}}\n\nYou can:\n1. Review the feedback\n2. Make necessary changes\n3. Resubmit the project\n\nIf you have questions, please contact {{approver_name}} for clarification.",
+          "priority": "high",
+          "channels": ["in_app", "email"]
+        }
+      ]
+    },
+
+    {
+      "from": "under_review",
+      "to": "rejected",
+      "action": "reject_technical",
+      "label": "Reject (Technical Issues)",
+      "permission": "project:review",
+      "requires_comment": true,
+      "notifications": [
+        {
+          "recipients": [
+            {
+              "type": "submitter"
+            }
+          ],
+          "title_template": "Technical Review Failed: {{form_data.project_name}}",
+          "body_template": "The technical review for project '{{form_data.project_name}}' has identified issues that need to be addressed.\n\nReviewer: {{approver_name}}\nTechnical Feedback: {{comment}}\n\nPlease address these issues and resubmit.",
+          "priority": "high",
+          "channels": ["in_app", "email"]
+        }
+      ]
+    },
+
+    {
+      "from": "rejected",
+      "to": "draft",
+      "action": "revise",
+      "label": "Revise and Resubmit",
+      "permission": "project:create",
+      "requires_comment": false,
+      "notifications": [
+        {
+          "recipients": [
+            {
+              "type": "permission",
+              "permission_code": "project:review",
+              "comment": "Notify reviewers that project has been revised"
+            }
+          ],
+          "title_template": "Project Revised: {{form_data.project_name}}",
+          "body_template": "{{submitter_name}} has revised the previously rejected project '{{form_data.project_name}}'.\n\nThe project is back in draft status and will be resubmitted for review.",
+          "priority": "normal",
+          "channels": ["in_app"]
+        }
+      ]
+    }
+  ]
+}

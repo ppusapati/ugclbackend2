@@ -122,6 +122,32 @@ func CanAccessSite(r *http.Request, siteID uuid.UUID) bool {
 	return false
 }
 
+// CanPerformSiteAction checks if user can perform a specific action in a site
+func CanPerformSiteAction(r *http.Request, siteID uuid.UUID, action string) bool {
+	siteCtx := GetSiteAccessContext(r)
+	if siteCtx == nil {
+		return false
+	}
+
+	perm, ok := siteCtx.SitePermissions[siteID]
+	if !ok {
+		return false
+	}
+
+	switch action {
+	case "read":
+		return perm.CanRead
+	case "create":
+		return perm.CanCreate
+	case "update":
+		return perm.CanUpdate
+	case "delete":
+		return perm.CanDelete
+	default:
+		return false
+	}
+}
+
 // CanCreateInSite checks if user can create in a specific site
 func CanCreateInSite(r *http.Request, siteID uuid.UUID) bool {
 	siteCtx := GetSiteAccessContext(r)
