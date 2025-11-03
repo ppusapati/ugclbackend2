@@ -145,9 +145,9 @@ func Migrations(db *gorm.DB) error {
 				// Note: WorkflowAction, WorkflowState, and WorkflowTransitionDef are NOT database tables
 				// They are helper structs stored as JSONB within workflow_definitions
 				return tx.AutoMigrate(
-					&models.WorkflowDefinition{},  // Table: workflow_definitions
-					&models.FormSubmission{},      // Table: form_submissions
-					&models.WorkflowTransition{},  // Table: workflow_transitions
+					&models.WorkflowDefinition{}, // Table: workflow_definitions
+					&models.FormSubmission{},     // Table: form_submissions
+					&models.WorkflowTransition{}, // Table: workflow_transitions
 				)
 			},
 		},
@@ -160,6 +160,53 @@ func Migrations(db *gorm.DB) error {
 					&models.NotificationRecipient{},  // Table: notification_recipients
 					&models.Notification{},           // Table: notifications
 					&models.NotificationPreference{}, // Table: notification_preferences
+				)
+			},
+		},
+		{
+			ID: "02112025_add_document_management_tables",
+			Migrate: func(tx *gorm.DB) error {
+				// Create document management system tables
+				return tx.AutoMigrate(
+					&models.DocumentCategory{},        // Table: document_categories
+					&models.DocumentTag{},             // Table: document_tags
+					&models.Document{},                // Table: documents
+					&models.DocumentVersion{},         // Table: document_versions
+					&models.DocumentPermission{},      // Table: document_permissions
+					&models.DocumentShare{},           // Table: document_shares
+					&models.DocumentAuditLog{},        // Table: document_audit_logs
+					&models.DocumentRetentionPolicy{}, // Table: document_retention_policies
+				)
+			},
+		},
+		{
+			ID: "03112025_add_app_form_tables",
+			Migrate: func(tx *gorm.DB) error {
+				// Create app form and module tables
+				return tx.AutoMigrate(
+					&models.AppForm{}, // Table: app_forms
+				)
+			},
+		},
+		{
+			ID: "03112025_add_report_builder_tables",
+			Migrate: func(tx *gorm.DB) error {
+				// Create report builder and analytics tables
+				// IMPORTANT: Order matters for FKs. Create parent tables before children.
+				// Dashboards must exist before report_widgets (FK: report_widgets.dashboard_id -> dashboards.id)
+				// ReportDefinitions must exist before report_widgets (FK: report_widgets.report_id -> report_definitions.id)
+				if err := tx.AutoMigrate(
+					&models.ReportDefinition{}, // Table: report_definitions
+					&models.ReportExecution{},  // Table: report_executions
+					&models.Dashboard{},        // Table: dashboards (parent)
+				); err != nil {
+					return err
+				}
+
+				return tx.AutoMigrate(
+					&models.ReportWidget{},   // Table: report_widgets (child depends on dashboards, report_definitions)
+					&models.ReportTemplate{}, // Table: report_templates
+					&models.ReportShare{},    // Table: report_shares
 				)
 			},
 		},

@@ -23,7 +23,7 @@ func RegisterProjectRoutes(r *mux.Router) {
 	// =====================================================
 
 	// Projects
-	r.Handle("/api/v1/projects", middleware.RequirePermission("project:create")(
+	r.Handle("/admin/projects", middleware.RequirePermission("project:create")(
 		http.HandlerFunc(projectHandler.CreateProject))).Methods("POST")
 	r.Handle("/api/v1/projects", middleware.RequirePermission("project:read")(
 		http.HandlerFunc(projectHandler.ListProjects))).Methods("GET")

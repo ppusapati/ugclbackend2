@@ -15,7 +15,7 @@ import (
 // RegisterRoutesV2 uses the new permission-based authorization system
 func RegisterRoutesV2() http.Handler {
 	r := mux.NewRouter()
-
+	projectHandler := handlers.NewProjectHandler()
 	// Public routes (no authentication required)
 	r.HandleFunc("/api/v1/register", handlers.Register).Methods("POST")
 	r.HandleFunc("/api/v1/login", handlers.Login).Methods("POST")
@@ -166,7 +166,8 @@ func RegisterRoutesV2() http.Handler {
 		http.HandlerFunc(handlers.UpdateUser))).Methods("PUT")
 	admin.Handle("/users/{id}", middleware.RequirePermission("delete_users")(
 		http.HandlerFunc(handlers.DeleteUser))).Methods("DELETE")
-
+	admin.Handle("/projects", middleware.RequirePermission("project:create")(
+		http.HandlerFunc(projectHandler.CreateProject))).Methods("POST")
 	// Role and Permission management
 	admin.Handle("/roles", middleware.RequirePermission("manage_roles")(
 		http.HandlerFunc(handlers.GetAllRoles))).Methods("GET")
@@ -214,9 +215,15 @@ func RegisterRoutesV2() http.Handler {
 
 	// Register ABAC and Policy management routes
 	RegisterABACRoutes(api)
-
+	RegisterProjectRoutes(api)
 	// Register notification routes
 	RegisterNotificationRoutes(api, admin)
+
+	// Register document management routes
+	RegisterDocumentRoutes(api, admin)
+
+	// Register report builder and analytics routes
+	RegisterReportRoutes(r)
 
 	return r
 }
