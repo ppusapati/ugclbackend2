@@ -16,35 +16,35 @@ import (
 
 // WorkflowEngineDedicated handles workflow state transitions using dedicated form tables
 type WorkflowEngineDedicated struct {
-	db          *gorm.DB
+	db           *gorm.DB
 	tableManager *FormTableManager
 }
 
 // NewWorkflowEngineDedicated creates a new workflow engine instance that uses dedicated tables
 func NewWorkflowEngineDedicated() *WorkflowEngineDedicated {
 	return &WorkflowEngineDedicated{
-		db:          config.DB,
+		db:           config.DB,
 		tableManager: NewFormTableManager(),
 	}
 }
 
 // FormSubmissionRecord represents a record in a dedicated form table
 type FormSubmissionRecord struct {
-	ID                 uuid.UUID               `json:"id"`
-	FormID             uuid.UUID               `json:"form_id"`
-	FormCode           string                  `json:"form_code"`
-	BusinessVerticalID uuid.UUID               `json:"business_vertical_id"`
-	SiteID             *uuid.UUID              `json:"site_id,omitempty"`
-	WorkflowID         *uuid.UUID              `json:"workflow_id,omitempty"`
-	CurrentState       string                  `json:"current_state"`
-	CreatedBy          string                  `json:"created_by"`
-	CreatedAt          time.Time               `json:"created_at"`
-	UpdatedBy          string                  `json:"updated_by,omitempty"`
-	UpdatedAt          time.Time               `json:"updated_at"`
-	DeletedBy          string                  `json:"deleted_by,omitempty"`
-	DeletedAt          *time.Time              `json:"deleted_at,omitempty"`
-	FormData           map[string]interface{}  `json:"form_data"` // Additional form fields
-	Form               *models.AppForm         `json:"form,omitempty"`
+	ID                 uuid.UUID                  `json:"id"`
+	FormID             uuid.UUID                  `json:"form_id"`
+	FormCode           string                     `json:"form_code"`
+	BusinessVerticalID uuid.UUID                  `json:"business_vertical_id"`
+	SiteID             *uuid.UUID                 `json:"site_id,omitempty"`
+	WorkflowID         *uuid.UUID                 `json:"workflow_id,omitempty"`
+	CurrentState       string                     `json:"current_state"`
+	CreatedBy          string                     `json:"created_by"`
+	CreatedAt          time.Time                  `json:"created_at"`
+	UpdatedBy          string                     `json:"updated_by,omitempty"`
+	UpdatedAt          time.Time                  `json:"updated_at"`
+	DeletedBy          string                     `json:"deleted_by,omitempty"`
+	DeletedAt          *time.Time                 `json:"deleted_at,omitempty"`
+	FormData           map[string]interface{}     `json:"form_data"` // Additional form fields
+	Form               *models.AppForm            `json:"form,omitempty"`
 	Workflow           *models.WorkflowDefinition `json:"workflow,omitempty"`
 }
 
@@ -72,9 +72,52 @@ func (we *WorkflowEngineDedicated) CreateSubmissionDedicated(
 	if err != nil {
 		return nil, fmt.Errorf("failed to check table existence: %w", err)
 	}
+
+	log.Printf("🔍 Table %s exists: %v", form.DBTableName, exists)
+
 	if !exists {
-		if err := we.tableManager.CreateFormTable(&form); err != nil {
-			return nil, fmt.Errorf("failed to create form table: %w", err)
+		// Check if form has schema or steps defined
+		var formSchema map[string]interface{}
+		hasSchema := false
+
+		log.Printf("🔍 Checking form_schema: len=%d, value=%s", len(form.FormSchema), string(form.FormSchema))
+		log.Printf("🔍 Checking steps: len=%d, value=%s", len(form.Steps), string(form.Steps))
+
+		// Check form_schema
+		if len(form.FormSchema) > 0 && string(form.FormSchema) != "{}" {
+			if err := json.Unmarshal(form.FormSchema, &formSchema); err == nil {
+				if fields, ok := formSchema["fields"].([]interface{}); ok && len(fields) > 0 {
+					hasSchema = true
+					log.Printf("✅ Found %d fields in form_schema", len(fields))
+				}
+			}
+		}
+
+		// Check steps if no form_schema
+		if !hasSchema && len(form.Steps) > 0 && string(form.Steps) != "[]" {
+			log.Printf("📋 Extracting fields from steps...")
+			fields, err := we.tableManager.ExtractFieldsFromSteps(form.Steps)
+			if err == nil && len(fields) > 0 {
+				hasSchema = true
+				log.Printf("✅ Found %d fields from steps", len(fields))
+			} else if err != nil {
+				log.Printf("❌ Error extracting fields from steps: %v", err)
+			}
+		}
+
+		// If no schema or steps, infer from submitted data
+		if !hasSchema {
+			log.Printf("🔍 Form %s has no schema/steps - inferring from submission data", formCode)
+			inferredSchema := we.tableManager.InferSchemaFromData(formData)
+			if err := we.tableManager.CreateFormTableWithSchema(&form, inferredSchema); err != nil {
+				return nil, fmt.Errorf("failed to create form table with inferred schema: %w", err)
+			}
+		} else {
+			// Use existing schema or steps
+			log.Printf("📊 Creating table using existing schema/steps")
+			if err := we.tableManager.CreateFormTable(&form); err != nil {
+				return nil, fmt.Errorf("failed to create form table: %w", err)
+			}
 		}
 	}
 

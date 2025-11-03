@@ -44,6 +44,8 @@ func RegisterBusinessRoutes(r *mux.Router) {
 		http.HandlerFunc(handlers.GetAllAppForms))).Methods("GET")
 	admin.Handle("/app-forms", middleware.RequirePermission("admin_all")(
 		http.HandlerFunc(handlers.CreateForm))).Methods("POST")
+	admin.Handle("/app-forms/{formCode}", middleware.RequirePermission("admin_all")(
+		http.HandlerFunc(handlers.UpdateForm))).Methods("PUT")
 	admin.Handle("/app-forms/{formCode}/verticals", middleware.RequirePermission("admin_all")(
 		http.HandlerFunc(handlers.UpdateFormVerticalAccess))).Methods("POST")
 
@@ -110,10 +112,12 @@ func RegisterBusinessRoutes(r *mux.Router) {
 	}).Methods("GET")
 
 	// Form configuration endpoints (new unified system)
+	admin.HandleFunc("/forms", handlers.GetFormsForVertical).Methods("GET")
+	admin.HandleFunc("/forms/{code}", handlers.GetFormByCode).Methods("GET")
 	business.HandleFunc("/forms", handlers.GetFormsForVertical).Methods("GET")
 	business.HandleFunc("/forms/{code}", handlers.GetFormByCode).Methods("GET")
 
-	// Workflow and form submission endpoints
+	// Workflow and form submission endpoints (generic table approach)
 	business.HandleFunc("/forms/{formCode}/submissions", handlers.CreateFormSubmission).Methods("POST")
 	business.HandleFunc("/forms/{formCode}/submissions", handlers.GetFormSubmissions).Methods("GET")
 	business.HandleFunc("/forms/{formCode}/submissions/{submissionId}", handlers.GetFormSubmission).Methods("GET")
@@ -121,6 +125,14 @@ func RegisterBusinessRoutes(r *mux.Router) {
 	business.HandleFunc("/forms/{formCode}/submissions/{submissionId}/transition", handlers.TransitionFormSubmission).Methods("POST")
 	business.HandleFunc("/forms/{formCode}/submissions/{submissionId}/history", handlers.GetWorkflowHistory).Methods("GET")
 	business.HandleFunc("/forms/{formCode}/stats", handlers.GetWorkflowStats).Methods("GET")
+
+	// Dedicated table form submission endpoints (recommended)
+	business.HandleFunc("/forms/{formCode}/submissions/dedicated", handlers.CreateFormSubmissionDedicated).Methods("POST")
+	business.HandleFunc("/forms/{formCode}/submissions/dedicated", handlers.GetFormSubmissionsDedicated).Methods("GET")
+	business.HandleFunc("/forms/{formCode}/submissions/dedicated/{submissionId}", handlers.GetFormSubmissionDedicated).Methods("GET")
+	business.HandleFunc("/forms/{formCode}/submissions/dedicated/{submissionId}", handlers.UpdateFormSubmissionDedicated).Methods("PUT")
+	business.HandleFunc("/forms/{formCode}/submissions/dedicated/{submissionId}/transition", handlers.TransitionFormSubmissionDedicated).Methods("POST")
+	business.HandleFunc("/forms/{formCode}/submissions/dedicated/{submissionId}", handlers.DeleteFormSubmissionDedicated).Methods("DELETE")
 
 	// Site management endpoints
 	business.Handle("/sites",

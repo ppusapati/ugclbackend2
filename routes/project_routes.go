@@ -25,29 +25,29 @@ func RegisterProjectRoutes(r *mux.Router) {
 	// Projects
 	r.Handle("/admin/projects", middleware.RequirePermission("project:create")(
 		http.HandlerFunc(projectHandler.CreateProject))).Methods("POST")
-	r.Handle("/api/v1/projects", middleware.RequirePermission("project:read")(
+	r.Handle("/projects", middleware.RequirePermission("project:read")(
 		http.HandlerFunc(projectHandler.ListProjects))).Methods("GET")
-	r.Handle("/api/v1/projects/{id}", middleware.RequirePermission("project:read")(
+	r.Handle("/projects/{id}", middleware.RequirePermission("project:read")(
 		http.HandlerFunc(projectHandler.GetProject))).Methods("GET")
-	r.Handle("/api/v1/projects/{id}", middleware.RequirePermission("project:update")(
+	r.Handle("/projects/{id}", middleware.RequirePermission("project:update")(
 		http.HandlerFunc(projectHandler.UpdateProject))).Methods("PUT")
-	r.Handle("/api/v1/projects/{id}", middleware.RequirePermission("project:delete")(
+	r.Handle("/projects/{id}", middleware.RequirePermission("project:delete")(
 		http.HandlerFunc(projectHandler.DeleteProject))).Methods("DELETE")
 
 	// KMZ Upload
-	r.Handle("/api/v1/projects/{id}/kmz", middleware.RequirePermission("project:update")(
+	r.Handle("/projects/{id}/kmz", middleware.RequirePermission("project:update")(
 		http.HandlerFunc(projectHandler.UploadKMZ))).Methods("POST")
-	r.Handle("/api/v1/projects/{id}/geojson", middleware.RequirePermission("project:read")(
+	r.Handle("/projects/{id}/geojson", middleware.RequirePermission("project:read")(
 		http.HandlerFunc(projectHandler.GetProjectGeoJSON))).Methods("GET")
 
 	// Project Zones and Nodes
-	r.Handle("/api/v1/projects/{id}/zones", middleware.RequirePermission("project:read")(
+	r.Handle("/projects/{id}/zones", middleware.RequirePermission("project:read")(
 		http.HandlerFunc(projectHandler.GetProjectZones))).Methods("GET")
-	r.Handle("/api/v1/projects/{id}/nodes", middleware.RequirePermission("project:read")(
+	r.Handle("/projects/{id}/nodes", middleware.RequirePermission("project:read")(
 		http.HandlerFunc(projectHandler.GetProjectNodes))).Methods("GET")
 
 	// Project Statistics
-	r.Handle("/api/v1/projects/{id}/stats", middleware.RequirePermission("project:read")(
+	r.Handle("/projects/{id}/stats", middleware.RequirePermission("project:read")(
 		http.HandlerFunc(projectHandler.GetProjectStats))).Methods("GET")
 
 	// =====================================================

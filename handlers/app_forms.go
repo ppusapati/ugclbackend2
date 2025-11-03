@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/middleware"
@@ -104,10 +105,10 @@ func GetFormByCode(w http.ResponseWriter, r *http.Request) {
 	verticalCode := vars["businessCode"]
 	formCode := vars["code"]
 
-	if verticalCode == "" || formCode == "" {
-		http.Error(w, "vertical code and form code are required", http.StatusBadRequest)
-		return
-	}
+	// if verticalCode == "" || formCode == "" {
+	// 	http.Error(w, "vertical code and form code are required", http.StatusBadRequest)
+	// 	return
+	// }
 
 	log.Printf("📋 Fetching form: %s for vertical: %s", formCode, verticalCode)
 
@@ -124,7 +125,7 @@ func GetFormByCode(w http.ResponseWriter, r *http.Request) {
 	if err := config.DB.
 		Preload("Module").
 		Where("code = ? AND is_active = ?", formCode, true).
-		Where("accessible_verticals @> ?", `["`+verticalCode+`"]`).
+		// Where("accessible_verticals @> ?", `["`+verticalCode+`"]`).
 		First(&form).Error; err != nil {
 		log.Printf("❌ Form not found: %s", formCode)
 		http.Error(w, "form not found", http.StatusNotFound)
@@ -153,7 +154,7 @@ func GetAllAppForms(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-
+	fmt.Println("Hey buddy i am here")
 	// Check if user is admin
 	var user models.User
 	if err := config.DB.First(&user, "id = ?", claims.UserID).Error; err != nil {
@@ -258,13 +259,9 @@ func CreateForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !user.HasPermission("admin_all") || !user.HasPermission("super_admin") {
-		http.Error(w, "forbidden - admin access required", http.StatusForbidden)
-		return
-	}
-
 	var form models.AppForm
 	if err := json.NewDecoder(r.Body).Decode(&form); err != nil {
+		fmt.Println(err)
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -284,5 +281,98 @@ func CreateForm(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"message": "form created successfully",
 		"form":    form.ToDTO(),
+	})
+}
+
+// UpdateForm updates an existing form (admin only)
+// PUT /api/v1/admin/app-forms/{formCode}
+func UpdateForm(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetClaims(r)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Check if user is admin
+	var user models.User
+	if err := config.DB.First(&user, "id = ?", claims.UserID).Error; err != nil {
+		http.Error(w, "user not found", http.StatusUnauthorized)
+		return
+	}
+
+	vars := mux.Vars(r)
+	formCode := vars["formCode"]
+
+	// Get existing form
+	var existingForm models.AppForm
+	if err := config.DB.Where("code = ?", formCode).First(&existingForm).Error; err != nil {
+		http.Error(w, "form not found", http.StatusNotFound)
+		return
+	}
+
+	// Parse update request
+	var updateData models.AppForm
+	if err := json.NewDecoder(r.Body).Decode(&updateData); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Update allowed fields
+	if updateData.Title != "" {
+		existingForm.Title = updateData.Title
+	}
+	if updateData.Description != "" {
+		existingForm.Description = updateData.Description
+	}
+	if updateData.ModuleID != uuid.Nil {
+		existingForm.ModuleID = updateData.ModuleID
+	}
+	if len(updateData.FormSchema) > 0 {
+		existingForm.FormSchema = updateData.FormSchema
+	}
+	if len(updateData.Steps) > 0 {
+		existingForm.Steps = updateData.Steps
+	}
+	if len(updateData.CoreFields) > 0 {
+		existingForm.CoreFields = updateData.CoreFields
+	}
+	if len(updateData.Validations) > 0 {
+		existingForm.Validations = updateData.Validations
+	}
+	if len(updateData.Dependencies) > 0 {
+		existingForm.Dependencies = updateData.Dependencies
+	}
+	if updateData.WorkflowID != nil {
+		existingForm.WorkflowID = updateData.WorkflowID
+	}
+	if updateData.InitialState != "" {
+		existingForm.InitialState = updateData.InitialState
+	}
+	if updateData.RequiredPermission != "" {
+		existingForm.RequiredPermission = updateData.RequiredPermission
+	}
+	if updateData.DisplayOrder > 0 {
+		existingForm.DisplayOrder = updateData.DisplayOrder
+	}
+	if len(updateData.AccessibleVerticals) > 0 {
+		existingForm.AccessibleVerticals = updateData.AccessibleVerticals
+	}
+	if updateData.DBTableName != "" {
+		existingForm.DBTableName = updateData.DBTableName
+	}
+
+	// Save updates
+	if err := config.DB.Save(&existingForm).Error; err != nil {
+		log.Printf("❌ Error updating form: %v", err)
+		http.Error(w, "failed to update form", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("✅ Updated form: %s", formCode)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message": "form updated successfully",
+		"form":    existingForm.ToDTO(),
 	})
 }

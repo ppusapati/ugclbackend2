@@ -35,10 +35,17 @@ type DocumentUploadRequest struct {
 
 // UploadDocumentHandler handles document uploads with metadata
 func UploadDocumentHandler(w http.ResponseWriter, r *http.Request) {
-	// Get user from context
+	// Get claims and validate
 	claims := middleware.GetClaims(r)
 	if claims == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Get full user context with roles and business verticals
+	user := middleware.GetUser(r)
+	if user.ID == uuid.Nil {
+		http.Error(w, "user not found", http.StatusUnauthorized)
 		return
 	}
 
@@ -144,14 +151,17 @@ func UploadDocumentHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Get business vertical from user's accessible verticals or request
 	var businessVerticalID *uuid.UUID
-	fmt.Println("BusinessVerticalID:", req.BusinessVerticalID)
-	req.BusinessVerticalID = "6e5deba2-e31a-4ba7-8681-3b2c8793b6db" // Temporary hardcode for testing
 	if req.BusinessVerticalID != "" {
 		bvid, err := uuid.Parse(req.BusinessVerticalID)
 		if err == nil {
 			businessVerticalID = &bvid
 		}
+	} else if len(user.UserBusinessRoles) > 0 && user.UserBusinessRoles[0].BusinessRole.BusinessVerticalID != uuid.Nil {
+		// Use user's primary business vertical from their business role
+		bvID := user.UserBusinessRoles[0].BusinessRole.BusinessVerticalID
+		businessVerticalID = &bvID
 	}
 
 	var workflowID *uuid.UUID
@@ -162,12 +172,8 @@ func UploadDocumentHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Parse user ID from claims
-	userID, err := uuid.Parse(claims.UserID)
-	if err != nil {
-		http.Error(w, "invalid user ID: "+err.Error(), http.StatusBadRequest)
-		return
-	}
+	// Use user ID from loaded user context
+	userID := user.ID
 
 	// Create document record
 	document := models.Document{
@@ -346,13 +352,22 @@ func GetDocumentsHandler(w http.ResponseWriter, r *http.Request) {
 
 // GetDocumentHandler returns a single document by ID
 func GetDocumentHandler(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	documentID := vars["id"]
+	// Get claims and validate
 	claims := middleware.GetClaims(r)
 	if claims == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+
+	// Get full user context
+	user := middleware.GetUser(r)
+	if user.ID == uuid.Nil {
+		http.Error(w, "user not found", http.StatusUnauthorized)
+		return
+	}
+
+	vars := mux.Vars(r)
+	documentID := vars["id"]
 
 	var document models.Document
 	if err := config.DB.Preload("Category").Preload("Tags").Preload("UploadedBy").
@@ -369,17 +384,11 @@ func GetDocumentHandler(w http.ResponseWriter, r *http.Request) {
 	// Increment view count
 	config.DB.Model(&document).Update("view_count", gorm.Expr("view_count + 1"))
 
-	// Parse user ID from claims
-	userUUID, err := uuid.Parse(claims.UserID)
-	if err != nil {
-		http.Error(w, "invalid user ID: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	// Log audit
+	// Log audit with user ID
+	userID := user.ID
 	auditLog := models.DocumentAuditLog{
 		DocumentID: document.ID,
-		UserID:     &userUUID,
+		UserID:     &userID,
 		Action:     models.DocumentAuditActionView,
 		IPAddress:  r.RemoteAddr,
 		UserAgent:  r.UserAgent(),
@@ -392,9 +401,23 @@ func GetDocumentHandler(w http.ResponseWriter, r *http.Request) {
 
 // UpdateDocumentHandler updates document metadata
 func UpdateDocumentHandler(w http.ResponseWriter, r *http.Request) {
+	// Get claims and validate
+	claims := middleware.GetClaims(r)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Get full user context
+	user := middleware.GetUser(r)
+	if user.ID == uuid.Nil {
+		http.Error(w, "user not found", http.StatusUnauthorized)
+		return
+	}
+
 	vars := mux.Vars(r)
 	documentID := vars["id"]
-	userID := r.Context().Value("userID").(uuid.UUID)
+	userID := user.ID
 
 	var document models.Document
 	if err := config.DB.First(&document, "id = ?", documentID).Error; err != nil {
@@ -484,9 +507,23 @@ func UpdateDocumentHandler(w http.ResponseWriter, r *http.Request) {
 
 // DeleteDocumentHandler soft deletes a document
 func DeleteDocumentHandler(w http.ResponseWriter, r *http.Request) {
+	// Get claims and validate
+	claims := middleware.GetClaims(r)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Get full user context
+	user := middleware.GetUser(r)
+	if user.ID == uuid.Nil {
+		http.Error(w, "user not found", http.StatusUnauthorized)
+		return
+	}
+
 	vars := mux.Vars(r)
 	documentID := vars["id"]
-	userID := r.Context().Value("userID").(uuid.UUID)
+	userID := user.ID
 
 	var document models.Document
 	if err := config.DB.First(&document, "id = ?", documentID).Error; err != nil {
@@ -522,9 +559,23 @@ func DeleteDocumentHandler(w http.ResponseWriter, r *http.Request) {
 
 // DownloadDocumentHandler handles document downloads
 func DownloadDocumentHandler(w http.ResponseWriter, r *http.Request) {
+	// Get claims and validate
+	claims := middleware.GetClaims(r)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Get full user context
+	user := middleware.GetUser(r)
+	if user.ID == uuid.Nil {
+		http.Error(w, "user not found", http.StatusUnauthorized)
+		return
+	}
+
 	vars := mux.Vars(r)
 	documentID := vars["id"]
-	userID := r.Context().Value("userID").(uuid.UUID)
+	userID := user.ID
 
 	var document models.Document
 	if err := config.DB.First(&document, "id = ?", documentID).Error; err != nil {

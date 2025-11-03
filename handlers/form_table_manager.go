@@ -36,7 +36,7 @@ type BaseFormFields struct {
 	DeletedAt *time.Time `gorm:"index" json:"deleted_at,omitempty"`
 
 	// Business context
-	BusinessVerticalID uuid.UUID `gorm:"type:uuid;not null;index" json:"business_vertical_id"`
+	BusinessVerticalID uuid.UUID  `gorm:"type:uuid;not null;index" json:"business_vertical_id"`
 	SiteID             *uuid.UUID `gorm:"type:uuid;index" json:"site_id,omitempty"`
 
 	// Workflow integration
@@ -50,6 +50,55 @@ type BaseFormFields struct {
 
 // CreateFormTable creates a dedicated table for a form based on its schema
 func (ftm *FormTableManager) CreateFormTable(form *models.AppForm) error {
+	return ftm.CreateFormTableWithSchema(form, nil)
+}
+
+// ExtractFieldsFromSteps extracts field definitions from the steps structure
+func (ftm *FormTableManager) ExtractFieldsFromSteps(steps json.RawMessage) ([]map[string]interface{}, error) {
+	log.Printf("🔍 ExtractFieldsFromSteps - Raw steps JSON: %s", string(steps))
+
+	var stepsData []map[string]interface{}
+	if err := json.Unmarshal(steps, &stepsData); err != nil {
+		log.Printf("❌ Failed to unmarshal steps: %v", err)
+		return nil, err
+	}
+
+	log.Printf("📊 Parsed %d steps", len(stepsData))
+
+	allFields := make([]map[string]interface{}, 0)
+	for stepIdx, step := range stepsData {
+		log.Printf("🔍 Step %d: %v", stepIdx, step)
+		if fields, ok := step["fields"].([]interface{}); ok {
+			log.Printf("📋 Found %d fields in step %d", len(fields), stepIdx)
+			for fieldIdx, field := range fields {
+				if fieldMap, ok := field.(map[string]interface{}); ok {
+					log.Printf("🔍 Field %d in step %d: %v", fieldIdx, stepIdx, fieldMap)
+					// Normalize field structure
+					normalizedField := map[string]interface{}{
+						"name": fieldMap["id"], // Use id as name
+						"type": fieldMap["type"],
+					}
+					if label, ok := fieldMap["label"]; ok {
+						normalizedField["label"] = label
+					}
+					if required, ok := fieldMap["required"]; ok {
+						normalizedField["required"] = required
+					}
+					log.Printf("✅ Normalized field: %v", normalizedField)
+					allFields = append(allFields, normalizedField)
+				}
+			}
+		} else {
+			log.Printf("⚠️  No fields found in step %d", stepIdx)
+		}
+	}
+
+	log.Printf("✅ Total extracted fields: %d", len(allFields))
+	return allFields, nil
+}
+
+// CreateFormTableWithSchema creates a dedicated table for a form with optional inferred schema
+func (ftm *FormTableManager) CreateFormTableWithSchema(form *models.AppForm, inferredSchema map[string]interface{}) error {
 	if form.DBTableName == "" {
 		return fmt.Errorf("form %s has no table name defined", form.Code)
 	}
@@ -58,9 +107,26 @@ func (ftm *FormTableManager) CreateFormTable(form *models.AppForm) error {
 
 	// Parse form schema to get field definitions
 	var formSchema map[string]interface{}
-	if len(form.FormSchema) > 0 && string(form.FormSchema) != "{}" {
+
+	// Priority: inferred schema > form_schema > steps
+	if inferredSchema != nil {
+		formSchema = inferredSchema
+		log.Printf("🔍 Using inferred schema with %d fields", len(inferredSchema["fields"].([]map[string]interface{})))
+	} else if len(form.FormSchema) > 0 && string(form.FormSchema) != "{}" {
 		if err := json.Unmarshal(form.FormSchema, &formSchema); err != nil {
 			return fmt.Errorf("failed to parse form schema: %v", err)
+		}
+	} else if len(form.Steps) > 0 && string(form.Steps) != "[]" {
+		// Extract fields from steps structure
+		fields, err := ftm.ExtractFieldsFromSteps(form.Steps)
+		if err != nil {
+			return fmt.Errorf("failed to extract fields from steps: %v", err)
+		}
+		if len(fields) > 0 {
+			formSchema = map[string]interface{}{
+				"fields": fields,
+			}
+			log.Printf("📋 Extracted %d fields from steps structure", len(fields))
 		}
 	}
 
@@ -99,15 +165,43 @@ func (ftm *FormTableManager) buildCreateTableSQL(tableName string, formSchema ma
 
 	// Parse form fields from schema
 	if fields, ok := formSchema["fields"].([]interface{}); ok {
-		for _, field := range fields {
+		log.Printf("📋 Processing %d fields from formSchema", len(fields))
+		for idx, field := range fields {
 			if fieldMap, ok := field.(map[string]interface{}); ok {
+				log.Printf("🔍 Field %d: %+v", idx, fieldMap)
 				columnDef := ftm.getColumnDefinition(fieldMap)
 				if columnDef != "" {
+					log.Printf("✅ Adding column: %s", columnDef)
 					columns = append(columns, columnDef)
+				} else {
+					log.Printf("⚠️  Empty column definition for field %d", idx)
 				}
 			}
 		}
+	} else {
+		log.Printf("⚠️  formSchema['fields'] is not []interface{}, checking for []map[string]interface{}")
+		// Try to handle []map[string]interface{} which might come from ExtractFieldsFromSteps
+		if fieldsRaw, exists := formSchema["fields"]; exists {
+			log.Printf("🔍 fields type: %T, value: %+v", fieldsRaw, fieldsRaw)
+			if fieldSlice, ok := fieldsRaw.([]map[string]interface{}); ok {
+				log.Printf("📋 Processing %d fields as []map[string]interface{}", len(fieldSlice))
+				for idx, fieldMap := range fieldSlice {
+					log.Printf("🔍 Field %d: %+v", idx, fieldMap)
+					columnDef := ftm.getColumnDefinition(fieldMap)
+					if columnDef != "" {
+						log.Printf("✅ Adding column: %s", columnDef)
+						columns = append(columns, columnDef)
+					} else {
+						log.Printf("⚠️  Empty column definition for field %d", idx)
+					}
+				}
+			}
+		} else {
+			log.Printf("⚠️  No 'fields' key in formSchema at all")
+		}
 	}
+
+	log.Printf("📊 Total columns: %d (base: 13, custom: %d)", len(columns), len(columns)-13)
 
 	// Create indexes
 	sql := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (\n  %s\n);", tableName, strings.Join(columns, ",\n  "))
@@ -224,7 +318,7 @@ func (ftm *FormTableManager) InsertFormData(
 	)
 
 	var returnedID uuid.UUID
-	err := ftm.db.Raw(sql, values...).Scan(&returnedID).Error
+	err := ftm.db.Raw(sql, values...).Row().Scan(&returnedID)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("failed to insert form data: %v", err)
 	}
@@ -430,4 +524,74 @@ func (ftm *FormTableManager) TableExists(tableName string) (bool, error) {
 
 	err := ftm.db.Raw(sql, tableName).Scan(&exists).Error
 	return exists, err
+}
+
+// InferSchemaFromData infers form schema from the submitted data
+// This allows dynamic table creation based on actual data structure
+func (ftm *FormTableManager) InferSchemaFromData(formData map[string]interface{}) map[string]interface{} {
+	fields := make([]map[string]interface{}, 0)
+
+	for fieldName, value := range formData {
+		// Skip base fields that are always present
+		baseFields := map[string]bool{
+			"id": true, "created_by": true, "created_at": true,
+			"updated_by": true, "updated_at": true, "deleted_by": true, "deleted_at": true,
+			"business_vertical_id": true, "site_id": true,
+			"workflow_id": true, "current_state": true,
+			"form_id": true, "form_code": true,
+		}
+		if baseFields[fieldName] {
+			continue
+		}
+
+		field := map[string]interface{}{
+			"name":     fieldName,
+			"label":    fieldName, // Default label same as name
+			"required": false,     // Default to optional
+		}
+
+		// Infer type from value
+		switch v := value.(type) {
+		case bool:
+			field["type"] = "checkbox"
+		case int, int8, int16, int32, int64:
+			field["type"] = "integer"
+		case float32, float64:
+			field["type"] = "number"
+		case string:
+			// Try to detect specific string types
+			if len(v) > 0 {
+				// Check if it looks like a date (YYYY-MM-DD or ISO8601)
+				if len(v) == 10 && v[4] == '-' && v[7] == '-' {
+					field["type"] = "date"
+				} else if strings.Contains(v, "T") && strings.Contains(v, ":") {
+					field["type"] = "datetime"
+				} else if len(v) > 500 {
+					// Long text -> textarea
+					field["type"] = "textarea"
+				} else if strings.Contains(v, "@") && strings.Contains(v, ".") {
+					// Might be email
+					field["type"] = "email"
+				} else {
+					// Default to text
+					field["type"] = "text"
+				}
+			} else {
+				field["type"] = "text"
+			}
+		case map[string]interface{}, []interface{}:
+			// Nested objects/arrays -> store as JSON
+			field["type"] = "json"
+		default:
+			// Unknown type -> text
+			field["type"] = "text"
+		}
+
+		fields = append(fields, field)
+	}
+
+	log.Printf("🔍 Inferred schema with %d fields from form data", len(fields))
+	return map[string]interface{}{
+		"fields": fields,
+	}
 }

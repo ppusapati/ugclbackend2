@@ -210,6 +210,45 @@ func Migrations(db *gorm.DB) error {
 				)
 			},
 		},
+		{
+			ID: "03112025_enable_postgis_extension",
+			Migrate: func(tx *gorm.DB) error {
+				// Enable PostGIS extension for geometry types
+				return tx.Exec("CREATE EXTENSION IF NOT EXISTS postgis").Error
+			},
+		},
+		{
+			ID: "03112025_add_project_management_tables",
+			Migrate: func(tx *gorm.DB) error {
+				// Create project management tables
+				// Order: Projects -> Zones -> Nodes -> Tasks -> related tables
+				if err := tx.AutoMigrate(
+					&models.Project{},          // Table: projects (parent)
+					&models.Zone{},             // Table: zones (depends on projects)
+					&models.Node{},             // Table: nodes (depends on projects, zones)
+					&models.Tasks{},            // Table: tasks (depends on projects, zones, nodes)
+					&models.BudgetAllocation{}, // Table: budget_allocations (depends on projects, tasks)
+				); err != nil {
+					return err
+				}
+
+				// Create child tables that depend on tasks
+				if err := tx.AutoMigrate(
+					&models.TaskAssignment{}, // Table: task_assignments
+					&models.TaskAuditLog{},   // Table: task_audit_logs
+					&models.TaskComment{},    // Table: task_comments
+					&models.TaskAttachment{}, // Table: task_attachments
+				); err != nil {
+					return err
+				}
+
+				// Create project role tables
+				return tx.AutoMigrate(
+					&models.ProjectRole{},     // Table: project_roles
+					&models.UserProjectRole{}, // Table: user_project_roles
+				)
+			},
+		},
 	})
 	// Seed permissions and roles
 	// SeedPermissions()

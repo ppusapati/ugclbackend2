@@ -7,10 +7,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"github.com/xuri/excelize/v2"
 	"p9e.in/ugcl/config"
+	"p9e.in/ugcl/middleware"
 	"p9e.in/ugcl/models"
 )
 
@@ -18,7 +18,7 @@ import (
 func ExportReportToExcel(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	reportID := vars["id"]
-	userID := r.Context().Value("userID").(uuid.UUID)
+	claims := middleware.GetClaims(r)
 
 	// Get report definition
 	var report models.ReportDefinition
@@ -29,7 +29,7 @@ func ExportReportToExcel(w http.ResponseWriter, r *http.Request) {
 
 	// Execute report
 	engine := NewReportEngine()
-	result, err := engine.ExecuteReport(&report, nil, userID.String())
+	result, err := engine.ExecuteReport(&report, nil, claims.UserID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -63,7 +63,7 @@ func ExportReportToExcel(w http.ResponseWriter, r *http.Request) {
 func ExportReportToCSV(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	reportID := vars["id"]
-	userID := r.Context().Value("userID").(uuid.UUID)
+	claims := middleware.GetClaims(r)
 
 	// Get report definition
 	var report models.ReportDefinition
@@ -74,7 +74,7 @@ func ExportReportToCSV(w http.ResponseWriter, r *http.Request) {
 
 	// Execute report
 	engine := NewReportEngine()
-	result, err := engine.ExecuteReport(&report, nil, userID.String())
+	result, err := engine.ExecuteReport(&report, nil, claims.UserID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -101,7 +101,7 @@ func ExportReportToCSV(w http.ResponseWriter, r *http.Request) {
 func ExportReportToPDF(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	reportID := vars["id"]
-	userID := r.Context().Value("userID").(uuid.UUID)
+	claims := middleware.GetClaims(r)
 
 	// Get report definition
 	var report models.ReportDefinition
@@ -112,7 +112,7 @@ func ExportReportToPDF(w http.ResponseWriter, r *http.Request) {
 
 	// Execute report
 	engine := NewReportEngine()
-	result, err := engine.ExecuteReport(&report, nil, userID.String())
+	result, err := engine.ExecuteReport(&report, nil, claims.UserID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

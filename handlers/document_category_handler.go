@@ -8,11 +8,26 @@ import (
 	"github.com/gorilla/mux"
 	"gorm.io/gorm"
 	"p9e.in/ugcl/config"
+	"p9e.in/ugcl/middleware"
 	"p9e.in/ugcl/models"
 )
 
 // CreateDocumentCategoryHandler creates a new document category
 func CreateDocumentCategoryHandler(w http.ResponseWriter, r *http.Request) {
+	// Get claims and validate
+	claims := middleware.GetClaims(r)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Get full user context with roles and business verticals
+	user := middleware.GetUser(r)
+	if user.ID == uuid.Nil {
+		http.Error(w, "user not found", http.StatusUnauthorized)
+		return
+	}
+
 	var req struct {
 		Name               string `json:"name"`
 		Description        string `json:"description"`
@@ -47,11 +62,16 @@ func CreateDocumentCategoryHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Get business vertical from request or user's accessible verticals
 	if req.BusinessVerticalID != "" {
 		bvID, err := uuid.Parse(req.BusinessVerticalID)
 		if err == nil {
 			category.BusinessVerticalID = &bvID
 		}
+	} else if len(user.UserBusinessRoles) > 0 && user.UserBusinessRoles[0].BusinessRole.BusinessVerticalID != uuid.Nil {
+		// Use user's primary business vertical
+		bvID := user.UserBusinessRoles[0].BusinessRole.BusinessVerticalID
+		category.BusinessVerticalID = &bvID
 	}
 
 	if err := config.DB.Create(&category).Error; err != nil {
@@ -72,6 +92,20 @@ func CreateDocumentCategoryHandler(w http.ResponseWriter, r *http.Request) {
 
 // GetDocumentCategoriesHandler returns all document categories
 func GetDocumentCategoriesHandler(w http.ResponseWriter, r *http.Request) {
+	// Get claims and validate
+	claims := middleware.GetClaims(r)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Get full user context with roles and business verticals
+	user := middleware.GetUser(r)
+	if user.ID == uuid.Nil {
+		http.Error(w, "user not found", http.StatusUnauthorized)
+		return
+	}
+
 	businessVerticalID := r.URL.Query().Get("business_vertical_id")
 
 	query := config.DB.Model(&models.DocumentCategory{}).
@@ -95,6 +129,20 @@ func GetDocumentCategoriesHandler(w http.ResponseWriter, r *http.Request) {
 
 // GetDocumentCategoryHandler returns a single category by ID
 func GetDocumentCategoryHandler(w http.ResponseWriter, r *http.Request) {
+	// Get claims and validate
+	claims := middleware.GetClaims(r)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Get full user context
+	user := middleware.GetUser(r)
+	if user.ID == uuid.Nil {
+		http.Error(w, "user not found", http.StatusUnauthorized)
+		return
+	}
+
 	vars := mux.Vars(r)
 	categoryID := vars["id"]
 
@@ -115,6 +163,20 @@ func GetDocumentCategoryHandler(w http.ResponseWriter, r *http.Request) {
 
 // UpdateDocumentCategoryHandler updates a category
 func UpdateDocumentCategoryHandler(w http.ResponseWriter, r *http.Request) {
+	// Get claims and validate
+	claims := middleware.GetClaims(r)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Get full user context
+	user := middleware.GetUser(r)
+	if user.ID == uuid.Nil {
+		http.Error(w, "user not found", http.StatusUnauthorized)
+		return
+	}
+
 	vars := mux.Vars(r)
 	categoryID := vars["id"]
 
@@ -180,6 +242,20 @@ func UpdateDocumentCategoryHandler(w http.ResponseWriter, r *http.Request) {
 
 // DeleteDocumentCategoryHandler soft deletes a category
 func DeleteDocumentCategoryHandler(w http.ResponseWriter, r *http.Request) {
+	// Get claims and validate
+	claims := middleware.GetClaims(r)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Get full user context
+	user := middleware.GetUser(r)
+	if user.ID == uuid.Nil {
+		http.Error(w, "user not found", http.StatusUnauthorized)
+		return
+	}
+
 	vars := mux.Vars(r)
 	categoryID := vars["id"]
 
@@ -214,6 +290,20 @@ func DeleteDocumentCategoryHandler(w http.ResponseWriter, r *http.Request) {
 
 // GetDocumentTagsHandler returns all document tags
 func GetDocumentTagsHandler(w http.ResponseWriter, r *http.Request) {
+	// Get claims and validate
+	claims := middleware.GetClaims(r)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Get full user context
+	user := middleware.GetUser(r)
+	if user.ID == uuid.Nil {
+		http.Error(w, "user not found", http.StatusUnauthorized)
+		return
+	}
+
 	businessVerticalID := r.URL.Query().Get("business_vertical_id")
 
 	query := config.DB.Model(&models.DocumentTag{}).Preload("BusinessVertical")
@@ -234,6 +324,20 @@ func GetDocumentTagsHandler(w http.ResponseWriter, r *http.Request) {
 
 // CreateDocumentTagHandler creates a new tag
 func CreateDocumentTagHandler(w http.ResponseWriter, r *http.Request) {
+	// Get claims and validate
+	claims := middleware.GetClaims(r)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Get full user context
+	user := middleware.GetUser(r)
+	if user.ID == uuid.Nil {
+		http.Error(w, "user not found", http.StatusUnauthorized)
+		return
+	}
+
 	var req struct {
 		Name               string `json:"name"`
 		Color              string `json:"color"`
@@ -255,11 +359,16 @@ func CreateDocumentTagHandler(w http.ResponseWriter, r *http.Request) {
 		Color: req.Color,
 	}
 
+	// Get business vertical from request or user's accessible verticals
 	if req.BusinessVerticalID != "" {
 		bvID, err := uuid.Parse(req.BusinessVerticalID)
 		if err == nil {
 			tag.BusinessVerticalID = &bvID
 		}
+	} else if len(user.UserBusinessRoles) > 0 && user.UserBusinessRoles[0].BusinessRole.BusinessVerticalID != uuid.Nil {
+		// Use user's primary business vertical
+		bvID := user.UserBusinessRoles[0].BusinessRole.BusinessVerticalID
+		tag.BusinessVerticalID = &bvID
 	}
 
 	if err := config.DB.Create(&tag).Error; err != nil {
@@ -276,6 +385,20 @@ func CreateDocumentTagHandler(w http.ResponseWriter, r *http.Request) {
 
 // UpdateDocumentTagHandler updates a tag
 func UpdateDocumentTagHandler(w http.ResponseWriter, r *http.Request) {
+	// Get claims and validate
+	claims := middleware.GetClaims(r)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Get full user context
+	user := middleware.GetUser(r)
+	if user.ID == uuid.Nil {
+		http.Error(w, "user not found", http.StatusUnauthorized)
+		return
+	}
+
 	vars := mux.Vars(r)
 	tagID := vars["id"]
 
@@ -320,6 +443,20 @@ func UpdateDocumentTagHandler(w http.ResponseWriter, r *http.Request) {
 
 // DeleteDocumentTagHandler deletes a tag
 func DeleteDocumentTagHandler(w http.ResponseWriter, r *http.Request) {
+	// Get claims and validate
+	claims := middleware.GetClaims(r)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Get full user context
+	user := middleware.GetUser(r)
+	if user.ID == uuid.Nil {
+		http.Error(w, "user not found", http.StatusUnauthorized)
+		return
+	}
+
 	vars := mux.Vars(r)
 	tagID := vars["id"]
 

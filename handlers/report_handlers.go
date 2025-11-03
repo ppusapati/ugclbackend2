@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"p9e.in/ugcl/config"
+	"p9e.in/ugcl/middleware"
 	"p9e.in/ugcl/models"
 )
 
@@ -44,7 +45,7 @@ func CreateReportDefinition(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID := r.Context().Value("userID").(uuid.UUID)
+	claims := middleware.GetClaims(r)
 
 	report := &models.ReportDefinition{
 		Code:               req.Code,
@@ -69,7 +70,7 @@ func CreateReportDefinition(w http.ResponseWriter, r *http.Request) {
 		ExportFormats:      req.ExportFormats,
 		Tags:               req.Tags,
 		IsActive:           true,
-		CreatedBy:          userID.String(),
+		CreatedBy:          claims.UserID,
 	}
 
 	if err := config.DB.Create(report).Error; err != nil {
@@ -136,7 +137,7 @@ func GetReportDefinition(w http.ResponseWriter, r *http.Request) {
 func UpdateReportDefinition(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	reportID := vars["id"]
-	userID := r.Context().Value("userID").(uuid.UUID)
+	claims := middleware.GetClaims(r)
 
 	var report models.ReportDefinition
 	if err := config.DB.Where("id = ? AND deleted_at IS NULL", reportID).First(&report).Error; err != nil {
@@ -151,7 +152,7 @@ func UpdateReportDefinition(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Update allowed fields
-	req["updated_by"] = userID.String()
+	req["updated_by"] = claims.UserID
 	req["updated_at"] = time.Now()
 
 	if err := config.DB.Model(&report).Updates(req).Error; err != nil {
@@ -191,7 +192,7 @@ func DeleteReportDefinition(w http.ResponseWriter, r *http.Request) {
 func ExecuteReport(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	reportID := vars["id"]
-	userID := r.Context().Value("userID").(uuid.UUID)
+	claims := middleware.GetClaims(r)
 
 	var report models.ReportDefinition
 	if err := config.DB.Where("id = ? AND deleted_at IS NULL", reportID).First(&report).Error; err != nil {
@@ -207,7 +208,7 @@ func ExecuteReport(w http.ResponseWriter, r *http.Request) {
 
 	// Execute report
 	engine := NewReportEngine()
-	result, err := engine.ExecuteReport(&report, req.Filters, userID.String())
+	result, err := engine.ExecuteReport(&report, req.Filters, claims.UserID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -242,8 +243,8 @@ func GetFormTableFields(w http.ResponseWriter, r *http.Request) {
 // GetAvailableFormTables retrieves all form tables available for reporting
 func GetAvailableFormTables(w http.ResponseWriter, r *http.Request) {
 	var forms []models.AppForm
-	if err := config.DB.Where("is_active = ? AND table_name IS NOT NULL AND table_name != ''", true).
-		Select("id", "code", "title", "table_name", "module_id").
+	if err := config.DB.Where("is_active = ? AND db_table_name IS NOT NULL AND db_table_name != ''", true).
+		Select("id", "code", "title", "db_table_name", "module_id").
 		Find(&forms).Error; err != nil {
 		http.Error(w, "Failed to fetch forms", http.StatusInternalServerError)
 		return
@@ -271,7 +272,7 @@ func GetAvailableFormTables(w http.ResponseWriter, r *http.Request) {
 func CloneReport(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	reportID := vars["id"]
-	userID := r.Context().Value("userID").(uuid.UUID)
+	claims := middleware.GetClaims(r)
 
 	var originalReport models.ReportDefinition
 	if err := config.DB.Where("id = ? AND deleted_at IS NULL", reportID).First(&originalReport).Error; err != nil {
@@ -302,7 +303,7 @@ func CloneReport(w http.ResponseWriter, r *http.Request) {
 		ExportFormats:      originalReport.ExportFormats,
 		Tags:               originalReport.Tags,
 		IsActive:           true,
-		CreatedBy:          userID.String(),
+		CreatedBy:          claims.UserID,
 	}
 
 	if err := config.DB.Create(&newReport).Error; err != nil {
@@ -389,7 +390,7 @@ func CreateDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID := r.Context().Value("userID").(uuid.UUID)
+	claims := middleware.GetClaims(r)
 
 	dashboard := &models.Dashboard{
 		Code:               req.Code,
@@ -401,7 +402,7 @@ func CreateDashboard(w http.ResponseWriter, r *http.Request) {
 		AllowedRoles:       req.AllowedRoles,
 		IsDefault:          req.IsDefault,
 		IsActive:           true,
-		CreatedBy:          userID.String(),
+		CreatedBy:          claims.UserID,
 	}
 
 	if err := config.DB.Create(dashboard).Error; err != nil {
@@ -536,7 +537,7 @@ func GetReportTemplates(w http.ResponseWriter, r *http.Request) {
 func CreateReportFromTemplate(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	templateID := vars["template_id"]
-	userID := r.Context().Value("userID").(uuid.UUID)
+	claims := middleware.GetClaims(r)
 
 	var template models.ReportTemplate
 	if err := config.DB.Where("id = ?", templateID).First(&template).Error; err != nil {
@@ -574,7 +575,7 @@ func CreateReportFromTemplate(w http.ResponseWriter, r *http.Request) {
 		Category:           template.Category,
 		BusinessVerticalID: req.BusinessVerticalID,
 		IsActive:           true,
-		CreatedBy:          userID.String(),
+		CreatedBy:          claims.UserID,
 	}
 
 	// Marshal back to set fields
