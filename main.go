@@ -37,10 +37,10 @@ func main() {
 		log.Fatalf("could not run migrations: %v", err)
 	}
 
-	// Run seeding (will skip if data already exists)
-	if err := config.RunAllSeeding(); err != nil {
-		log.Printf("Warning: seeding encountered issues: %v", err)
-	}
+	// // Run seeding (will skip if data already exists)
+	// if err := config.RunAllSeeding(); err != nil {
+	// 	log.Printf("Warning: seeding encountered issues: %v", err)
+	// }
 
 	handler := routes.RegisterRoutes()
 	handlerWithCORS := enableCORS(handler)
