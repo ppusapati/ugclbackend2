@@ -70,11 +70,13 @@ type loginResp struct {
 	User  userPayload `json:"user"`
 }
 type userPayload struct {
-	ID     uuid.UUID  `json:"id"`
-	Name   string     `json:"name"`
-	Email  string     `json:"email"`
-	Phone  string     `json:"phone"`
-	RoleID *uuid.UUID `json:"role_id"`
+	ID           uuid.UUID  `json:"id"`
+	Name         string     `json:"name"`
+	Email        string     `json:"email"`
+	Phone        string     `json:"phone"`
+	RoleID       *uuid.UUID `json:"role_id"`
+	Role         string     `json:"role"`
+	IsSuperAdmin bool       `json:"is_super_admin"`
 }
 
 func Login(w http.ResponseWriter, r *http.Request) {
@@ -106,14 +108,20 @@ func Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u.PasswordHash = "" // don't leak password hash
+
+	// Check if user is super admin
+	isSuperAdmin := roleName == "super_admin"
+
 	out := loginResp{
 		Token: token,
 		User: userPayload{
-			ID:     u.ID,
-			Name:   u.Name,
-			Email:  u.Email,
-			Phone:  u.Phone,
-			RoleID: u.RoleID,
+			ID:           u.ID,
+			Name:         u.Name,
+			Email:        u.Email,
+			Phone:        u.Phone,
+			RoleID:       u.RoleID,
+			Role:         roleName,
+			IsSuperAdmin: isSuperAdmin,
 		},
 	}
 	json.NewEncoder(w).Encode(out)

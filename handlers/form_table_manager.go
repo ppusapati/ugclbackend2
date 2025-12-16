@@ -15,13 +15,15 @@ import (
 
 // FormTableManager handles dynamic table creation and data management for forms
 type FormTableManager struct {
-	db *gorm.DB
+	db            *gorm.DB
+	schemaManager *SchemaManager
 }
 
 // NewFormTableManager creates a new form table manager
 func NewFormTableManager() *FormTableManager {
 	return &FormTableManager{
-		db: config.DB,
+		db:            config.DB,
+		schemaManager: NewSchemaManager(),
 	}
 }
 
@@ -51,6 +53,147 @@ type BaseFormFields struct {
 // CreateFormTable creates a dedicated table for a form based on its schema
 func (ftm *FormTableManager) CreateFormTable(form *models.AppForm) error {
 	return ftm.CreateFormTableWithSchema(form, nil)
+}
+
+// CreateFormTableInSchema creates a dedicated table for a form within a specific schema
+func (ftm *FormTableManager) CreateFormTableInSchema(form *models.AppForm, schemaName string) error {
+	return ftm.CreateFormTableInSchemaWithSchema(form, schemaName, nil)
+}
+
+// CreateFormTableInSchemaWithSchema creates a dedicated table with optional inferred schema in a specific database schema
+func (ftm *FormTableManager) CreateFormTableInSchemaWithSchema(form *models.AppForm, schemaName string, inferredSchema map[string]interface{}) error {
+	if form.DBTableName == "" {
+		return fmt.Errorf("form %s has no table name defined", form.Code)
+	}
+
+	// Ensure schema exists
+	if schemaName != "" && schemaName != "public" {
+		exists, err := ftm.schemaManager.SchemaExists(schemaName)
+		if err != nil {
+			return fmt.Errorf("failed to check schema existence: %v", err)
+		}
+		if !exists {
+			return fmt.Errorf("schema %s does not exist", schemaName)
+		}
+	}
+
+	// Get full table name (schema.table)
+	fullTableName := ftm.schemaManager.GetFullTableName(schemaName, form.DBTableName)
+
+	log.Printf("📊 Creating dedicated table: %s for form: %s in schema: %s", fullTableName, form.Code, schemaName)
+
+	// Parse form schema to get field definitions
+	var formSchema map[string]interface{}
+
+	// Priority: inferred schema > form_schema > steps
+	if inferredSchema != nil {
+		formSchema = inferredSchema
+		log.Printf("🔍 Using inferred schema with %d fields", len(inferredSchema["fields"].([]map[string]interface{})))
+	} else if len(form.FormSchema) > 0 && string(form.FormSchema) != "{}" {
+		if err := json.Unmarshal(form.FormSchema, &formSchema); err != nil {
+			return fmt.Errorf("failed to parse form schema: %v", err)
+		}
+	} else if len(form.Steps) > 0 && string(form.Steps) != "[]" {
+		// Extract fields from steps structure
+		fields, err := ftm.ExtractFieldsFromSteps(form.Steps)
+		if err != nil {
+			return fmt.Errorf("failed to extract fields from steps: %v", err)
+		}
+		if len(fields) > 0 {
+			formSchema = map[string]interface{}{
+				"fields": fields,
+			}
+			log.Printf("📋 Extracted %d fields from steps structure", len(fields))
+		}
+	}
+
+	// Build CREATE TABLE SQL with schema-qualified table name
+	sql := ftm.buildCreateTableSQLInSchema(schemaName, form.DBTableName, formSchema)
+
+	// Execute table creation
+	if err := ftm.db.Exec(sql).Error; err != nil {
+		return fmt.Errorf("failed to create table: %v", err)
+	}
+
+	log.Printf("✅ Successfully created table: %s in schema: %s", form.DBTableName, schemaName)
+	return nil
+}
+
+// buildCreateTableSQLInSchema generates the SQL for creating a form table within a specific schema
+func (ftm *FormTableManager) buildCreateTableSQLInSchema(schemaName, tableName string, formSchema map[string]interface{}) string {
+	var columns []string
+
+	// Get full table name
+	fullTableName := ftm.schemaManager.GetFullTableName(schemaName, tableName)
+
+	// Base fields (always present)
+	columns = append(columns,
+		"id UUID PRIMARY KEY DEFAULT gen_random_uuid()",
+		"created_by VARCHAR(255) NOT NULL",
+		"created_at TIMESTAMP NOT NULL DEFAULT NOW()",
+		"updated_by VARCHAR(255)",
+		"updated_at TIMESTAMP DEFAULT NOW()",
+		"deleted_by VARCHAR(255)",
+		"deleted_at TIMESTAMP",
+		"business_vertical_id UUID NOT NULL REFERENCES public.business_verticals(id)",
+		"site_id UUID REFERENCES public.sites(id)",
+		"workflow_id UUID REFERENCES public.workflow_definitions(id)",
+		"current_state VARCHAR(50) NOT NULL DEFAULT 'draft'",
+		"form_id UUID NOT NULL REFERENCES public.app_forms(id)",
+		"form_code VARCHAR(50) NOT NULL",
+	)
+
+	// Parse form fields from schema
+	if fields, ok := formSchema["fields"].([]interface{}); ok {
+		log.Printf("📋 Processing %d fields from formSchema", len(fields))
+		for idx, field := range fields {
+			if fieldMap, ok := field.(map[string]interface{}); ok {
+				log.Printf("🔍 Field %d: %+v", idx, fieldMap)
+				columnDef := ftm.getColumnDefinition(fieldMap)
+				if columnDef != "" {
+					log.Printf("✅ Adding column: %s", columnDef)
+					columns = append(columns, columnDef)
+				} else {
+					log.Printf("⚠️  Empty column definition for field %d", idx)
+				}
+			}
+		}
+	} else {
+		log.Printf("⚠️  formSchema['fields'] is not []interface{}, checking for []map[string]interface{}")
+		if fieldsRaw, exists := formSchema["fields"]; exists {
+			log.Printf("🔍 fields type: %T, value: %+v", fieldsRaw, fieldsRaw)
+			if fieldSlice, ok := fieldsRaw.([]map[string]interface{}); ok {
+				log.Printf("📋 Processing %d fields as []map[string]interface{}", len(fieldSlice))
+				for idx, fieldMap := range fieldSlice {
+					log.Printf("🔍 Field %d: %+v", idx, fieldMap)
+					columnDef := ftm.getColumnDefinition(fieldMap)
+					if columnDef != "" {
+						log.Printf("✅ Adding column: %s", columnDef)
+						columns = append(columns, columnDef)
+					} else {
+						log.Printf("⚠️  Empty column definition for field %d", idx)
+					}
+				}
+			}
+		} else {
+			log.Printf("⚠️  No 'fields' key in formSchema at all")
+		}
+	}
+
+	log.Printf("📊 Total columns: %d (base: 13, custom: %d)", len(columns), len(columns)-13)
+
+	// Create table with schema-qualified name
+	sql := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (\n  %s\n);", fullTableName, strings.Join(columns, ",\n  "))
+
+	// Add indexes with schema-qualified names
+	indexPrefix := strings.ReplaceAll(fullTableName, ".", "_")
+	sql += fmt.Sprintf("\nCREATE INDEX IF NOT EXISTS idx_%s_business_vertical ON %s(business_vertical_id);", indexPrefix, fullTableName)
+	sql += fmt.Sprintf("\nCREATE INDEX IF NOT EXISTS idx_%s_site ON %s(site_id);", indexPrefix, fullTableName)
+	sql += fmt.Sprintf("\nCREATE INDEX IF NOT EXISTS idx_%s_state ON %s(current_state);", indexPrefix, fullTableName)
+	sql += fmt.Sprintf("\nCREATE INDEX IF NOT EXISTS idx_%s_form ON %s(form_id);", indexPrefix, fullTableName)
+	sql += fmt.Sprintf("\nCREATE INDEX IF NOT EXISTS idx_%s_deleted ON %s(deleted_at);", indexPrefix, fullTableName)
+
+	return sql
 }
 
 // ExtractFieldsFromSteps extracts field definitions from the steps structure
@@ -284,6 +427,25 @@ func (ftm *FormTableManager) InsertFormData(
 	formData map[string]interface{},
 	userID string,
 ) (uuid.UUID, error) {
+	return ftm.InsertFormDataInSchema("", tableName, formID, formCode, businessVerticalID, siteID, workflowID, initialState, formData, userID)
+}
+
+// InsertFormDataInSchema inserts form submission data into the dedicated table within a specific schema
+func (ftm *FormTableManager) InsertFormDataInSchema(
+	schemaName string,
+	tableName string,
+	formID uuid.UUID,
+	formCode string,
+	businessVerticalID uuid.UUID,
+	siteID *uuid.UUID,
+	workflowID *uuid.UUID,
+	initialState string,
+	formData map[string]interface{},
+	userID string,
+) (uuid.UUID, error) {
+	// Get full table name
+	fullTableName := ftm.schemaManager.GetFullTableName(schemaName, tableName)
+
 	// Add base fields to form data
 	recordID := uuid.New()
 	formData["id"] = recordID
@@ -312,7 +474,7 @@ func (ftm *FormTableManager) InsertFormData(
 
 	sql := fmt.Sprintf(
 		"INSERT INTO %s (%s) VALUES (%s) RETURNING id",
-		tableName,
+		fullTableName,
 		strings.Join(columns, ", "),
 		strings.Join(placeholders, ", "),
 	)
@@ -323,7 +485,7 @@ func (ftm *FormTableManager) InsertFormData(
 		return uuid.Nil, fmt.Errorf("failed to insert form data: %v", err)
 	}
 
-	log.Printf("✅ Inserted record %s into table %s", returnedID, tableName)
+	log.Printf("✅ Inserted record %s into table %s", returnedID, fullTableName)
 	return returnedID, nil
 }
 
@@ -334,6 +496,20 @@ func (ftm *FormTableManager) UpdateFormData(
 	formData map[string]interface{},
 	userID string,
 ) error {
+	return ftm.UpdateFormDataInSchema("", tableName, recordID, formData, userID)
+}
+
+// UpdateFormDataInSchema updates form submission data in the dedicated table within a specific schema
+func (ftm *FormTableManager) UpdateFormDataInSchema(
+	schemaName string,
+	tableName string,
+	recordID uuid.UUID,
+	formData map[string]interface{},
+	userID string,
+) error {
+	// Get full table name
+	fullTableName := ftm.schemaManager.GetFullTableName(schemaName, tableName)
+
 	// Add update metadata
 	formData["updated_by"] = userID
 	formData["updated_at"] = time.Now()
@@ -359,7 +535,7 @@ func (ftm *FormTableManager) UpdateFormData(
 
 	sql := fmt.Sprintf(
 		"UPDATE %s SET %s WHERE %s",
-		tableName,
+		fullTableName,
 		strings.Join(setClauses, ", "),
 		whereClause,
 	)
@@ -369,13 +545,21 @@ func (ftm *FormTableManager) UpdateFormData(
 		return fmt.Errorf("failed to update form data: %v", err)
 	}
 
-	log.Printf("✅ Updated record %s in table %s", recordID, tableName)
+	log.Printf("✅ Updated record %s in table %s", recordID, fullTableName)
 	return nil
 }
 
 // GetFormData retrieves form submission data from the dedicated table
 func (ftm *FormTableManager) GetFormData(tableName string, recordID uuid.UUID) (map[string]interface{}, error) {
-	sql := fmt.Sprintf("SELECT * FROM %s WHERE id = $1 AND deleted_at IS NULL", tableName)
+	return ftm.GetFormDataInSchema("", tableName, recordID)
+}
+
+// GetFormDataInSchema retrieves form submission data from the dedicated table within a specific schema
+func (ftm *FormTableManager) GetFormDataInSchema(schemaName string, tableName string, recordID uuid.UUID) (map[string]interface{}, error) {
+	// Get full table name
+	fullTableName := ftm.schemaManager.GetFullTableName(schemaName, tableName)
+
+	sql := fmt.Sprintf("SELECT * FROM %s WHERE id = $1 AND deleted_at IS NULL", fullTableName)
 
 	var result map[string]interface{}
 	rows, err := ftm.db.Raw(sql, recordID).Rows()
@@ -413,6 +597,19 @@ func (ftm *FormTableManager) GetFormDataList(
 	businessVerticalID uuid.UUID,
 	filters map[string]interface{},
 ) ([]map[string]interface{}, error) {
+	return ftm.GetFormDataListInSchema("", tableName, businessVerticalID, filters)
+}
+
+// GetFormDataListInSchema retrieves multiple form submissions from the dedicated table within a specific schema
+func (ftm *FormTableManager) GetFormDataListInSchema(
+	schemaName string,
+	tableName string,
+	businessVerticalID uuid.UUID,
+	filters map[string]interface{},
+) ([]map[string]interface{}, error) {
+	// Get full table name
+	fullTableName := ftm.schemaManager.GetFullTableName(schemaName, tableName)
+
 	// Build WHERE clause
 	var whereClauses []string
 	var values []interface{}
@@ -432,7 +629,7 @@ func (ftm *FormTableManager) GetFormDataList(
 
 	sql := fmt.Sprintf(
 		"SELECT * FROM %s WHERE %s ORDER BY created_at DESC",
-		tableName,
+		fullTableName,
 		strings.Join(whereClauses, " AND "),
 	)
 
@@ -468,9 +665,17 @@ func (ftm *FormTableManager) GetFormDataList(
 
 // SoftDeleteFormData soft deletes a record in the dedicated table
 func (ftm *FormTableManager) SoftDeleteFormData(tableName string, recordID uuid.UUID, userID string) error {
+	return ftm.SoftDeleteFormDataInSchema("", tableName, recordID, userID)
+}
+
+// SoftDeleteFormDataInSchema soft deletes a record in the dedicated table within a specific schema
+func (ftm *FormTableManager) SoftDeleteFormDataInSchema(schemaName string, tableName string, recordID uuid.UUID, userID string) error {
+	// Get full table name
+	fullTableName := ftm.schemaManager.GetFullTableName(schemaName, tableName)
+
 	sql := fmt.Sprintf(
 		"UPDATE %s SET deleted_at = $1, deleted_by = $2 WHERE id = $3 AND deleted_at IS NULL",
-		tableName,
+		fullTableName,
 	)
 
 	err := ftm.db.Exec(sql, time.Now(), userID, recordID).Error
@@ -478,15 +683,23 @@ func (ftm *FormTableManager) SoftDeleteFormData(tableName string, recordID uuid.
 		return fmt.Errorf("failed to delete form data: %v", err)
 	}
 
-	log.Printf("✅ Soft deleted record %s from table %s", recordID, tableName)
+	log.Printf("✅ Soft deleted record %s from table %s", recordID, fullTableName)
 	return nil
 }
 
 // UpdateWorkflowState updates only the workflow state of a record
 func (ftm *FormTableManager) UpdateWorkflowState(tableName string, recordID uuid.UUID, newState string, userID string) error {
+	return ftm.UpdateWorkflowStateInSchema("", tableName, recordID, newState, userID)
+}
+
+// UpdateWorkflowStateInSchema updates only the workflow state of a record within a specific schema
+func (ftm *FormTableManager) UpdateWorkflowStateInSchema(schemaName string, tableName string, recordID uuid.UUID, newState string, userID string) error {
+	// Get full table name
+	fullTableName := ftm.schemaManager.GetFullTableName(schemaName, tableName)
+
 	sql := fmt.Sprintf(
 		"UPDATE %s SET current_state = $1, updated_by = $2, updated_at = $3 WHERE id = $4",
-		tableName,
+		fullTableName,
 	)
 
 	err := ftm.db.Exec(sql, newState, userID, time.Now(), recordID).Error
@@ -494,36 +707,42 @@ func (ftm *FormTableManager) UpdateWorkflowState(tableName string, recordID uuid
 		return fmt.Errorf("failed to update workflow state: %v", err)
 	}
 
-	log.Printf("✅ Updated workflow state to %s for record %s in table %s", newState, recordID, tableName)
+	log.Printf("✅ Updated workflow state to %s for record %s in table %s", newState, recordID, fullTableName)
 	return nil
 }
 
 // DropFormTable drops a form's dedicated table (use with caution!)
 func (ftm *FormTableManager) DropFormTable(tableName string) error {
-	sql := fmt.Sprintf("DROP TABLE IF EXISTS %s CASCADE", tableName)
+	return ftm.DropFormTableInSchema("", tableName)
+}
+
+// DropFormTableInSchema drops a form's dedicated table within a specific schema (use with caution!)
+func (ftm *FormTableManager) DropFormTableInSchema(schemaName string, tableName string) error {
+	// Get full table name
+	fullTableName := ftm.schemaManager.GetFullTableName(schemaName, tableName)
+
+	sql := fmt.Sprintf("DROP TABLE IF EXISTS %s CASCADE", fullTableName)
 
 	err := ftm.db.Exec(sql).Error
 	if err != nil {
 		return fmt.Errorf("failed to drop table: %v", err)
 	}
 
-	log.Printf("⚠️  Dropped table: %s", tableName)
+	log.Printf("⚠️  Dropped table: %s", fullTableName)
 	return nil
 }
 
 // TableExists checks if a table exists in the database
 func (ftm *FormTableManager) TableExists(tableName string) (bool, error) {
-	var exists bool
-	sql := `
-		SELECT EXISTS (
-			SELECT FROM information_schema.tables
-			WHERE table_schema = 'public'
-			AND table_name = $1
-		)
-	`
+	return ftm.TableExistsInSchema("public", tableName)
+}
 
-	err := ftm.db.Raw(sql, tableName).Scan(&exists).Error
-	return exists, err
+// TableExistsInSchema checks if a table exists in a specific schema
+func (ftm *FormTableManager) TableExistsInSchema(schemaName string, tableName string) (bool, error) {
+	if schemaName == "" {
+		schemaName = "public"
+	}
+	return ftm.schemaManager.TableExistsInSchema(schemaName, tableName)
 }
 
 // InferSchemaFromData infers form schema from the submitted data

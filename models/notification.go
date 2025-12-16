@@ -21,6 +21,8 @@ const (
 	NotificationTypeTaskAssigned       NotificationType = "task_assigned"
 	NotificationTypeTaskCompleted      NotificationType = "task_completed"
 	NotificationTypeSystemAlert        NotificationType = "system_alert"
+	NotificationTypeChatMessage        NotificationType = "chat_message"
+	NotificationTypeChatMention        NotificationType = "chat_mention"
 )
 
 // NotificationChannel defines how notification is delivered
@@ -157,6 +159,10 @@ type Notification struct {
 	FormCode         string               `gorm:"size:50;index" json:"form_code,omitempty"`
 	BusinessVerticalID *uuid.UUID         `gorm:"type:uuid;index" json:"business_vertical_id,omitempty"`
 
+	// Chat context (for chat notifications)
+	ConversationID   *uuid.UUID           `gorm:"type:uuid;index" json:"conversation_id,omitempty"`
+	MessageID        *uuid.UUID           `gorm:"type:uuid;index" json:"message_id,omitempty"`
+
 	// Additional context data
 	Metadata         JSONMap              `gorm:"type:jsonb" json:"metadata,omitempty"`
 
@@ -291,36 +297,40 @@ func (NotificationPreference) TableName() string {
 
 // NotificationDTO represents the API response format
 type NotificationDTO struct {
-	ID           uuid.UUID            `json:"id"`
-	Type         NotificationType     `json:"type"`
-	Priority     NotificationPriority `json:"priority"`
-	Title        string               `json:"title"`
-	Body         string               `json:"body"`
-	ActionURL    string               `json:"action_url,omitempty"`
-	Status       NotificationStatus   `json:"status"`
-	IsRead       bool                 `json:"is_read"`
-	SubmissionID *uuid.UUID           `json:"submission_id,omitempty"`
-	FormCode     string               `json:"form_code,omitempty"`
-	Metadata     map[string]interface{} `json:"metadata,omitempty"`
-	CreatedAt    time.Time            `json:"created_at"`
-	ReadAt       *time.Time           `json:"read_at,omitempty"`
+	ID             uuid.UUID              `json:"id"`
+	Type           NotificationType       `json:"type"`
+	Priority       NotificationPriority   `json:"priority"`
+	Title          string                 `json:"title"`
+	Body           string                 `json:"body"`
+	ActionURL      string                 `json:"action_url,omitempty"`
+	Status         NotificationStatus     `json:"status"`
+	IsRead         bool                   `json:"is_read"`
+	SubmissionID   *uuid.UUID             `json:"submission_id,omitempty"`
+	FormCode       string                 `json:"form_code,omitempty"`
+	ConversationID *uuid.UUID             `json:"conversation_id,omitempty"`
+	MessageID      *uuid.UUID             `json:"message_id,omitempty"`
+	Metadata       map[string]interface{} `json:"metadata,omitempty"`
+	CreatedAt      time.Time              `json:"created_at"`
+	ReadAt         *time.Time             `json:"read_at,omitempty"`
 }
 
 // ToDTO converts Notification to DTO
 func (n *Notification) ToDTO() NotificationDTO {
 	return NotificationDTO{
-		ID:           n.ID,
-		Type:         n.Type,
-		Priority:     n.Priority,
-		Title:        n.Title,
-		Body:         n.Body,
-		ActionURL:    n.ActionURL,
-		Status:       n.Status,
-		IsRead:       n.ReadAt != nil,
-		SubmissionID: n.SubmissionID,
-		FormCode:     n.FormCode,
-		Metadata:     n.Metadata,
-		CreatedAt:    n.CreatedAt,
-		ReadAt:       n.ReadAt,
+		ID:             n.ID,
+		Type:           n.Type,
+		Priority:       n.Priority,
+		Title:          n.Title,
+		Body:           n.Body,
+		ActionURL:      n.ActionURL,
+		Status:         n.Status,
+		IsRead:         n.ReadAt != nil,
+		SubmissionID:   n.SubmissionID,
+		FormCode:       n.FormCode,
+		ConversationID: n.ConversationID,
+		MessageID:      n.MessageID,
+		Metadata:       n.Metadata,
+		CreatedAt:      n.CreatedAt,
+		ReadAt:         n.ReadAt,
 	}
 }

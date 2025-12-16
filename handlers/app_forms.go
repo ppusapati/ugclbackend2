@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
@@ -268,20 +269,89 @@ func CreateForm(w http.ResponseWriter, r *http.Request) {
 
 	form.CreatedBy = claims.UserID
 
+	// Get the module to retrieve its schema name
+	var module models.Module
+	if err := config.DB.First(&module, "id = ?", form.ModuleID).Error; err != nil {
+		log.Printf("❌ Module not found for form %s: %v", form.Code, err)
+		http.Error(w, "module not found", http.StatusBadRequest)
+		return
+	}
+
+	// Generate table name if not provided
+	if form.DBTableName == "" {
+		// Generate table name from form code (sanitized)
+		form.DBTableName = generateTableName(form.Code)
+	}
+
+	// Create form record in database first
 	if err := config.DB.Create(&form).Error; err != nil {
 		log.Printf("❌ Error creating form: %v", err)
 		http.Error(w, "failed to create form", http.StatusInternalServerError)
 		return
 	}
 
+	// Create dedicated table for the form in the module's schema
+	var schemaName string
+	var tableCreated bool
+	if module.SchemaName != "" {
+		formTableManager := NewFormTableManager()
+		if err := formTableManager.CreateFormTableInSchema(&form, module.SchemaName); err != nil {
+			log.Printf("⚠️  Warning: Failed to create dedicated table for form %s in schema %s: %v", form.Code, module.SchemaName, err)
+			// Don't fail the request - the form is created, table creation is optional
+		} else {
+			schemaName = module.SchemaName
+			tableCreated = true
+			log.Printf("✅ Created dedicated table %s.%s for form %s", module.SchemaName, form.DBTableName, form.Code)
+		}
+	}
+
 	log.Printf("✅ Created new form: %s", form.Code)
+
+	response := map[string]interface{}{
+		"message": "form created successfully",
+		"form":    form.ToDTO(),
+	}
+
+	if tableCreated {
+		response["schema_name"] = schemaName
+		response["table_name"] = form.DBTableName
+		response["full_table_name"] = fmt.Sprintf("%s.%s", schemaName, form.DBTableName)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"message": "form created successfully",
-		"form":    form.ToDTO(),
-	})
+	json.NewEncoder(w).Encode(response)
+}
+
+// generateTableName generates a valid PostgreSQL table name from form code
+func generateTableName(formCode string) string {
+	// Convert to lowercase
+	name := strings.ToLower(formCode)
+
+	// Replace spaces and hyphens with underscores
+	name = strings.ReplaceAll(name, " ", "_")
+	name = strings.ReplaceAll(name, "-", "_")
+
+	// Remove any characters that are not letters, digits, or underscores
+	var result strings.Builder
+	for _, c := range name {
+		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' {
+			result.WriteRune(c)
+		}
+	}
+	name = result.String()
+
+	// Ensure it starts with a letter or underscore (prefix with underscore if starts with digit)
+	if len(name) > 0 && name[0] >= '0' && name[0] <= '9' {
+		name = "_" + name
+	}
+
+	// Limit length (PostgreSQL identifier limit is 63 bytes)
+	if len(name) > 63 {
+		name = name[:63]
+	}
+
+	return name
 }
 
 // UpdateForm updates an existing form (admin only)
@@ -313,9 +383,12 @@ func UpdateForm(w http.ResponseWriter, r *http.Request) {
 	// Parse update request
 	var updateData models.AppForm
 	if err := json.NewDecoder(r.Body).Decode(&updateData); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		log.Printf("❌ Error decoding update request for form %s: %v", formCode, err)
+		http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	log.Printf("📝 Updating form: %s, title=%s, description=%s", formCode, updateData.Title, updateData.Description)
 
 	// Update allowed fields
 	if updateData.Title != "" {

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/gorilla/mux"
 	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/middleware"
 	"p9e.in/ugcl/models"
@@ -29,23 +30,24 @@ type businessResponse struct {
 }
 
 type createBusinessRoleReq struct {
-	Name        string   `json:"name"`
-	DisplayName string   `json:"display_name"`
-	Description string   `json:"description"`
-	Level       int      `json:"level"`
-	Permissions []string `json:"permissions"`
+	Name          string          `json:"name"`
+	DisplayName   string          `json:"display_name"`
+	Description   string          `json:"description"`
+	Level         int             `json:"level"`
+	Permissions   json.RawMessage `json:"permissions"`
+	PermissionIDs []string        `json:"permission_ids"`
 }
 
 type businessRoleResponse struct {
-	ID                 uuid.UUID                `json:"id"`
-	Name               string                   `json:"name"`
-	DisplayName        string                   `json:"display_name"`
-	Description        string                   `json:"description"`
-	Level              int                      `json:"level"`
-	BusinessVerticalID uuid.UUID                `json:"business_vertical_id"`
-	BusinessVertical   string                   `json:"business_vertical_name"`
-	Permissions        []permissionResponse     `json:"permissions"`
-	UserCount          int64                    `json:"user_count"`
+	ID                 uuid.UUID            `json:"id"`
+	Name               string               `json:"name"`
+	DisplayName        string               `json:"display_name"`
+	Description        string               `json:"description"`
+	Level              int                  `json:"level"`
+	BusinessVerticalID uuid.UUID            `json:"business_vertical_id"`
+	BusinessVertical   string               `json:"business_vertical_name"`
+	Permissions        []permissionResponse `json:"permissions"`
+	UserCount          int64                `json:"user_count"`
 }
 
 type assignUserRoleReq struct {
@@ -295,13 +297,48 @@ func CreateBusinessRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Assign permissions
-	for _, permName := range req.Permissions {
-		var permission models.Permission
-		if err := config.DB.Where("name = ?", permName).First(&permission).Error; err != nil {
-			continue // Skip invalid permissions
+	// Assign permissions - support multiple formats
+	if len(req.PermissionIDs) > 0 {
+		for _, permID := range req.PermissionIDs {
+			var permission models.Permission
+			if err := config.DB.Where("id = ?", permID).First(&permission).Error; err != nil {
+				continue
+			}
+			config.DB.Model(&role).Association("Permissions").Append(&permission)
 		}
-		config.DB.Model(&role).Association("Permissions").Append(&permission)
+	} else if len(req.Permissions) > 0 {
+		// Try parsing as array of objects first
+		var permObjects []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(req.Permissions, &permObjects); err == nil && len(permObjects) > 0 {
+			for _, p := range permObjects {
+				var permission models.Permission
+				if p.ID != "" {
+					if err := config.DB.Where("id = ?", p.ID).First(&permission).Error; err != nil {
+						continue
+					}
+				} else if p.Name != "" {
+					if err := config.DB.Where("name = ?", p.Name).First(&permission).Error; err != nil {
+						continue
+					}
+				}
+				config.DB.Model(&role).Association("Permissions").Append(&permission)
+			}
+		} else {
+			// Try parsing as array of strings
+			var permNames []string
+			if err := json.Unmarshal(req.Permissions, &permNames); err == nil {
+				for _, permName := range permNames {
+					var permission models.Permission
+					if err := config.DB.Where("name = ?", permName).First(&permission).Error; err != nil {
+						continue
+					}
+					config.DB.Model(&role).Association("Permissions").Append(&permission)
+				}
+			}
+		}
 	}
 
 	// Load for response
@@ -332,6 +369,136 @@ func CreateBusinessRole(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(response)
+}
+
+// UpdateBusinessRole updates an existing business role with permissions
+func UpdateBusinessRole(w http.ResponseWriter, r *http.Request) {
+	businessID := middleware.GetCurrentBusinessID(r)
+	if businessID == uuid.Nil {
+		http.Error(w, "invalid business identifier", http.StatusBadRequest)
+		return
+	}
+
+	vars := mux.Vars(r)
+	roleID, err := uuid.Parse(vars["roleId"])
+	if err != nil {
+		http.Error(w, "invalid role ID", http.StatusBadRequest)
+		return
+	}
+
+	var req createBusinessRoleReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	// Get existing role and verify it belongs to this business
+	var role models.BusinessRole
+	if err := config.DB.Where("id = ? AND business_vertical_id = ?", roleID, businessID).First(&role).Error; err != nil {
+		http.Error(w, "role not found in this business", http.StatusNotFound)
+		return
+	}
+
+	// Update basic fields
+	role.Name = req.Name
+	role.DisplayName = req.DisplayName
+	role.Description = req.Description
+	role.Level = req.Level
+
+	if err := config.DB.Save(&role).Error; err != nil {
+		http.Error(w, "failed to update role: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Clear existing permissions and assign new ones using direct SQL (GORM association has UUID issues)
+	config.DB.Exec("DELETE FROM business_role_permissions WHERE business_role_id = ?", role.ID)
+
+	// Support multiple formats: permission_ids, permissions as strings, or permissions as objects
+	if len(req.PermissionIDs) > 0 {
+		var permissions []models.Permission
+		if err := config.DB.Where("id IN ?", req.PermissionIDs).Find(&permissions).Error; err == nil && len(permissions) > 0 {
+			for _, perm := range permissions {
+				config.DB.Exec("INSERT INTO business_role_permissions (business_role_id, permission_id) VALUES (?, ?)", role.ID, perm.ID)
+			}
+		}
+	} else if len(req.Permissions) > 0 {
+		// Try parsing as array of objects first: [{id: "...", name: "..."}]
+		var permObjects []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(req.Permissions, &permObjects); err == nil && len(permObjects) > 0 {
+			for _, p := range permObjects {
+				var permission models.Permission
+				if p.ID != "" {
+					if err := config.DB.Where("id = ?", p.ID).First(&permission).Error; err == nil {
+						config.DB.Exec("INSERT INTO business_role_permissions (business_role_id, permission_id) VALUES (?, ?)", role.ID, permission.ID)
+					}
+				} else if p.Name != "" {
+					if err := config.DB.Where("name = ?", p.Name).First(&permission).Error; err == nil {
+						config.DB.Exec("INSERT INTO business_role_permissions (business_role_id, permission_id) VALUES (?, ?)", role.ID, permission.ID)
+					}
+				}
+			}
+		} else {
+			// Try parsing as array of strings: ["name1", "name2"]
+			var permNames []string
+			if err := json.Unmarshal(req.Permissions, &permNames); err == nil {
+				for _, permName := range permNames {
+					var permission models.Permission
+					if err := config.DB.Where("name = ?", permName).First(&permission).Error; err == nil {
+						config.DB.Exec("INSERT INTO business_role_permissions (business_role_id, permission_id) VALUES (?, ?)", role.ID, permission.ID)
+					}
+				}
+			}
+		}
+	}
+
+	// Load fresh role with permissions for response
+	var updatedRole models.BusinessRole
+	if err := config.DB.First(&updatedRole, "id = ?", role.ID).Error; err != nil {
+		http.Error(w, "role not found after update", http.StatusInternalServerError)
+		return
+	}
+
+	// Load business vertical
+	config.DB.First(&updatedRole.BusinessVertical, "id = ?", updatedRole.BusinessVerticalID)
+
+	// Load permissions via join table query
+	var permissionIDs []string
+	config.DB.Table("business_role_permissions").
+		Where("business_role_id = ?", role.ID).
+		Pluck("permission_id", &permissionIDs)
+
+	if len(permissionIDs) > 0 {
+		config.DB.Where("id IN ?", permissionIDs).Find(&updatedRole.Permissions)
+	}
+
+	permissions := make([]permissionResponse, len(updatedRole.Permissions))
+	for i, perm := range updatedRole.Permissions {
+		permissions[i] = permissionResponse{
+			ID:          perm.ID,
+			Name:        perm.Name,
+			Description: perm.Description,
+			Resource:    perm.Resource,
+			Action:      perm.Action,
+		}
+	}
+
+	response := businessRoleResponse{
+		ID:                 updatedRole.ID,
+		Name:               updatedRole.Name,
+		DisplayName:        updatedRole.DisplayName,
+		Description:        updatedRole.Description,
+		Level:              updatedRole.Level,
+		BusinessVerticalID: updatedRole.BusinessVerticalID,
+		BusinessVertical:   updatedRole.BusinessVertical.Name,
+		Permissions:        permissions,
+		UserCount:          0,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
 
@@ -470,7 +637,7 @@ func GetBusinessUsers(w http.ResponseWriter, r *http.Request) {
 				"roles": []map[string]interface{}{},
 			}
 		}
-		
+
 		roles := userMap[ubr.UserID]["roles"].([]map[string]interface{})
 		roles = append(roles, map[string]interface{}{
 			"id":           ubr.BusinessRole.ID,
@@ -514,7 +681,7 @@ func createDefaultBusinessRoles(businessID uuid.UUID) {
 			DisplayName: "Business Administrator",
 			Description: "Full administrative access to this business vertical",
 			Level:       1,
-			Permissions: []string{"business_admin", "read_reports", "create_reports", "update_reports", "delete_reports", 
+			Permissions: []string{"business_admin", "read_reports", "create_reports", "update_reports", "delete_reports",
 				"read_users", "create_users", "update_users", "read_materials", "create_materials", "update_materials", "delete_materials"},
 		},
 		{
@@ -607,7 +774,7 @@ func GetUserBusinessAccess(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// Regular user - only businesses they have roles in
 		businessMap := make(map[uuid.UUID]map[string]interface{})
-		
+
 		for _, ubr := range user.UserBusinessRoles {
 			if ubr.IsActive {
 				businessID := ubr.BusinessRole.BusinessVerticalID
@@ -622,14 +789,14 @@ func GetUserBusinessAccess(w http.ResponseWriter, r *http.Request) {
 						"permissions": []string{},
 					}
 				}
-				
+
 				// Add role
 				roles := businessMap[businessID]["roles"].([]string)
 				roles = append(roles, ubr.BusinessRole.DisplayName)
 				businessMap[businessID]["roles"] = roles
 			}
 		}
-		
+
 		// Convert map to slice
 		for _, business := range businessMap {
 			accessibleBusinesses = append(accessibleBusinesses, business)
@@ -642,12 +809,12 @@ func GetUserBusinessAccess(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := map[string]interface{}{
-		"user_id":              claims.UserID,
-		"user_name":           claims.Name,
-		"global_role":         globalRoleName,
-		"is_super_admin":      isSuperAdmin,
+		"user_id":               claims.UserID,
+		"user_name":             claims.Name,
+		"global_role":           globalRoleName,
+		"is_super_admin":        isSuperAdmin,
 		"accessible_businesses": accessibleBusinesses,
-		"total_businesses":     len(accessibleBusinesses),
+		"total_businesses":      len(accessibleBusinesses),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -774,7 +941,7 @@ func GetSuperAdminDashboard(w http.ResponseWriter, r *http.Request) {
 		"business_verticals": businessStats,
 		"permissions": []string{
 			"Can access all business verticals",
-			"Can create/modify business verticals", 
+			"Can create/modify business verticals",
 			"Can assign users to any business role",
 			"Can view all reports and analytics",
 			"Can manage global system settings",
@@ -805,7 +972,7 @@ func GetBusinessInfo(w http.ResponseWriter, r *http.Request) {
 		Joins("JOIN business_roles ON user_business_roles.business_role_id = business_roles.id").
 		Where("business_roles.business_vertical_id = ? AND user_business_roles.is_active = ?", businessID, true).
 		Count(&userCount)
-	
+
 	config.DB.Model(&models.BusinessRole{}).
 		Where("business_vertical_id = ? AND is_active = ?", businessID, true).
 		Count(&roleCount)

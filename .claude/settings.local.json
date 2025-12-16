@@ -19,7 +19,15 @@
       "Read(//d/Maheshwari/UGCL/**)",
       "Bash(tree:*)",
       "Bash(psql:*)",
-      "Bash(go build:*)"
+      "Bash(go build:*)",
+      "Bash(grep:*)",
+      "Bash(git checkout:*)",
+      "Bash(flutter analyze:*)",
+      "Bash(\"C:\\Program Files\\PostgreSQL\\17\\bin\\psql.exe\" -U postgres -d ugcl -c \"SELECT id, code, name, is_active FROM workflow_definitions LIMIT 5;\")",
+      "Bash(where:*)",
+      "Bash(timeout 5 go run:*)",
+      "Bash(curl:*)",
+      "Bash(findstr:*)"
     ],
     "deny": [],
     "ask": []

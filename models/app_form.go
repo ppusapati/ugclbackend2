@@ -21,8 +21,31 @@ type Module struct {
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 
+	// Database schema for this module (stores form tables)
+	SchemaName string `gorm:"size:63" json:"schema_name,omitempty"`
+
+	// Access control - which business verticals can access this module
+	AccessibleVerticals StringArray `gorm:"type:jsonb;default:'[]'" json:"accessible_verticals"`
+
+	// Required permission to view this module
+	RequiredPermission string `gorm:"size:100" json:"required_permission,omitempty"`
+
 	// Relationships
 	Forms []AppForm `gorm:"foreignKey:ModuleID" json:"forms,omitempty"`
+}
+
+// IsAccessibleInVertical checks if the module is accessible in a given vertical
+func (m *Module) IsAccessibleInVertical(verticalCode string) bool {
+	// If no verticals specified, module is accessible everywhere
+	if len(m.AccessibleVerticals) == 0 {
+		return true
+	}
+	for _, v := range m.AccessibleVerticals {
+		if v == verticalCode {
+			return true
+		}
+	}
+	return false
 }
 
 // TableName specifies the table name for Module

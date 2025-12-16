@@ -32,10 +32,17 @@ func main() {
 		port = "8080"
 	}
 
-	// if err := config.Migrations(config.DB); err != nil {
-	// 	log.Fatalf("could not run migrations: %v", err)
-	// }
-	handler := routes.RegisterRoutesV2()
+	// Run migrations
+	if err := config.Migrations(config.DB); err != nil {
+		log.Fatalf("could not run migrations: %v", err)
+	}
+
+	// Run seeding (will skip if data already exists)
+	if err := config.RunAllSeeding(); err != nil {
+		log.Printf("Warning: seeding encountered issues: %v", err)
+	}
+
+	handler := routes.RegisterRoutes()
 	handlerWithCORS := enableCORS(handler)
 	log.Println("Server starting at port", port)
 	log.Fatal(http.ListenAndServe(":"+port, handlerWithCORS))

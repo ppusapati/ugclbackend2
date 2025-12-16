@@ -8,188 +8,382 @@ import (
 	_ "p9e.in/ugcl/docs"
 	"p9e.in/ugcl/handlers"
 	kpi_handlers "p9e.in/ugcl/handlers/kpis"
+	"p9e.in/ugcl/handlers/masters"
 	"p9e.in/ugcl/middleware"
 )
 
+// RegisterRoutes sets up all application routes
 func RegisterRoutes() http.Handler {
 	r := mux.NewRouter()
-	// public
-	r.HandleFunc("/api/v1/register", handlers.Register).Methods("POST")
-	r.HandleFunc("/api/v1/login", handlers.Login).Methods("POST")
-	r.HandleFunc("/api/v1/token", handlers.GetCurrentUser).Methods("GET")
+
+	// =====================================================
+	// Public Routes (no authentication)
+	// =====================================================
+	r.HandleFunc("/register", handlers.Register).Methods("POST")
+	r.HandleFunc("/login", handlers.Login).Methods("POST")
+	r.HandleFunc("/token", handlers.GetCurrentUser).Methods("GET")
 	r.PathPrefix("/uploads/").Handler(
 		http.StripPrefix("/uploads/", http.FileServer(http.Dir("./uploads"))),
 	)
-	// a protected endpoint
+
+	// =====================================================
+	// Protected API Routes (require JWT authentication)
+	// =====================================================
 	api := r.PathPrefix("/api/v1").Subrouter()
 	api.Use(middleware.SecurityMiddleware)
 	api.Use(middleware.JWTMiddleware)
 
-	// anyone logged in can hit this
-	api.HandleFunc("/api/profile", func(w http.ResponseWriter, r *http.Request) {
-		id := r.Context().Value("userID").(string)
-		role := r.Context().Value("role").(string)
-		json.NewEncoder(w).Encode(map[string]string{"userID": id, "role": role})
-	}).Methods("GET")
+	// User profile endpoint
+	api.HandleFunc("/profile", handleProfile).Methods("GET")
 
-	// only admins:
+	// Register resource routes
+	registerOperationalRoutes(api)
+	registerKPIRoutes(api)
+	registerFileRoutes(api)
+	registerTestRoutes(api)
+
+	// =====================================================
+	// Admin Routes (require admin permissions)
+	// =====================================================
 	admin := api.PathPrefix("/admin").Subrouter()
+	registerAdminRoutes(admin)
 
-	// admin.Use(middleware.SecurityMiddleware) // ⬅️ Enforce API key + IP
-	admin.Use(func(h http.Handler) http.Handler {
-		// List all roles you want to allow here
-		return middleware.RequireRole([]string{"admin", "super_admin", "project_coordinator"}, h)
+	// =====================================================
+	// Partner API (read-only with API key)
+	// =====================================================
+	partner := r.PathPrefix("/api/v1/partner").Subrouter()
+	partner.Use(middleware.SecurityMiddleware)
+	registerPartnerRoutes(partner)
+
+	// =====================================================
+	// Feature-Specific Routes
+	// =====================================================
+	RegisterBusinessRoutes(r)
+	RegisterABACRoutes(api)
+	RegisterProjectRoutes(api)
+	RegisterNotificationRoutes(api, admin)
+	RegisterDocumentRoutes(api, admin)
+	RegisterReportRoutes(r)
+	RegisterChatRoutes(api)
+
+	return r
+}
+
+// handleProfile returns user profile information
+func handleProfile(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetClaims(r)
+	user := middleware.GetUser(r)
+	permissions := middleware.GetUserPermissions(r)
+
+	var globalRoleName string
+	if user.RoleModel != nil {
+		globalRoleName = user.RoleModel.Name
+	}
+
+	response := map[string]interface{}{
+		"userID":      claims.UserID,
+		"name":        user.Name,
+		"phone":       user.Phone,
+		"role_id":     user.RoleID,
+		"global_role": globalRoleName,
+		"permissions": permissions,
+	}
+	json.NewEncoder(w).Encode(response)
+}
+
+// registerOperationalRoutes registers all operational data routes
+func registerOperationalRoutes(api *mux.Router) {
+	// DPR Site Reports
+	registerCRUDRoutes(api, "/dprsite", "report", crudHandlers{
+		getAll: handlers.GetAllSiteEngineerReports,
+		create: handlers.CreateSiteEngineerReport,
+		getOne: handlers.GetSiteEngineerReport,
+		update: handlers.UpdateSiteEngineerReport,
+		delete: handlers.DeleteSiteEngineerReport,
+		batch:  handlers.BatchDprSites,
 	})
 
-	admin.HandleFunc("/stats", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("secret admin stats"))
-	}).Methods("GET")
+	// Wrapping Reports
+	registerCRUDRoutes(api, "/wrapping", "report", crudHandlers{
+		getAll: handlers.GetAllWrappingReports,
+		create: handlers.CreateWrappingReport,
+		getOne: handlers.GetWrappingReport,
+		update: handlers.UpdateWrappingReport,
+		delete: handlers.DeleteWrappingReport,
+		batch:  handlers.BatchWrappings,
+	})
 
-	admin.HandleFunc("/users", handlers.GetAllUsers).Methods("GET")
-	admin.HandleFunc("/dprsite", handlers.GetAllSiteEngineerReports).Methods("GET")
-	api.HandleFunc("/dprsite", handlers.CreateSiteEngineerReport).Methods("POST")
-	admin.HandleFunc("/dprsite/{id}", handlers.GetSiteEngineerReport).Methods("GET")
-	admin.HandleFunc("/dprsite/{id}", handlers.UpdateSiteEngineerReport).Methods("PUT")
-	admin.HandleFunc("/dprsite/{id}", handlers.DeleteSiteEngineerReport).Methods("DELETE")
-	api.HandleFunc("/dprsite/batch", handlers.BatchDprSites).Methods("POST")
+	// E-way Bills
+	registerCRUDRoutes(api, "/eway", "report", crudHandlers{
+		getAll: handlers.GetAllEways,
+		create: handlers.CreateEway,
+		getOne: handlers.GetEway,
+		update: handlers.UpdateEway,
+		delete: handlers.DeleteEway,
+		batch:  handlers.BatchEwayss,
+	})
 
-	admin.HandleFunc("/wrapping", handlers.GetAllWrappingReports).Methods("GET")
-	api.HandleFunc("/wrapping", handlers.CreateWrappingReport).Methods("POST")
-	admin.HandleFunc("/wrapping/{id}", handlers.GetWrappingReport).Methods("GET")
-	admin.HandleFunc("/wrapping/{id}", handlers.UpdateWrappingReport).Methods("PUT")
-	admin.HandleFunc("/wrapping/{id}", handlers.DeleteWrappingReport).Methods("DELETE")
-	api.HandleFunc("/wrapping/batch", handlers.BatchWrappings).Methods("POST")
+	// Water Tanker Reports
+	registerCRUDRoutes(api, "/water", "report", crudHandlers{
+		getAll: handlers.GetAllWaterTankerReports,
+		create: handlers.CreateWaterTankerReport,
+		getOne: handlers.GetWaterTankerReport,
+		update: handlers.UpdateWaterTankerReport,
+		delete: handlers.DeleteWaterTankerReport,
+		batch:  handlers.BatchWaterReports,
+	})
 
-	admin.HandleFunc("/eway", handlers.GetAllEways).Methods("GET")
-	api.HandleFunc("/eway", handlers.CreateEway).Methods("POST")
-	admin.HandleFunc("/eway/{id}", handlers.GetEway).Methods("GET")
-	admin.HandleFunc("/eway/{id}", handlers.UpdateEway).Methods("PUT")
-	admin.HandleFunc("/eway/{id}", handlers.DeleteEway).Methods("DELETE")
-	api.HandleFunc("/eway/batch", handlers.BatchEwayss).Methods("POST")
+	// Stock Reports
+	registerCRUDRoutes(api, "/stock", "report", crudHandlers{
+		getAll: handlers.GetAllStockReports,
+		create: handlers.CreateStockReport,
+		getOne: handlers.GetStockReport,
+		update: handlers.UpdateStockReport,
+		delete: handlers.DeleteStockReport,
+		batch:  handlers.BatchStocks,
+	})
 
-	admin.HandleFunc("/water", handlers.GetAllWaterTankerReports).Methods("GET")
-	api.HandleFunc("/water", handlers.CreateWaterTankerReport).Methods("POST")
-	admin.HandleFunc("/water/{id}", handlers.GetWaterTankerReport).Methods("GET")
-	admin.HandleFunc("/water/{id}", handlers.UpdateWaterTankerReport).Methods("PUT")
-	admin.HandleFunc("/water/{id}", handlers.DeleteWaterTankerReport).Methods("DELETE")
-	api.HandleFunc("/water/batch", handlers.BatchWaterReports).Methods("POST")
+	// Dairy Site Reports
+	registerCRUDRoutes(api, "/dairysite", "report", crudHandlers{
+		getAll: handlers.GetAllDairySiteReports,
+		create: handlers.CreateDairySiteReport,
+		getOne: handlers.GetDairySiteReport,
+		update: handlers.UpdateDairySiteReport,
+		delete: handlers.DeleteDairySiteReport,
+		batch:  handlers.BatchDairySites,
+	})
 
-	admin.HandleFunc("/stock", handlers.GetAllStockReports).Methods("GET")
-	api.HandleFunc("/stock", handlers.CreateStockReport).Methods("POST")
-	admin.HandleFunc("/stock/{id}", handlers.GetStockReport).Methods("GET")
-	admin.HandleFunc("/stock/{id}", handlers.UpdateStockReport).Methods("PUT")
-	admin.HandleFunc("/stock/{id}", handlers.DeleteStockReport).Methods("DELETE")
-	api.HandleFunc("/stock/batch", handlers.BatchStocks).Methods("POST")
+	// Payment Reports
+	registerCRUDRoutes(api, "/payment", "payment", crudHandlers{
+		getAll: handlers.GetAllPayments,
+		create: handlers.CreatePayment,
+		getOne: handlers.GetPayment,
+		update: handlers.UpdatePayment,
+		delete: handlers.DeletePayment,
+		batch:  handlers.BatchPayments,
+	})
 
-	admin.HandleFunc("/dairysite", handlers.GetAllDairySiteReports).Methods("GET")
-	api.HandleFunc("/dairysite", handlers.CreateDairySiteReport).Methods("POST")
-	admin.HandleFunc("/dairysite/{id}", handlers.GetDairySiteReport).Methods("GET")
-	admin.HandleFunc("/dairysite/{id}", handlers.UpdateDairySiteReport).Methods("PUT")
-	admin.HandleFunc("/dairysite/{id}", handlers.DeleteDairySiteReport).Methods("DELETE")
-	api.HandleFunc("/dairysite/batch", handlers.BatchDairySites).Methods("POST")
-	api.HandleFunc("/dairysite/batch", handlers.BatchContractors).Methods("POST")
+	// Materials
+	registerCRUDRoutes(api, "/material", "material", crudHandlers{
+		getAll: handlers.GetAllMaterials,
+		create: handlers.CreateMaterial,
+		getOne: handlers.GetMaterial,
+		update: handlers.UpdateMaterial,
+		delete: handlers.DeleteMaterial,
+		batch:  handlers.BatchMaterials,
+	})
 
-	admin.HandleFunc("/payment", handlers.GetAllPayments).Methods("GET")
-	api.HandleFunc("/payment", handlers.CreatePayment).Methods("POST")
-	admin.HandleFunc("/payment/{id}", handlers.GetPayment).Methods("GET")
-	admin.HandleFunc("/payment/{id}", handlers.UpdatePayment).Methods("PUT")
-	admin.HandleFunc("/payment/{id}", handlers.DeletePayment).Methods("DELETE")
-	api.HandleFunc("/payment/batch", handlers.BatchPayments).Methods("POST")
+	// MNR Reports
+	registerCRUDRoutes(api, "/mnr", "report", crudHandlers{
+		getAll: handlers.GetAllMNRReports,
+		create: handlers.CreateMNRReport,
+		getOne: handlers.GetMNRReport,
+		update: handlers.UpdateMNRReport,
+		delete: handlers.DeleteMNRReport,
+		batch:  handlers.BatchMnrs,
+	})
 
-	admin.HandleFunc("/material", handlers.GetAllMaterials).Methods("GET")
-	api.HandleFunc("/material", handlers.CreateMaterial).Methods("POST")
-	admin.HandleFunc("/material/{id}", handlers.GetMaterial).Methods("GET")
-	admin.HandleFunc("/material/{id}", handlers.UpdateMaterial).Methods("PUT")
-	admin.HandleFunc("/material/{id}", handlers.DeleteMaterial).Methods("DELETE")
-	api.HandleFunc("/material/batch", handlers.BatchMaterials).Methods("POST")
+	// NMR Vehicles
+	registerCRUDRoutes(api, "/nmr_vehicle", "report", crudHandlers{
+		getAll: handlers.GetAllNmrVehicle,
+		create: handlers.CreateNmrVehicle,
+		getOne: handlers.GetNmrVehicle,
+		update: handlers.UpdateNmrVehicle,
+		delete: handlers.DeleteNmrVehicle,
+		batch:  handlers.BatchNmrVehicle,
+	})
 
-	admin.HandleFunc("/mnr", handlers.GetAllMNRReports).Methods("GET")
-	api.HandleFunc("/mnr", handlers.CreateMNRReport).Methods("POST")
-	admin.HandleFunc("/mnr/{id}", handlers.GetMNRReport).Methods("GET")
-	admin.HandleFunc("/mnr/{id}", handlers.UpdateMNRReport).Methods("PUT")
-	admin.HandleFunc("/mnr/{id}", handlers.DeleteMNRReport).Methods("DELETE")
-	api.HandleFunc("/mnr/batch", handlers.BatchMnrs).Methods("POST")
+	// Contractors
+	registerCRUDRoutes(api, "/contractor", "report", crudHandlers{
+		getAll: handlers.GetAllContractorReports,
+		create: handlers.CreateContractorReport,
+		getOne: handlers.GetContractorReport,
+		update: handlers.UpdateContractorReport,
+		delete: handlers.DeleteContractorReport,
+		batch:  handlers.BatchContractors,
+	})
 
-	admin.HandleFunc("/nmr_vehicle", handlers.GetAllNmrVehicle).Methods("GET")
-	api.HandleFunc("/nmr_vehicle", handlers.CreateNmrVehicle).Methods("POST")
-	admin.HandleFunc("/nmr_vehicle/{id}", handlers.GetNmrVehicle).Methods("GET")
-	admin.HandleFunc("/nmr_vehicle/{id}", handlers.UpdateNmrVehicle).Methods("PUT")
-	admin.HandleFunc("/nmr_vehicle/{id}", handlers.DeleteNmrVehicle).Methods("DELETE")
-	api.HandleFunc("/nmr_vehicle/batch", handlers.BatchNmrVehicle).Methods("POST")
+	// Painting Reports
+	registerCRUDRoutes(api, "/painting", "report", crudHandlers{
+		getAll: handlers.GetAllPaintingReports,
+		create: handlers.CreatePaintingReport,
+		getOne: handlers.GetPaintingReport,
+		update: handlers.UpdatePaintingReport,
+		delete: handlers.DeletePaintingReport,
+		batch:  handlers.BatchPaintings,
+	})
 
-	admin.HandleFunc("/contractor", handlers.GetAllContractorReports).Methods("GET")
-	api.HandleFunc("/contractor", handlers.CreateContractorReport).Methods("POST")
-	admin.HandleFunc("/contractor/{id}", handlers.GetContractorReport).Methods("GET")
-	admin.HandleFunc("/contractor/{id}", handlers.UpdateContractorReport).Methods("PUT")
-	admin.HandleFunc("/contractor/{id}", handlers.DeleteContractorReport).Methods("DELETE")
-	api.HandleFunc("/contractor/batch", handlers.BatchContractors).Methods("POST")
+	// Diesel Reports
+	registerCRUDRoutes(api, "/diesel", "report", crudHandlers{
+		getAll: handlers.GetAllDieselReports,
+		create: handlers.CreateDieselReport,
+		getOne: handlers.GetDieselReport,
+		update: handlers.UpdateDieselReport,
+		delete: handlers.DeleteDieselReport,
+		batch:  handlers.BatchDiesels,
+	})
 
-	admin.HandleFunc("/painting", handlers.GetAllPaintingReports).Methods("GET")
-	api.HandleFunc("/painting", handlers.CreatePaintingReport).Methods("POST")
-	admin.HandleFunc("/painting/{id}", handlers.GetPaintingReport).Methods("GET")
-	admin.HandleFunc("/painting/{id}", handlers.UpdatePaintingReport).Methods("PUT")
-	admin.HandleFunc("/painting/{id}", handlers.DeletePaintingReport).Methods("DELETE")
-	api.HandleFunc("/painting/batch", handlers.BatchPaintings).Methods("POST")
+	// Tasks
+	registerCRUDRoutes(api, "/tasks", "report", crudHandlers{
+		getAll: handlers.GetAllTasks,
+		create: handlers.CreateTask,
+		getOne: handlers.GetTask,
+		update: handlers.UpdateTask,
+		delete: handlers.DeleteTask,
+		batch:  handlers.BatchTasks,
+	})
 
-	admin.HandleFunc("/diesel", handlers.GetAllDieselReports).Methods("GET")
-	api.HandleFunc("/diesel", handlers.CreateDieselReport).Methods("POST")
-	admin.HandleFunc("/diesel/{id}", handlers.GetDieselReport).Methods("GET")
-	admin.HandleFunc("/diesel/{id}", handlers.UpdateDieselReport).Methods("PUT")
-	admin.HandleFunc("/diesel/{id}", handlers.DeleteDieselReport).Methods("DELETE")
-	api.HandleFunc("/diesel/batch", handlers.BatchDiesels).Methods("POST")
+	// Vehicle Logs
+	registerCRUDRoutes(api, "/vehiclelog", "report", crudHandlers{
+		getAll: handlers.GetAllVehicleLogs,
+		create: handlers.CreateVehicleLog,
+		getOne: handlers.GetVehicleLog,
+		update: handlers.UpdateVehicleLog,
+		delete: handlers.DeleteVehicleLog,
+		batch:  handlers.BatchVehicleLogs,
+	})
+}
 
-	admin.HandleFunc("/tasks", handlers.GetAllTasks).Methods("GET")
-	api.HandleFunc("/tasks", handlers.CreateTask).Methods("POST")
-	admin.HandleFunc("/tasks/{id}", handlers.GetTask).Methods("GET")
-	admin.HandleFunc("/tasks/{id}", handlers.UpdateTask).Methods("PUT")
-	admin.HandleFunc("/tasks/{id}", handlers.DeleteTask).Methods("DELETE")
-	api.HandleFunc("/tasks/batch", handlers.BatchTasks).Methods("POST")
+// crudHandlers holds handlers for a CRUD resource
+type crudHandlers struct {
+	getAll func(http.ResponseWriter, *http.Request)
+	create func(http.ResponseWriter, *http.Request)
+	getOne func(http.ResponseWriter, *http.Request)
+	update func(http.ResponseWriter, *http.Request)
+	delete func(http.ResponseWriter, *http.Request)
+	batch  func(http.ResponseWriter, *http.Request)
+}
 
-	admin.HandleFunc("/vehiclelog", handlers.GetAllVehicleLogs).Methods("GET")
-	api.HandleFunc("/vehiclelog", handlers.CreateVehicleLog).Methods("POST")
-	admin.HandleFunc("/vehiclelog/{id}", handlers.GetVehicleLog).Methods("GET")
-	admin.HandleFunc("/vehiclelog/{id}", handlers.UpdateVehicleLog).Methods("PUT")
-	admin.HandleFunc("/vehiclelog/{id}", handlers.DeleteVehicleLog).Methods("DELETE")
-	api.HandleFunc("/vehiclelog/batch", handlers.BatchVehicleLogs).Methods("POST")
+// registerCRUDRoutes registers standard CRUD routes for a resource
+func registerCRUDRoutes(router *mux.Router, path string, resourceType string, h crudHandlers) {
+	readPerm := "read_" + resourceType + "s"
+	createPerm := "create_" + resourceType + "s"
+	updatePerm := "update_" + resourceType + "s"
+	deletePerm := "delete_" + resourceType + "s"
 
-	api.HandleFunc("/files/upload", handlers.UploadFile).Methods("POST")
+	// GET all
+	router.Handle(path, middleware.RequirePermission(readPerm)(
+		http.HandlerFunc(h.getAll))).Methods("GET")
 
-	partner := r.PathPrefix("/api/v1/partner").Subrouter()
-	partner.Use(middleware.SecurityMiddleware) // API key + IP
-	partner.HandleFunc("/dprsite", handlers.GetAllSiteEngineerReports).Methods("GET")
-	partner.HandleFunc("/dprsite/{id}", handlers.GetSiteEngineerReport).Methods("GET")
-	partner.HandleFunc("/wrapping", handlers.GetAllWrappingReports).Methods("GET")
-	partner.HandleFunc("/wrapping/{id}", handlers.GetWrappingReport).Methods("GET")
-	partner.HandleFunc("/eway", handlers.GetAllEways).Methods("GET")
-	partner.HandleFunc("/eway/{id}", handlers.GetEway).Methods("GET")
-	partner.HandleFunc("/water", handlers.GetAllWaterTankerReports).Methods("GET")
-	partner.HandleFunc("/water/{id}", handlers.GetWaterTankerReport).Methods("GET")
-	partner.HandleFunc("/stock", handlers.GetAllStockReports).Methods("GET")
-	partner.HandleFunc("/stock/{id}", handlers.GetStockReport).Methods("GET")
-	partner.HandleFunc("/dairysite", handlers.GetAllDairySiteReports).Methods("GET")
-	partner.HandleFunc("/dairysite/{id}", handlers.GetDairySiteReport).Methods("GET")
-	partner.HandleFunc("/payment", handlers.GetAllPayments).Methods("GET")
-	partner.HandleFunc("/payment/{id}", handlers.GetPayment).Methods("GET")
-	partner.HandleFunc("/material", handlers.GetAllMaterials).Methods("GET")
-	partner.HandleFunc("/material/{id}", handlers.GetMaterial).Methods("GET")
-	partner.HandleFunc("/mnr", handlers.GetAllMNRReports).Methods("GET")
-	partner.HandleFunc("/mnr/{id}", handlers.GetMNRReport).Methods("GET")
-	partner.HandleFunc("/nmr_vehicle", handlers.GetAllNmrVehicle).Methods("GET")
-	partner.HandleFunc("/nmr_vehicle/{id}", handlers.GetNmrVehicle).Methods("GET")
-	partner.HandleFunc("/contractor", handlers.GetAllContractorReports).Methods("GET")
-	partner.HandleFunc("/contractor/{id}", handlers.GetContractorReport).Methods("GET")
-	partner.HandleFunc("/painting", handlers.GetAllPaintingReports).Methods("GET")
-	partner.HandleFunc("/painting/{id}", handlers.GetPaintingReport).Methods("GET")
-	partner.HandleFunc("/diesel", handlers.GetAllDieselReports).Methods("GET")
-	partner.HandleFunc("/diesel/{id}", handlers.GetDieselReport).Methods("GET")
-	partner.HandleFunc("/tasks", handlers.GetAllTasks).Methods("GET")
-	partner.HandleFunc("/tasks/{id}", handlers.GetTask).Methods("GET")
-	partner.HandleFunc("/vehiclelog", handlers.GetAllVehicleLogs).Methods("GET")
-	partner.HandleFunc("/vehiclelog/{id}", handlers.GetVehicleLog).Methods("GET")
+	// POST create
+	router.Handle(path, middleware.RequirePermission(createPerm)(
+		http.HandlerFunc(h.create))).Methods("POST")
 
-	api.HandleFunc("/kpi/stock", kpi_handlers.GetStockKPIs).Methods("GET")
-	api.HandleFunc("/kpi/contractor", kpi_handlers.GetContractorKPIs).Methods("GET")
-	api.HandleFunc("/kpi/dairysite", kpi_handlers.GetDairyKPIs).Methods("GET")
-	api.HandleFunc("/kpi/diesel", kpi_handlers.GetDieselKPIs).Methods("GET")
-	return r
+	// GET one by ID
+	router.Handle(path+"/{id}", middleware.RequirePermission(readPerm)(
+		http.HandlerFunc(h.getOne))).Methods("GET")
+
+	// PUT update
+	router.Handle(path+"/{id}", middleware.RequirePermission(updatePerm)(
+		http.HandlerFunc(h.update))).Methods("PUT")
+
+	// DELETE
+	router.Handle(path+"/{id}", middleware.RequirePermission(deletePerm)(
+		http.HandlerFunc(h.delete))).Methods("DELETE")
+
+	// POST batch
+	if h.batch != nil {
+		router.Handle(path+"/batch", middleware.RequirePermission(createPerm)(
+			http.HandlerFunc(h.batch))).Methods("POST")
+	}
+}
+
+// registerKPIRoutes registers KPI endpoints
+func registerKPIRoutes(api *mux.Router) {
+	api.Handle("/kpi/stock", middleware.RequirePermission("read_kpis")(
+		http.HandlerFunc(kpi_handlers.GetStockKPIs))).Methods("GET")
+	api.Handle("/kpi/contractor", middleware.RequirePermission("read_kpis")(
+		http.HandlerFunc(kpi_handlers.GetContractorKPIs))).Methods("GET")
+	api.Handle("/kpi/dairysite", middleware.RequirePermission("read_kpis")(
+		http.HandlerFunc(kpi_handlers.GetDairyKPIs))).Methods("GET")
+	api.Handle("/kpi/diesel", middleware.RequirePermission("read_kpis")(
+		http.HandlerFunc(kpi_handlers.GetDieselKPIs))).Methods("GET")
+}
+
+// registerFileRoutes registers file upload endpoints
+func registerFileRoutes(api *mux.Router) {
+	api.Handle("/files/upload", middleware.RequireAnyPermission([]string{"create_reports", "create_materials"})(
+		http.HandlerFunc(handlers.UploadFileHandler))).Methods("POST")
+}
+
+// registerTestRoutes registers testing endpoints
+func registerTestRoutes(api *mux.Router) {
+	api.HandleFunc("/test/auth", handlers.TestAuthEndpoint).Methods("GET")
+	api.HandleFunc("/test/permission", handlers.TestPermissionEndpoint).Methods("GET")
+
+	// Password management
+	api.Handle("/change-password", middleware.JWTMiddleware(
+		http.HandlerFunc(handlers.ChangePassword))).Methods("POST")
+}
+
+// registerAdminRoutes registers admin-only routes
+func registerAdminRoutes(admin *mux.Router) {
+	projectHandler := handlers.NewProjectHandler()
+
+	// Module management
+	admin.Handle("/masters/modules", middleware.RequirePermission("masters:module:create")(
+		http.HandlerFunc(masters.CreateModule))).Methods("POST")
+
+	// User management
+	admin.Handle("/users", middleware.RequirePermission("read_users")(
+		http.HandlerFunc(handlers.GetAllUsers))).Methods("GET")
+	admin.Handle("/users/{id}", middleware.RequirePermission("read_users")(
+		http.HandlerFunc(handlers.GetbyID))).Methods("GET")
+	admin.Handle("/users", middleware.RequirePermission("create_users")(
+		http.HandlerFunc(handlers.Register))).Methods("POST")
+	admin.Handle("/users/{id}", middleware.RequirePermission("update_users")(
+		http.HandlerFunc(handlers.UpdateUser))).Methods("PUT")
+	admin.Handle("/users/{id}", middleware.RequirePermission("delete_users")(
+		http.HandlerFunc(handlers.DeleteUser))).Methods("DELETE")
+
+	// Project creation (admin)
+	admin.Handle("/projects", middleware.RequirePermission("project:create")(
+		http.HandlerFunc(projectHandler.CreateProject))).Methods("POST")
+
+	// Role and Permission management
+	admin.Handle("/roles", middleware.RequirePermission("manage_roles")(
+		http.HandlerFunc(handlers.GetAllRoles))).Methods("GET")
+	admin.Handle("/roles/unified", middleware.RequirePermission("manage_roles")(
+		http.HandlerFunc(handlers.GetAllRolesUnified))).Methods("GET")
+	admin.Handle("/roles", middleware.RequirePermission("manage_roles")(
+		http.HandlerFunc(handlers.CreateRole))).Methods("POST")
+	admin.Handle("/roles/{id}", middleware.RequirePermission("manage_roles")(
+		http.HandlerFunc(handlers.UpdateRole))).Methods("PUT")
+	admin.Handle("/roles/{id}", middleware.RequirePermission("manage_roles")(
+		http.HandlerFunc(handlers.DeleteRole))).Methods("DELETE")
+	admin.Handle("/permissions", middleware.RequirePermission("manage_roles")(
+		http.HandlerFunc(handlers.GetAllPermissions))).Methods("GET")
+	admin.Handle("/permissions", middleware.RequirePermission("manage_roles")(
+		http.HandlerFunc(handlers.CreatePermission))).Methods("POST")
+}
+
+// registerPartnerRoutes registers partner API routes (read-only)
+func registerPartnerRoutes(partner *mux.Router) {
+	// Read-only endpoints for partners
+	partnerResources := []struct {
+		path   string
+		getAll func(http.ResponseWriter, *http.Request)
+		getOne func(http.ResponseWriter, *http.Request)
+	}{
+		{"/dprsite", handlers.GetAllSiteEngineerReports, handlers.GetSiteEngineerReport},
+		{"/wrapping", handlers.GetAllWrappingReports, handlers.GetWrappingReport},
+		{"/eway", handlers.GetAllEways, handlers.GetEway},
+		{"/water", handlers.GetAllWaterTankerReports, handlers.GetWaterTankerReport},
+		{"/stock", handlers.GetAllStockReports, handlers.GetStockReport},
+		{"/dairysite", handlers.GetAllDairySiteReports, handlers.GetDairySiteReport},
+		{"/payment", handlers.GetAllPayments, handlers.GetPayment},
+		{"/material", handlers.GetAllMaterials, handlers.GetMaterial},
+		{"/mnr", handlers.GetAllMNRReports, handlers.GetMNRReport},
+		{"/nmr_vehicle", handlers.GetAllNmrVehicle, handlers.GetNmrVehicle},
+		{"/contractor", handlers.GetAllContractorReports, handlers.GetContractorReport},
+		{"/painting", handlers.GetAllPaintingReports, handlers.GetPaintingReport},
+		{"/diesel", handlers.GetAllDieselReports, handlers.GetDieselReport},
+		{"/tasks", handlers.GetAllTasks, handlers.GetTask},
+		{"/vehiclelog", handlers.GetAllVehicleLogs, handlers.GetVehicleLog},
+	}
+
+	for _, res := range partnerResources {
+		partner.HandleFunc(res.path, res.getAll).Methods("GET")
+		partner.HandleFunc(res.path+"/{id}", res.getOne).Methods("GET")
+	}
 }

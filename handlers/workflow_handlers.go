@@ -388,17 +388,31 @@ func CreateWorkflowDefinition(w http.ResponseWriter, r *http.Request) {
 
 	var workflow models.WorkflowDefinition
 	if err := json.NewDecoder(r.Body).Decode(&workflow); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		log.Printf("❌ Error decoding workflow request: %v", err)
+		http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	// Validate required fields
+	if workflow.Code == "" {
+		http.Error(w, "workflow code is required", http.StatusBadRequest)
+		return
+	}
+	if workflow.Name == "" {
+		http.Error(w, "workflow name is required", http.StatusBadRequest)
+		return
+	}
+
+	log.Printf("📝 Creating workflow: code=%s, name=%s, states=%d bytes, transitions=%d bytes",
+		workflow.Code, workflow.Name, len(workflow.States), len(workflow.Transitions))
 
 	if err := getWorkflowEngine().db.Create(&workflow).Error; err != nil {
-		log.Printf("❌ Error creating workflow: %v", err)
-		http.Error(w, "failed to create workflow", http.StatusInternalServerError)
+		log.Printf("❌ Error creating workflow in DB: %v", err)
+		http.Error(w, "failed to create workflow: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("✅ Created workflow: %s", workflow.Code)
+	log.Printf("✅ Created workflow: %s (ID: %s)", workflow.Code, workflow.ID)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
