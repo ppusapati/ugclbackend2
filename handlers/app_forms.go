@@ -260,11 +260,29 @@ func CreateForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var form models.AppForm
-	if err := json.NewDecoder(r.Body).Decode(&form); err != nil {
+	var payload map[string]json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		fmt.Println(err)
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
+	}
+
+	bodyBytes, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("❌ Error serializing request body: %v", err)
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	var form models.AppForm
+	if err := json.Unmarshal(bodyBytes, &form); err != nil {
+		log.Printf("❌ Error parsing request body into form: %v", err)
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if _, hasIsActive := payload["is_active"]; !hasIsActive {
+		form.IsActive = true
 	}
 
 	form.CreatedBy = claims.UserID
