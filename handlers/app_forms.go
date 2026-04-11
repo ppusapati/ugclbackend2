@@ -194,7 +194,7 @@ func GetAllAppForms(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var formDTOs []models.AppFormDTO
+	formDTOs := make([]models.AppFormDTO, 0, len(forms))
 	for _, form := range forms {
 		formDTOs = append(formDTOs, form.ToDTO())
 	}
