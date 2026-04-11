@@ -197,6 +197,7 @@ var apiKeyConfigs = map[string]APIClientConfig{
 			http.MethodGet:    true,
 			http.MethodPost:   true,
 			http.MethodPut:    true,
+			http.MethodPatch:  true,
 			http.MethodDelete: true,
 		},
 		SkipIPCheck: true,
