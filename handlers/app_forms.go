@@ -41,12 +41,23 @@ func GetFormsForVertical(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get forms for this vertical using JSONB contains operator
+	// Resolve business vertical so we can match both code and UUID in accessible_verticals.
+	canonicalCode := strings.ToUpper(verticalCode)
+	verticalID := ""
+	var businessVertical models.BusinessVertical
+	if err := config.DB.Where("LOWER(code) = LOWER(?)", verticalCode).First(&businessVertical).Error; err == nil {
+		canonicalCode = businessVertical.Code
+		verticalID = businessVertical.ID.String()
+	}
+
+	// Get forms for this vertical using JSONB contains operator.
+	// Include forms with empty accessible_verticals (globally accessible forms).
 	var forms []models.AppForm
 	query := config.DB.
 		Preload("Module").
 		Where("is_active = ?", true).
-		Where("accessible_verticals @> ?", `["`+verticalCode+`"]`).
+		Where("accessible_verticals = '[]'::jsonb OR accessible_verticals @> ? OR accessible_verticals @> ? OR accessible_verticals @> ?",
+			`["`+verticalCode+`"]`, `["`+canonicalCode+`"]`, `["`+verticalID+`"]`).
 		Order("display_order ASC, title ASC")
 
 	if err := query.Find(&forms).Error; err != nil {
@@ -58,7 +69,7 @@ func GetFormsForVertical(w http.ResponseWriter, r *http.Request) {
 	log.Printf("✅ Found %d forms for vertical %s", len(forms), verticalCode)
 
 	// Convert to DTOs and filter by user permissions
-	var formDTOs []models.AppFormDTO
+	formDTOs := make([]models.AppFormDTO, 0, len(forms))
 	moduleMap := make(map[string][]models.AppFormDTO)
 
 	for _, form := range forms {
