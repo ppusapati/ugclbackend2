@@ -301,16 +301,16 @@ func (h *NotificationHandler) UpdateNotificationPreferences(w http.ResponseWrite
 	}
 
 	var req struct {
-		EnableInApp        *bool    `json:"enable_in_app"`
-		EnableEmail        *bool    `json:"enable_email"`
-		EnableSMS          *bool    `json:"enable_sms"`
-		EnableWebPush      *bool    `json:"enable_web_push"`
-		DisabledTypes      []string `json:"disabled_types"`
-		QuietHoursEnabled  *bool    `json:"quiet_hours_enabled"`
-		QuietHoursStart    *string  `json:"quiet_hours_start"`
-		QuietHoursEnd      *string  `json:"quiet_hours_end"`
-		DigestEnabled      *bool    `json:"digest_enabled"`
-		DigestFrequency    *string  `json:"digest_frequency"`
+		EnableInApp       *bool    `json:"enable_in_app"`
+		EnableEmail       *bool    `json:"enable_email"`
+		EnableSMS         *bool    `json:"enable_sms"`
+		EnableWebPush     *bool    `json:"enable_web_push"`
+		DisabledTypes     []string `json:"disabled_types"`
+		QuietHoursEnabled *bool    `json:"quiet_hours_enabled"`
+		QuietHoursStart   *string  `json:"quiet_hours_start"`
+		QuietHoursEnd     *string  `json:"quiet_hours_end"`
+		DigestEnabled     *bool    `json:"digest_enabled"`
+		DigestFrequency   *string  `json:"digest_frequency"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
