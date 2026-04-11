@@ -50,15 +50,26 @@ func GetFormsForVertical(w http.ResponseWriter, r *http.Request) {
 		verticalID = businessVertical.ID.String()
 	}
 
+	// Mobile clients (Dart/Flutter) must never see inactive forms — users cannot
+	// activate forms from mobile and inactive forms break the mobile UX.
+	// Web super admins see ALL forms (active + inactive) so they can manage them.
+	// Web regular users only see active forms.
+	isMobileClient := strings.Contains(r.Header.Get("User-Agent"), "Dart")
+	isSuperAdmin := user.HasPermission("admin_all") || user.HasPermission("super_admin") || user.HasPermission("*:*:*")
+	filterInactive := isMobileClient || !isSuperAdmin
+
 	// Get forms for this vertical using JSONB contains operator.
 	// Include forms with empty accessible_verticals (globally accessible forms).
 	var forms []models.AppForm
 	query := config.DB.
 		Preload("Module").
-		Where("is_active = ?", true).
 		Where("accessible_verticals = '[]'::jsonb OR accessible_verticals @> ? OR accessible_verticals @> ? OR accessible_verticals @> ?",
 			`["`+verticalCode+`"]`, `["`+canonicalCode+`"]`, `["`+verticalID+`"]`).
 		Order("display_order ASC, title ASC")
+
+	if filterInactive {
+		query = query.Where("is_active = ?", true)
+	}
 
 	if err := query.Find(&forms).Error; err != nil {
 		log.Printf("❌ Error fetching forms: %v", err)

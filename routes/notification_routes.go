@@ -19,20 +19,14 @@ func RegisterNotificationRoutes(api *mux.Router, admin *mux.Router) {
 	// Get notifications for current user
 	api.HandleFunc("/notifications", notifHandler.GetNotifications).Methods("GET")
 
-	// Get single notification
-	api.HandleFunc("/notifications/{id}", notifHandler.GetNotification).Methods("GET")
-
-	// Mark notification as read
-	api.HandleFunc("/notifications/{id}/read", notifHandler.MarkNotificationAsRead).Methods("PATCH")
-
-	// Mark all notifications as read
-	api.HandleFunc("/notifications/read-all", notifHandler.MarkAllNotificationsAsRead).Methods("PATCH")
-
-	// Delete notification
-	api.HandleFunc("/notifications/{id}", notifHandler.DeleteNotification).Methods("DELETE")
+	// ⚠️ Specific paths MUST be registered before parameterized {id} routes
+	// so gorilla/mux matches them correctly.
 
 	// Get unread count
 	api.HandleFunc("/notifications/unread-count", notifHandler.GetUnreadCount).Methods("GET")
+
+	// Mark all notifications as read
+	api.HandleFunc("/notifications/read-all", notifHandler.MarkAllNotificationsAsRead).Methods("PATCH")
 
 	// Get user preferences
 	api.HandleFunc("/notifications/preferences", notifHandler.GetNotificationPreferences).Methods("GET")
@@ -42,6 +36,16 @@ func RegisterNotificationRoutes(api *mux.Router, admin *mux.Router) {
 
 	// Server-Sent Events stream for real-time notifications
 	api.HandleFunc("/notifications/stream", notifHandler.StreamNotifications).Methods("GET")
+
+	// Parameterized routes LAST so they don't swallow specific paths above
+	// Get single notification
+	api.HandleFunc("/notifications/{id}", notifHandler.GetNotification).Methods("GET")
+
+	// Mark notification as read
+	api.HandleFunc("/notifications/{id}/read", notifHandler.MarkNotificationAsRead).Methods("PATCH")
+
+	// Delete notification
+	api.HandleFunc("/notifications/{id}", notifHandler.DeleteNotification).Methods("DELETE")
 
 	// Admin notification endpoints (require admin permissions)
 	// These routes are under /api/v1/admin/notifications
