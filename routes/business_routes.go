@@ -83,6 +83,8 @@ func registerGlobalAdminRoutes(admin *mux.Router) {
 		http.HandlerFunc(handlers.CreateForm))).Methods("POST")
 	admin.Handle("/app-forms/{formCode}", middleware.RequirePermission("admin_all")(
 		http.HandlerFunc(handlers.UpdateForm))).Methods("PUT")
+	admin.Handle("/app-forms/{formCode}/status", middleware.RequirePermission("admin_all")(
+		http.HandlerFunc(handlers.ToggleFormStatus))).Methods("PATCH")
 	admin.Handle("/app-forms/{formCode}/verticals", middleware.RequirePermission("admin_all")(
 		http.HandlerFunc(handlers.UpdateFormVerticalAccess))).Methods("POST")
 

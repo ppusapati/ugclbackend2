@@ -372,6 +372,59 @@ func generateTableName(formCode string) string {
 	return name
 }
 
+// ToggleFormStatus activates or deactivates a form (admin only)
+// PATCH /api/v1/admin/app-forms/{formCode}/status
+func ToggleFormStatus(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetClaims(r)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var user models.User
+	if err := config.DB.First(&user, "id = ?", claims.UserID).Error; err != nil {
+		http.Error(w, "user not found", http.StatusUnauthorized)
+		return
+	}
+
+	vars := mux.Vars(r)
+	formCode := vars["formCode"]
+
+	var body struct {
+		IsActive bool `json:"is_active"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	var form models.AppForm
+	if err := config.DB.Where("code = ?", formCode).First(&form).Error; err != nil {
+		http.Error(w, "form not found", http.StatusNotFound)
+		return
+	}
+
+	form.IsActive = body.IsActive
+	if err := config.DB.Save(&form).Error; err != nil {
+		log.Printf("❌ Error updating form status: %v", err)
+		http.Error(w, "failed to update form status", http.StatusInternalServerError)
+		return
+	}
+
+	status := "inactive"
+	if body.IsActive {
+		status = "active"
+	}
+	log.Printf("✅ Form %s marked %s by %s", formCode, status, claims.UserID)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message":   "form status updated successfully",
+		"form_code": formCode,
+		"is_active": body.IsActive,
+	})
+}
+
 // UpdateForm updates an existing form (admin only)
 // PUT /api/v1/admin/app-forms/{formCode}
 func UpdateForm(w http.ResponseWriter, r *http.Request) {
@@ -398,10 +451,17 @@ func UpdateForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse update request
-	var updateData models.AppForm
-	if err := json.NewDecoder(r.Body).Decode(&updateData); err != nil {
+	// Parse update request — read raw bytes first to detect explicit is_active
+	var payload map[string]json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		log.Printf("❌ Error decoding update request for form %s: %v", formCode, err)
+		http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	bodyBytes, _ := json.Marshal(payload)
+	var updateData models.AppForm
+	if err := json.Unmarshal(bodyBytes, &updateData); err != nil {
+		log.Printf("❌ Error parsing update body for form %s: %v", formCode, err)
 		http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -450,6 +510,10 @@ func UpdateForm(w http.ResponseWriter, r *http.Request) {
 	}
 	if updateData.DBTableName != "" {
 		existingForm.DBTableName = updateData.DBTableName
+	}
+	// Honour explicit is_active when sent in payload
+	if _, hasIsActive := payload["is_active"]; hasIsActive {
+		existingForm.IsActive = updateData.IsActive
 	}
 
 	// Save updates
