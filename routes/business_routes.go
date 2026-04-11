@@ -81,12 +81,14 @@ func registerGlobalAdminRoutes(admin *mux.Router) {
 		http.HandlerFunc(handlers.GetAllAppForms))).Methods("GET")
 	admin.Handle("/app-forms", middleware.RequirePermission("admin_all")(
 		http.HandlerFunc(handlers.CreateForm))).Methods("POST")
-	admin.Handle("/app-forms/{formCode}", middleware.RequirePermission("admin_all")(
-		http.HandlerFunc(handlers.UpdateForm))).Methods("PUT")
+	// More specific routes FIRST (with path segments)
 	admin.Handle("/app-forms/{formCode}/status", middleware.RequirePermission("admin_all")(
 		http.HandlerFunc(handlers.ToggleFormStatus))).Methods("PATCH")
 	admin.Handle("/app-forms/{formCode}/verticals", middleware.RequirePermission("admin_all")(
 		http.HandlerFunc(handlers.UpdateFormVerticalAccess))).Methods("POST")
+	// General form routes LAST
+	admin.Handle("/app-forms/{formCode}", middleware.RequirePermission("admin_all")(
+		http.HandlerFunc(handlers.UpdateForm))).Methods("PUT")
 
 	// Workflow management
 	admin.Handle("/workflows", middleware.RequirePermission("super_admin")(
