@@ -4,10 +4,10 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/UGCL/backend/config"
-	"github.com/UGCL/backend/models"
-	"github.com/UGCL/backend/utils"
 	"github.com/gin-gonic/gin"
+	"p9e.in/ugcl/config"
+	"p9e.in/ugcl/models"
+	"p9e.in/ugcl/utils"
 )
 
 // WebhookEventTriggerMiddleware intercepts API calls and triggers webhooks

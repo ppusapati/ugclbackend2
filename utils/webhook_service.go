@@ -6,7 +6,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/UGCL/backend/models"
+	"gorm.io/datatypes"
+	"p9e.in/ugcl/models"
 	"gorm.io/gorm"
 )
 
@@ -84,7 +85,12 @@ func (ws *WebhookService) TriggerWebhook(eventType models.WebhookEventType, reso
 
 			// Marshal payload to JSON
 			payloadJSON, _ := json.Marshal(payload)
-			delivery.Payload = payloadJSON
+			var payloadMap datatypes.JSONMap
+			if err := json.Unmarshal(payloadJSON, &payloadMap); err != nil {
+				log.Printf("Failed to prepare webhook payload: %v", err)
+				continue
+			}
+			delivery.Payload = payloadMap
 
 			if err := ws.db.Create(delivery).Error; err != nil {
 				log.Printf("Failed to create webhook delivery: %v", err)
@@ -92,7 +98,7 @@ func (ws *WebhookService) TriggerWebhook(eventType models.WebhookEventType, reso
 			}
 
 			// Send webhook asynchronously
-			go ws.sendWebhookDelivery(webhook, delivery, payload)
+			go ws.sendWebhookDelivery(&webhook, delivery, payload)
 		}
 	}
 
@@ -102,11 +108,7 @@ func (ws *WebhookService) TriggerWebhook(eventType models.WebhookEventType, reso
 // shouldTriggerWebhook checks if webhook should be triggered based on configuration
 func (ws *WebhookService) shouldTriggerWebhook(webhook *models.Webhook, eventType models.WebhookEventType, resourceType string) bool {
 	// Check event type
-	var events []string
-	if err := json.Unmarshal(webhook.Events, &events); err != nil {
-		log.Printf("Failed to unmarshal events: %v", err)
-		return false
-	}
+	events := []string(webhook.Events)
 
 	eventMatches := false
 	for _, event := range events {
@@ -121,11 +123,7 @@ func (ws *WebhookService) shouldTriggerWebhook(webhook *models.Webhook, eventTyp
 	}
 
 	// Check resource type (if specified)
-	var resourceTypes []string
-	if err := json.Unmarshal(webhook.ResourceTypes, &resourceTypes); err != nil {
-		log.Printf("Failed to unmarshal resource types: %v", err)
-		return false
-	}
+	resourceTypes := []string(webhook.ResourceTypes)
 
 	// If no resource types specified, trigger for all
 	if len(resourceTypes) == 0 {
@@ -143,9 +141,9 @@ func (ws *WebhookService) shouldTriggerWebhook(webhook *models.Webhook, eventTyp
 
 // sendWebhookDelivery sends a webhook delivery with retry logic
 func (ws *WebhookService) sendWebhookDelivery(webhook *models.Webhook, delivery *models.WebhookDelivery, payload *models.WebhookPayload) {
-	var headers map[string]string
-	if err := json.Unmarshal(webhook.Headers, &headers); err != nil {
-		headers = make(map[string]string)
+	headers := make(map[string]string)
+	for key, value := range webhook.Headers {
+		headers[key] = fmt.Sprint(value)
 	}
 
 	req := &WebhookDeliveryRequest{
@@ -233,7 +231,12 @@ func (ws *WebhookService) RetryFailedDeliveries() error {
 		}
 
 		var payload models.WebhookPayload
-		if err := json.Unmarshal(delivery.Payload, &payload); err != nil {
+		payloadJSON, err := json.Marshal(delivery.Payload)
+		if err != nil {
+			continue
+		}
+
+		if err := json.Unmarshal(payloadJSON, &payload); err != nil {
 			continue
 		}
 
@@ -325,7 +328,11 @@ func (ws *WebhookService) TestWebhookDelivery(webhookID uint) error {
 	}
 
 	payloadJSON, _ := json.Marshal(payload)
-	delivery.Payload = payloadJSON
+	var payloadMap datatypes.JSONMap
+	if err := json.Unmarshal(payloadJSON, &payloadMap); err != nil {
+		return err
+	}
+	delivery.Payload = payloadMap
 
 	if err := ws.db.Create(delivery).Error; err != nil {
 		return err

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/google/uuid"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
@@ -30,10 +31,9 @@ const (
 type Webhook struct {
 	ID            uint                   `gorm:"primaryKey" json:"id"`
 	BusinessID    uint                   `gorm:"index" json:"business_id"`
-	Business      *Business              `json:"business,omitempty"`
 	URL           string                 `gorm:"type:text" json:"url"`
-	Events        datatypes.JSONSlice    `gorm:"type:jsonb" json:"events"`
-	ResourceTypes datatypes.JSONSlice    `gorm:"type:jsonb" json:"resource_types"` // e.g., ["User", "Site", "Report"]
+	Events        datatypes.JSONSlice[string] `gorm:"type:jsonb" json:"events"`
+	ResourceTypes datatypes.JSONSlice[string] `gorm:"type:jsonb" json:"resource_types"` // e.g., ["User", "Site", "Report"]
 	Secret        string                 `gorm:"type:text" json:"secret"`           // For HMAC signature
 	Headers       datatypes.JSONMap      `gorm:"type:jsonb" json:"headers"`         // Custom headers to send
 	Status        WebhookStatus          `gorm:"type:varchar(20)" json:"status"`
@@ -95,7 +95,7 @@ type WebhookPayload struct {
 // NewWebhookPayload creates a new webhook payload
 func NewWebhookPayload(eventType WebhookEventType, resourceType string, resourceID string, businessID uint, data map[string]interface{}) *WebhookPayload {
 	return &WebhookPayload{
-		ID:           GenerateUUID(),
+		ID:           uuid.NewString(),
 		Event:        eventType,
 		ResourceType: resourceType,
 		ResourceID:   resourceID,

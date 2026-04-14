@@ -4,7 +4,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/UGCL/backend/config"
+	"p9e.in/ugcl/config"
 )
 
 // WebhookRetryScheduler manages periodic webhook retry attempts

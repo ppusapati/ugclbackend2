@@ -1,9 +1,8 @@
 package routes
 
 import (
-	"github.com/UGCL/backend/handlers"
-	"github.com/UGCL/backend/middleware"
 	"github.com/gin-gonic/gin"
+	"p9e.in/ugcl/handlers"
 )
 
 // RegisterWebhookRoutes registers all webhook-related routes
@@ -13,8 +12,6 @@ func RegisterWebhookRoutes(router *gin.Engine) {
 
 	// Protected webhook management routes
 	webhookGroup := router.Group("/api/v1/webhooks")
-	webhookGroup.Use(middleware.SecurityMiddleware)
-	webhookGroup.Use(middleware.JWTMiddleware)
 
 	// CRUD operations
 	webhookGroup.POST("", handlers.CreateWebhook)

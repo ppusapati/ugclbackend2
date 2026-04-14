@@ -5,7 +5,6 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
-	"p9e.in/ugcl/utils"
 )
 
 // Permission represents a specific action that can be performed
@@ -52,7 +51,7 @@ func (r *Role) BeforeCreate(tx *gorm.DB) (err error) {
 // HasPermission checks if a role has a specific permission (supports wildcards)
 func (r *Role) HasPermission(permissionName string) bool {
 	for _, perm := range r.Permissions {
-		if utils.MatchesPermission(perm.Name, permissionName) {
+		if matchesPermission(perm.Name, permissionName) {
 			return true
 		}
 	}

@@ -6,7 +6,6 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
-	"p9e.in/ugcl/utils"
 )
 
 type User struct {
@@ -37,7 +36,7 @@ func (u *User) HasPermission(permissionName string) bool {
 	if u.RoleModel != nil {
 		// Check for wildcard or exact match
 		for _, perm := range u.RoleModel.Permissions {
-			if utils.MatchesPermission(perm.Name, permissionName) {
+			if matchesPermission(perm.Name, permissionName) {
 				return true
 			}
 		}
@@ -137,7 +136,7 @@ func (u *User) HasPermissionInVertical(permission string, verticalID uuid.UUID) 
 			ubr.BusinessRole.BusinessVerticalID == verticalID {
 			// Check if this business role has the permission (supports wildcards)
 			for _, perm := range ubr.BusinessRole.Permissions {
-				if utils.MatchesPermission(perm.Name, permission) {
+				if matchesPermission(perm.Name, permission) {
 					return true
 				}
 			}

@@ -1,7 +1,7 @@
 package migrations
 
 import (
-	"github.com/UGCL/backend/models"
+	"p9e.in/ugcl/models"
 	"gorm.io/gorm"
 )
 

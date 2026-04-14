@@ -2,6 +2,7 @@ package utils
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -10,6 +11,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // WebhookDeliveryConfig holds configuration for webhook deliveries
@@ -39,6 +42,30 @@ func GenerateHMACSignature(payload []byte, secret string) string {
 	h := hmac.New(sha256.New, []byte(secret))
 	h.Write(payload)
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// GenerateUUID returns a random UUID string.
+func GenerateUUID() string {
+	return uuid.NewString()
+}
+
+// GenerateRandomString returns a secure random hexadecimal string.
+func GenerateRandomString(length int) string {
+	if length <= 0 {
+		return ""
+	}
+
+	byteLen := (length + 1) / 2
+	b := make([]byte, byteLen)
+	if _, err := rand.Read(b); err != nil {
+		return uuid.NewString()
+	}
+
+	s := hex.EncodeToString(b)
+	if len(s) > length {
+		return s[:length]
+	}
+	return s
 }
 
 // VerifyHMACSignature verifies webhook signature

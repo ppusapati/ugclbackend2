@@ -1,16 +1,16 @@
 package handlers
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
 
-	"github.com/UGCL/backend/config"
-	"github.com/UGCL/backend/middleware"
-	"github.com/UGCL/backend/models"
-	"github.com/UGCL/backend/utils"
 	"github.com/gin-gonic/gin"
+	"gorm.io/datatypes"
+	"p9e.in/ugcl/config"
+	"p9e.in/ugcl/middleware"
+	"p9e.in/ugcl/models"
+	"p9e.in/ugcl/utils"
 )
 
 // CreateWebhookRequest represents the request body for creating a webhook
@@ -72,18 +72,18 @@ func CreateWebhook(c *gin.Context) {
 		retryInterval = 300
 	}
 
-	// Marshal events and resource types to JSON
-	eventsJSON, _ := json.Marshal(req.Events)
-	resourceTypesJSON, _ := json.Marshal(req.ResourceTypes)
-	headersJSON, _ := json.Marshal(req.Headers)
+	headers := make(datatypes.JSONMap, len(req.Headers))
+	for key, value := range req.Headers {
+		headers[key] = value
+	}
 
 	webhook := &models.Webhook{
 		BusinessID:    businessID,
 		URL:           req.URL,
-		Events:        eventsJSON,
-		ResourceTypes: resourceTypesJSON,
+		Events:        datatypes.JSONSlice[string](req.Events),
+		ResourceTypes: datatypes.JSONSlice[string](req.ResourceTypes),
 		Secret:        req.Secret,
-		Headers:       headersJSON,
+		Headers:       headers,
 		MaxRetries:    maxRetries,
 		RetryInterval: retryInterval,
 		IsActive:      true,
@@ -213,16 +213,17 @@ func UpdateWebhook(c *gin.Context) {
 		webhook.URL = req.URL
 	}
 	if len(req.Events) > 0 {
-		eventsJSON, _ := json.Marshal(req.Events)
-		webhook.Events = eventsJSON
+		webhook.Events = datatypes.JSONSlice[string](req.Events)
 	}
 	if len(req.ResourceTypes) > 0 {
-		resourceTypesJSON, _ := json.Marshal(req.ResourceTypes)
-		webhook.ResourceTypes = resourceTypesJSON
+		webhook.ResourceTypes = datatypes.JSONSlice[string](req.ResourceTypes)
 	}
 	if len(req.Headers) > 0 {
-		headersJSON, _ := json.Marshal(req.Headers)
-		webhook.Headers = headersJSON
+		headers := make(datatypes.JSONMap, len(req.Headers))
+		for key, value := range req.Headers {
+			headers[key] = value
+		}
+		webhook.Headers = headers
 	}
 	if req.MaxRetries > 0 {
 		webhook.MaxRetries = req.MaxRetries
