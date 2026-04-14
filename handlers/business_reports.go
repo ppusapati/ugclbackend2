@@ -3,9 +3,12 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
+	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/middleware"
+	"p9e.in/ugcl/models"
 )
 
 // GetBusinessSiteReports returns site reports filtered by business vertical
@@ -16,15 +19,26 @@ func GetBusinessSiteReports(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement business-filtered site reports
-	// This would filter reports based on business_vertical_id
-	
-	response := map[string]interface{}{
-		"message":     "Business site reports",
-		"business_id": businessID,
-		"data":        []interface{}{}, // Placeholder
+	params, err := models.ParseReportParams(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
-	
+
+	if err := params.Validate(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	params.Filters["businessVerticalId"] = businessID.String()
+
+	service := models.NewReportService(config.DB, models.DprSite{})
+	response, err := service.GetReport(params)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
@@ -37,17 +51,29 @@ func CreateBusinessSiteReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement business-aware site report creation
-	// This would automatically set business_vertical_id on the report
-	
-	response := map[string]interface{}{
-		"message":     "Site report created for business",
-		"business_id": businessID,
+	var report models.DprSite
+	if err := json.NewDecoder(r.Body).Decode(&report); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
 	}
-	
+
+	report.BusinessVerticalID = businessID
+	user := middleware.GetUser(r)
+	if report.InformationEnteredBy == "" {
+		report.InformationEnteredBy = user.Name
+	}
+	if report.PhoneNumberOfInformationEnteredPerson == "" {
+		report.PhoneNumberOfInformationEnteredPerson = user.Phone
+	}
+
+	if err := config.DB.Create(&report).Error; err != nil {
+		http.Error(w, "failed to create site report", http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(response)
+	json.NewEncoder(w).Encode(report)
 }
 
 // GetBusinessMaterials returns materials filtered by business vertical
@@ -58,14 +84,26 @@ func GetBusinessMaterials(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement business-filtered materials
-	
-	response := map[string]interface{}{
-		"message":     "Business materials",
-		"business_id": businessID,
-		"data":        []interface{}{}, // Placeholder
+	params, err := models.ParseReportParams(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
-	
+
+	if err := params.Validate(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	params.Filters["businessVerticalId"] = businessID.String()
+
+	service := models.NewReportService(config.DB, models.Material{})
+	response, err := service.GetReport(params)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
@@ -78,16 +116,29 @@ func CreateBusinessMaterial(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement business-aware material creation
-	
-	response := map[string]interface{}{
-		"message":     "Material created for business",
-		"business_id": businessID,
+	var item models.Material
+	if err := json.NewDecoder(r.Body).Decode(&item); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
 	}
-	
+
+	item.BusinessVerticalID = businessID
+	user := middleware.GetUser(r)
+	if item.SiteEngineerName == "" {
+		item.SiteEngineerName = user.Name
+	}
+	if item.PhoneNumber == "" {
+		item.PhoneNumber = user.Phone
+	}
+
+	if err := config.DB.Create(&item).Error; err != nil {
+		http.Error(w, "failed to create material report", http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(response)
+	json.NewEncoder(w).Encode(item)
 }
 
 // GetBusinessAnalytics returns analytics for a specific business vertical
@@ -99,18 +150,63 @@ func GetBusinessAnalytics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	context := middleware.GetUserBusinessContext(r)
-	
-	// TODO: Implement business-specific analytics
-	// This could include KPIs, performance metrics, etc.
-	
+
+	now := time.Now()
+	startCurrentMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	startPreviousMonth := startCurrentMonth.AddDate(0, -1, 0)
+
+	var totalSiteReports int64
+	var totalMaterials int64
+	var activeSites int64
+	var activeUsers int64
+	var currentMonthSiteReports int64
+	var previousMonthSiteReports int64
+	var currentMonthMaterials int64
+	var previousMonthMaterials int64
+
+	config.DB.Model(&models.DprSite{}).Where("business_vertical_id = ?", businessID).Count(&totalSiteReports)
+	config.DB.Model(&models.Material{}).Where("business_vertical_id = ?", businessID).Count(&totalMaterials)
+	config.DB.Model(&models.Site{}).Where("business_vertical_id = ? AND is_active = ?", businessID, true).Count(&activeSites)
+
+	config.DB.Table("user_business_roles").
+		Joins("JOIN business_roles ON business_roles.id = user_business_roles.business_role_id").
+		Where("business_roles.business_vertical_id = ? AND user_business_roles.is_active = ?", businessID, true).
+		Distinct("user_business_roles.user_id").
+		Count(&activeUsers)
+
+	config.DB.Model(&models.DprSite{}).
+		Where("business_vertical_id = ? AND created_at >= ?", businessID, startCurrentMonth).
+		Count(&currentMonthSiteReports)
+	config.DB.Model(&models.DprSite{}).
+		Where("business_vertical_id = ? AND created_at >= ? AND created_at < ?", businessID, startPreviousMonth, startCurrentMonth).
+		Count(&previousMonthSiteReports)
+
+	config.DB.Model(&models.Material{}).
+		Where("business_vertical_id = ? AND created_at >= ?", businessID, startCurrentMonth).
+		Count(&currentMonthMaterials)
+	config.DB.Model(&models.Material{}).
+		Where("business_vertical_id = ? AND created_at >= ? AND created_at < ?", businessID, startPreviousMonth, startCurrentMonth).
+		Count(&previousMonthMaterials)
+
+	currentMonthTotal := currentMonthSiteReports + currentMonthMaterials
+	previousMonthTotal := previousMonthSiteReports + previousMonthMaterials
+
+	monthlyGrowth := float64(0)
+	if previousMonthTotal > 0 {
+		monthlyGrowth = (float64(currentMonthTotal-previousMonthTotal) / float64(previousMonthTotal)) * 100
+	}
+
 	response := map[string]interface{}{
-		"message":        "Business analytics",
-		"business_id":    businessID,
-		"user_context":   context,
+		"message":      "Business analytics",
+		"business_id":  businessID,
+		"user_context": context,
 		"analytics": map[string]interface{}{
-			"total_reports":   0, // Placeholder
-			"active_users":    0, // Placeholder
-			"monthly_growth":  0, // Placeholder
+			"total_reports":      totalSiteReports + totalMaterials,
+			"total_site_reports": totalSiteReports,
+			"total_materials":    totalMaterials,
+			"active_users":       activeUsers,
+			"active_sites":       activeSites,
+			"monthly_growth":     monthlyGrowth,
 		},
 	}
 	

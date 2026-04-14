@@ -147,6 +147,7 @@ type AppFormDTO struct {
 	RequiredPermission  string   `json:"required_permission,omitempty"`
 	AccessibleVerticals []string `json:"accessible_verticals,omitempty"`
 	DisplayOrder        int      `json:"display_order"`
+	IsActive            bool     `json:"is_active"`
 }
 
 // ToDTO converts an AppForm to AppFormDTO
@@ -166,6 +167,7 @@ func (f *AppForm) ToDTO() AppFormDTO {
 		RequiredPermission:  f.RequiredPermission,
 		AccessibleVerticals: f.AccessibleVerticals,
 		DisplayOrder:        f.DisplayOrder,
+		IsActive:            f.IsActive,
 	}
 }
 
@@ -183,6 +185,7 @@ func (f *AppForm) ToDTOWithSchema() map[string]interface{} {
 		"required_permission":  dto.RequiredPermission,
 		"accessible_verticals": dto.AccessibleVerticals,
 		"display_order":        dto.DisplayOrder,
+		"is_active":            dto.IsActive,
 	}
 
 	// Include form schema if present
