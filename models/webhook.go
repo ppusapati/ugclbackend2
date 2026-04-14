@@ -29,41 +29,41 @@ const (
 
 // Webhook represents a webhook subscription
 type Webhook struct {
-	ID            uint                   `gorm:"primaryKey" json:"id"`
-	BusinessID    uint                   `gorm:"index" json:"business_id"`
-	URL           string                 `gorm:"type:text" json:"url"`
+	ID            uint                        `gorm:"primaryKey" json:"id"`
+	BusinessID    uuid.UUID                   `gorm:"type:uuid;index" json:"business_id"`
+	URL           string                      `gorm:"type:text" json:"url"`
 	Events        datatypes.JSONSlice[string] `gorm:"type:jsonb" json:"events"`
 	ResourceTypes datatypes.JSONSlice[string] `gorm:"type:jsonb" json:"resource_types"` // e.g., ["User", "Site", "Report"]
-	Secret        string                 `gorm:"type:text" json:"secret"`           // For HMAC signature
-	Headers       datatypes.JSONMap      `gorm:"type:jsonb" json:"headers"`         // Custom headers to send
-	Status        WebhookStatus          `gorm:"type:varchar(20)" json:"status"`
-	MaxRetries    int                    `gorm:"default:5" json:"max_retries"`
-	RetryInterval int                    `gorm:"default:300" json:"retry_interval"` // In seconds
-	IsActive      bool                   `gorm:"default:true;index" json:"is_active"`
-	CreatedAt     time.Time              `json:"created_at"`
-	UpdatedAt     time.Time              `json:"updated_at"`
-	DeletedAt     gorm.DeletedAt         `gorm:"index" json:"deleted_at,omitempty"`
+	Secret        string                      `gorm:"type:text" json:"secret"`          // For HMAC signature
+	Headers       datatypes.JSONMap           `gorm:"type:jsonb" json:"headers"`        // Custom headers to send
+	Status        WebhookStatus               `gorm:"type:varchar(20)" json:"status"`
+	MaxRetries    int                         `gorm:"default:5" json:"max_retries"`
+	RetryInterval int                         `gorm:"default:300" json:"retry_interval"` // In seconds
+	IsActive      bool                        `gorm:"default:true;index" json:"is_active"`
+	CreatedAt     time.Time                   `json:"created_at"`
+	UpdatedAt     time.Time                   `json:"updated_at"`
+	DeletedAt     gorm.DeletedAt              `gorm:"index" json:"deleted_at,omitempty"`
 }
 
 // WebhookDelivery represents a single webhook delivery attempt
 type WebhookDelivery struct {
-	ID            uint              `gorm:"primaryKey" json:"id"`
-	WebhookID     uint              `gorm:"index" json:"webhook_id"`
-	Webhook       *Webhook          `json:"webhook,omitempty"`
-	EventType     WebhookEventType  `gorm:"type:varchar(20)" json:"event_type"`
-	ResourceType  string            `json:"resource_type"`
-	ResourceID    string            `json:"resource_id"`
-	Payload       datatypes.JSONMap `gorm:"type:jsonb" json:"payload"`
-	Status        string            `gorm:"type:varchar(20)" json:"status"` // PENDING, SENT, FAILED, SUCCESS
-	HTTPStatus    int               `json:"http_status"`
-	Response      string            `gorm:"type:text" json:"response"`
-	Error         string            `gorm:"type:text" json:"error"`
-	Attempt       int               `gorm:"default:1" json:"attempt"`
-	MaxAttempts   int               `gorm:"default:5" json:"max_attempts"`
-	NextRetryAt   *time.Time        `json:"next_retry_at"`
-	SentAt        *time.Time        `json:"sent_at"`
-	CreatedAt     time.Time         `json:"created_at"`
-	UpdatedAt     time.Time         `json:"updated_at"`
+	ID           uint              `gorm:"primaryKey" json:"id"`
+	WebhookID    uint              `gorm:"index" json:"webhook_id"`
+	Webhook      *Webhook          `json:"webhook,omitempty"`
+	EventType    WebhookEventType  `gorm:"type:varchar(20)" json:"event_type"`
+	ResourceType string            `json:"resource_type"`
+	ResourceID   string            `json:"resource_id"`
+	Payload      datatypes.JSONMap `gorm:"type:jsonb" json:"payload"`
+	Status       string            `gorm:"type:varchar(20)" json:"status"` // PENDING, SENT, FAILED, SUCCESS
+	HTTPStatus   int               `json:"http_status"`
+	Response     string            `gorm:"type:text" json:"response"`
+	Error        string            `gorm:"type:text" json:"error"`
+	Attempt      int               `gorm:"default:1" json:"attempt"`
+	MaxAttempts  int               `gorm:"default:5" json:"max_attempts"`
+	NextRetryAt  *time.Time        `json:"next_retry_at"`
+	SentAt       *time.Time        `json:"sent_at"`
+	CreatedAt    time.Time         `json:"created_at"`
+	UpdatedAt    time.Time         `json:"updated_at"`
 }
 
 // WebhookLog represents a detailed log for audit purposes
@@ -82,18 +82,18 @@ type WebhookLog struct {
 
 // WebhookPayload represents the data sent to webhook consumers
 type WebhookPayload struct {
-	ID           string            `json:"id"`
-	Event        WebhookEventType  `json:"event"`
-	ResourceType string            `json:"resource_type"`
-	ResourceID   string            `json:"resource_id"`
+	ID           string                 `json:"id"`
+	Event        WebhookEventType       `json:"event"`
+	ResourceType string                 `json:"resource_type"`
+	ResourceID   string                 `json:"resource_id"`
 	Data         map[string]interface{} `json:"data"`
-	Timestamp    time.Time         `json:"timestamp"`
-	BusinessID   uint              `json:"business_id"`
-	Version      string            `json:"version"`
+	Timestamp    time.Time              `json:"timestamp"`
+	BusinessID   uuid.UUID              `json:"business_id"`
+	Version      string                 `json:"version"`
 }
 
 // NewWebhookPayload creates a new webhook payload
-func NewWebhookPayload(eventType WebhookEventType, resourceType string, resourceID string, businessID uint, data map[string]interface{}) *WebhookPayload {
+func NewWebhookPayload(eventType WebhookEventType, resourceType string, resourceID string, businessID uuid.UUID, data map[string]interface{}) *WebhookPayload {
 	return &WebhookPayload{
 		ID:           uuid.NewString(),
 		Event:        eventType,

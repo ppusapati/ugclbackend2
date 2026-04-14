@@ -6,9 +6,10 @@ import (
 	"log"
 	"time"
 
+	"github.com/google/uuid"
 	"gorm.io/datatypes"
-	"p9e.in/ugcl/models"
 	"gorm.io/gorm"
+	"p9e.in/ugcl/models"
 )
 
 // WebhookService manages webhook operations
@@ -47,7 +48,7 @@ func (ws *WebhookService) GetWebhook(id uint) (*models.Webhook, error) {
 }
 
 // GetWebhooksByBusiness retrieves all webhooks for a business
-func (ws *WebhookService) GetWebhooksByBusiness(businessID uint) ([]models.Webhook, error) {
+func (ws *WebhookService) GetWebhooksByBusiness(businessID uuid.UUID) ([]models.Webhook, error) {
 	var webhooks []models.Webhook
 	err := ws.db.Where("business_id = ? AND is_active = true", businessID).Find(&webhooks).Error
 	return webhooks, err
@@ -59,7 +60,7 @@ func (ws *WebhookService) DeleteWebhook(id uint) error {
 }
 
 // TriggerWebhook triggers webhook deliveries for an event
-func (ws *WebhookService) TriggerWebhook(eventType models.WebhookEventType, resourceType string, resourceID string, businessID uint, data map[string]interface{}) error {
+func (ws *WebhookService) TriggerWebhook(eventType models.WebhookEventType, resourceType string, resourceID string, businessID uuid.UUID, data map[string]interface{}) error {
 	// Get active webhooks for this business
 	webhooks, err := ws.GetWebhooksByBusiness(businessID)
 	if err != nil {
@@ -74,13 +75,13 @@ func (ws *WebhookService) TriggerWebhook(eventType models.WebhookEventType, reso
 		if ws.shouldTriggerWebhook(&webhook, eventType, resourceType) {
 			// Create delivery record
 			delivery := &models.WebhookDelivery{
-				WebhookID:   webhook.ID,
-				EventType:   eventType,
+				WebhookID:    webhook.ID,
+				EventType:    eventType,
 				ResourceType: resourceType,
-				ResourceID:  resourceID,
-				Status:      "PENDING",
-				Attempt:     1,
-				MaxAttempts: webhook.MaxRetries,
+				ResourceID:   resourceID,
+				Status:       "PENDING",
+				Attempt:      1,
+				MaxAttempts:  webhook.MaxRetries,
 			}
 
 			// Marshal payload to JSON
@@ -103,6 +104,21 @@ func (ws *WebhookService) TriggerWebhook(eventType models.WebhookEventType, reso
 	}
 
 	return nil
+}
+
+// GetWebhookDelivery retrieves a delivery and its webhook for ownership checks.
+func (ws *WebhookService) GetWebhookDelivery(deliveryID uint) (*models.WebhookDelivery, *models.Webhook, error) {
+	var delivery models.WebhookDelivery
+	if err := ws.db.First(&delivery, deliveryID).Error; err != nil {
+		return nil, nil, err
+	}
+
+	var webhook models.Webhook
+	if err := ws.db.First(&webhook, delivery.WebhookID).Error; err != nil {
+		return nil, nil, err
+	}
+
+	return &delivery, &webhook, nil
 }
 
 // shouldTriggerWebhook checks if webhook should be triggered based on configuration
@@ -310,7 +326,7 @@ func (ws *WebhookService) TestWebhookDelivery(webhookID uint) error {
 
 	// Create test payload
 	testData := map[string]interface{}{
-		"test": true,
+		"test":    true,
 		"message": "This is a test webhook delivery",
 	}
 
@@ -318,13 +334,13 @@ func (ws *WebhookService) TestWebhookDelivery(webhookID uint) error {
 
 	// Create test delivery
 	delivery := &models.WebhookDelivery{
-		WebhookID:   webhook.ID,
-		EventType:   models.EventCreate,
+		WebhookID:    webhook.ID,
+		EventType:    models.EventCreate,
 		ResourceType: "Test",
-		ResourceID:  "test-123",
-		Status:      "PENDING",
-		Attempt:     1,
-		MaxAttempts: 1,
+		ResourceID:   "test-123",
+		Status:       "PENDING",
+		Attempt:      1,
+		MaxAttempts:  1,
 	}
 
 	payloadJSON, _ := json.Marshal(payload)

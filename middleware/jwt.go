@@ -170,27 +170,42 @@ type APIClientConfig struct {
 	AllowedPaths   []string        // Exact or prefix match (supports "*")
 	AllowedMethods map[string]bool // e.g., "GET": true, "POST": true
 	SkipIPCheck    bool
+	AllowedIPs     map[string]bool
 }
 
-var apiKeyConfigs = map[string]APIClientConfig{
-	os.Getenv("MOBILE_APP_KEY"): {
+var apiKeyConfigs = loadAPIKeyConfigs()
+
+// Define fixed IP whitelist for server-to-server apps (skip for mobile)
+var defaultWhitelistedIPs = map[string]bool{
+	"20.204.19.129": true,
+	"127.0.0.1":     true,
+	"::1":           true,
+}
+
+func loadAPIKeyConfigs() map[string]APIClientConfig {
+	configs := make(map[string]APIClientConfig)
+
+	addAPIKeyConfig(configs, os.Getenv("MOBILE_APP_KEY"), APIClientConfig{
 		AppName:      "MobileApp",
 		AllowedPaths: []string{"/api/v1"},
 		AllowedMethods: map[string]bool{
-			http.MethodGet:  true, // Allow GET for fetching business verticals, sites, etc.
-			http.MethodPost: true, // Allow POST for form submissions
+			http.MethodGet:  true,
+			http.MethodPost: true,
 		},
 		SkipIPCheck: true,
-	},
-	os.Getenv("PARTNER_PORTAL_KEY"): {
+	})
+
+	addAPIKeyConfig(configs, os.Getenv("PARTNER_PORTAL_KEY"), APIClientConfig{
 		AppName:      "PartnerPortal",
 		AllowedPaths: []string{"/api/v1"},
 		AllowedMethods: map[string]bool{
 			http.MethodGet: true,
 		},
 		SkipIPCheck: false,
-	},
-	os.Getenv("INTERNAL_OPS_KEY"): {
+		AllowedIPs:  buildAllowedIPsFromEnv("PARTNER_PORTAL_ALLOWED_IPS"),
+	})
+
+	addAPIKeyConfig(configs, os.Getenv("INTERNAL_OPS_KEY"), APIClientConfig{
 		AppName:      "InternalOps",
 		AllowedPaths: []string{"/api/v1/*"},
 		AllowedMethods: map[string]bool{
@@ -201,14 +216,81 @@ var apiKeyConfigs = map[string]APIClientConfig{
 			http.MethodDelete: true,
 		},
 		SkipIPCheck: true,
-	},
+	})
+
+	addAPIKeyConfig(configs, os.Getenv("THIRD_PARTY_SYNC_KEY"), APIClientConfig{
+		AppName: "ThirdPartySync",
+		AllowedPaths: []string{
+			"/api/v1/integrations/*",
+			"/api/v1/webhooks/incoming",
+			"/api/v1/webhooks/incoming/",
+		},
+		AllowedMethods: map[string]bool{
+			http.MethodGet:  true,
+			http.MethodPost: true,
+		},
+		SkipIPCheck: false,
+		AllowedIPs:  buildAllowedIPsFromEnv("THIRD_PARTY_SYNC_ALLOWED_IPS"),
+	})
+
+	addAPIKeyConfig(configs, os.Getenv("THIRD_PARTY_PROVIDER_A_KEY"), APIClientConfig{
+		AppName: "ThirdPartyProviderA",
+		AllowedPaths: []string{
+			"/api/v1/integrations/provider-a/*",
+			"/api/v1/webhooks/incoming/provider-a",
+		},
+		AllowedMethods: map[string]bool{
+			http.MethodGet:  true,
+			http.MethodPost: true,
+		},
+		SkipIPCheck: false,
+		AllowedIPs:  buildAllowedIPsFromEnv("THIRD_PARTY_PROVIDER_A_ALLOWED_IPS"),
+	})
+
+	addAPIKeyConfig(configs, os.Getenv("THIRD_PARTY_PROVIDER_B_KEY"), APIClientConfig{
+		AppName: "ThirdPartyProviderB",
+		AllowedPaths: []string{
+			"/api/v1/integrations/provider-b/*",
+			"/api/v1/webhooks/incoming/provider-b",
+		},
+		AllowedMethods: map[string]bool{
+			http.MethodGet:  true,
+			http.MethodPost: true,
+		},
+		SkipIPCheck: false,
+		AllowedIPs:  buildAllowedIPsFromEnv("THIRD_PARTY_PROVIDER_B_ALLOWED_IPS"),
+	})
+
+	return configs
 }
 
-// Define fixed IP whitelist for server-to-server apps (skip for mobile)
-var whitelistedIPs = map[string]bool{
-	"20.204.19.129": true,
-	"127.0.0.1":     true,
-	"::1":           true,
+func addAPIKeyConfig(configs map[string]APIClientConfig, key string, cfg APIClientConfig) {
+	if strings.TrimSpace(key) == "" {
+		return
+	}
+	configs[key] = cfg
+}
+
+func buildAllowedIPsFromEnv(envName string) map[string]bool {
+	allowed := make(map[string]bool)
+
+	for ip := range defaultWhitelistedIPs {
+		allowed[ip] = true
+	}
+
+	raw := strings.TrimSpace(os.Getenv(envName))
+	if raw == "" {
+		return allowed
+	}
+
+	for _, part := range strings.Split(raw, ",") {
+		ip := strings.TrimSpace(part)
+		if ip != "" {
+			allowed[ip] = true
+		}
+	}
+
+	return allowed
 }
 
 // SecurityMiddleware enforces API key, IP filtering, and logging
@@ -223,10 +305,17 @@ func SecurityMiddleware(next http.Handler) http.Handler {
 		}
 
 		clientIP := getClientIP(r)
-		if !clientConfig.SkipIPCheck && !whitelistedIPs[clientIP] {
-			http.Error(w, "Access from this IP is not allowed", http.StatusForbidden)
-			log.Printf("[SECURITY] 🚫 Blocked - IP not whitelisted. App=%s IP=%s Path=%s", clientConfig.AppName, clientIP, r.URL.Path)
-			return
+		if !clientConfig.SkipIPCheck {
+			allowedIPs := clientConfig.AllowedIPs
+			if len(allowedIPs) == 0 {
+				allowedIPs = defaultWhitelistedIPs
+			}
+
+			if !allowedIPs[clientIP] {
+				http.Error(w, "Access from this IP is not allowed", http.StatusForbidden)
+				log.Printf("[SECURITY] 🚫 Blocked - IP not whitelisted. App=%s IP=%s Path=%s", clientConfig.AppName, clientIP, r.URL.Path)
+				return
+			}
 		}
 
 		// ✅ Path-based access check

@@ -318,6 +318,36 @@ func Migrations(db *gorm.DB) error {
 				return nil
 			},
 		},
+		{
+			ID: "20260414_webhook_and_active_business_context",
+			Migrate: func(tx *gorm.DB) error {
+				if err := tx.AutoMigrate(
+					&models.Webhook{},
+					&models.WebhookDelivery{},
+					&models.WebhookLog{},
+					&models.UserActiveBusinessContext{},
+				); err != nil {
+					return err
+				}
+
+				indexes := []string{
+					"CREATE INDEX IF NOT EXISTS idx_webhooks_business_id_is_active ON webhooks(business_id, is_active)",
+					"CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_webhook_id_status ON webhook_deliveries(webhook_id, status)",
+					"CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_status_next_retry ON webhook_deliveries(status, next_retry_at) WHERE status = 'RETRY_SCHEDULED'",
+					"CREATE INDEX IF NOT EXISTS idx_webhook_logs_webhook_id ON webhook_logs(webhook_id)",
+					"CREATE INDEX IF NOT EXISTS idx_webhook_logs_delivery_id ON webhook_logs(delivery_id)",
+					"CREATE INDEX IF NOT EXISTS idx_user_active_business_user_client ON user_active_business_contexts(user_id, client_key)",
+				}
+
+				for _, idx := range indexes {
+					if err := tx.Exec(idx).Error; err != nil {
+						return err
+					}
+				}
+
+				return nil
+			},
+		},
 	})
 
 	return m.Migrate()

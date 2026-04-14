@@ -2,8 +2,8 @@ package utils
 
 import (
 	"bytes"
-	"crypto/rand"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -28,11 +28,11 @@ func DefaultWebhookConfig() *WebhookDeliveryConfig {
 		DefaultTimeout:    10 * time.Second,
 		DefaultMaxRetries: 5,
 		RetryDelays: map[int]time.Duration{
-			1: 30 * time.Second,      // 30 seconds
-			2: 2 * time.Minute,       // 2 minutes
-			3: 5 * time.Minute,       // 5 minutes
-			4: 15 * time.Minute,      // 15 minutes
-			5: 1 * time.Hour,         // 1 hour
+			1: 30 * time.Second, // 30 seconds
+			2: 2 * time.Minute,  // 2 minutes
+			3: 5 * time.Minute,  // 5 minutes
+			4: 15 * time.Minute, // 15 minutes
+			5: 1 * time.Hour,    // 1 hour
 		},
 	}
 }
@@ -95,6 +95,7 @@ func SendWebhook(req *WebhookDeliveryRequest) (*http.Response, error) {
 
 	// Generate signature
 	signature := GenerateHMACSignature(payloadBytes, req.Secret)
+	timestamp := time.Now().UTC().Format(time.RFC3339)
 
 	// Create HTTP request
 	httpReq, err := http.NewRequest(http.MethodPost, req.URL, bytes.NewReader(payloadBytes))
@@ -105,6 +106,7 @@ func SendWebhook(req *WebhookDeliveryRequest) (*http.Response, error) {
 	// Set standard headers
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("X-Webhook-Signature", signature)
+	httpReq.Header.Set("X-Webhook-Timestamp", timestamp)
 	httpReq.Header.Set("X-Webhook-Delivery-ID", GenerateUUID())
 	httpReq.Header.Set("X-Webhook-Attempt", fmt.Sprintf("%d", req.Attempt))
 	httpReq.Header.Set("X-Webhook-Max-Retries", fmt.Sprintf("%d", req.MaxRetries))

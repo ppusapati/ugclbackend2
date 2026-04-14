@@ -15,13 +15,13 @@ import (
 
 // CreateWebhookRequest represents the request body for creating a webhook
 type CreateWebhookRequest struct {
-	URL           string        `json:"url" binding:"required,url"`
-	Events        []string      `json:"events" binding:"required"`
-	ResourceTypes []string      `json:"resource_types"`
-	Secret        string        `json:"secret"`
+	URL           string            `json:"url" binding:"required,url"`
+	Events        []string          `json:"events" binding:"required"`
+	ResourceTypes []string          `json:"resource_types"`
+	Secret        string            `json:"secret"`
 	Headers       map[string]string `json:"headers"`
-	MaxRetries    int           `json:"max_retries"`
-	RetryInterval int           `json:"retry_interval"`
+	MaxRetries    int               `json:"max_retries"`
+	RetryInterval int               `json:"retry_interval"`
 }
 
 // UpdateWebhookRequest represents the request body for updating a webhook
@@ -53,7 +53,7 @@ func CreateWebhook(c *gin.Context) {
 		return
 	}
 
-	// Extract business ID from JWT claims
+	// Extract validated active business ID from context.
 	businessID, exists := middleware.GetBusinessIDFromContext(c)
 	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Business ID not found"})
@@ -351,7 +351,24 @@ func GetWebhookDeliveryHistory(c *gin.Context) {
 		}
 	}
 
+	businessID, exists := middleware.GetBusinessIDFromContext(c)
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Business ID not found"})
+		return
+	}
+
 	webhookService := utils.NewWebhookService(config.DB)
+	webhook, err := webhookService.GetWebhook(uint(id))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Webhook not found"})
+		return
+	}
+
+	if webhook.BusinessID != businessID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
+		return
+	}
+
 	deliveries, err := webhookService.GetDeliveryHistory(uint(id), limit)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Delivery history not found"})
@@ -377,12 +394,29 @@ func GetDeliveryLogs(c *gin.Context) {
 		return
 	}
 
+	businessID, exists := middleware.GetBusinessIDFromContext(c)
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Business ID not found"})
+		return
+	}
+
 	webhookService := utils.NewWebhookService(config.DB)
+	delivery, webhook, err := webhookService.GetWebhookDelivery(uint(deliveryID))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Webhook delivery not found"})
+		return
+	}
+
+	if webhook.BusinessID != businessID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
+		return
+	}
+
 	logs, err := webhookService.GetDeliveryLogs(uint(deliveryID))
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Delivery logs not found"})
 		return
 	}
 
-	c.JSON(http.StatusOK, logs)
+	c.JSON(http.StatusOK, gin.H{"delivery_id": delivery.ID, "logs": logs})
 }

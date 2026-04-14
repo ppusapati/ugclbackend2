@@ -90,9 +90,23 @@ func resolveBusinessIdentifier(identifier string) uuid.UUID {
 	return uuid.Nil
 }
 
+// ResolveBusinessIdentifier resolves a business code, name, or UUID to a business UUID.
+func ResolveBusinessIdentifier(identifier string) uuid.UUID {
+	return resolveBusinessIdentifier(identifier)
+}
+
 // GetCurrentBusinessID returns the business ID from the current request context
 func GetCurrentBusinessID(r *http.Request) uuid.UUID {
-	return getBusinessIDFromRequest(r)
+	if businessID := getBusinessIDFromRequest(r); businessID != uuid.Nil {
+		return businessID
+	}
+
+	userCtx, err := authService.LoadUserContext(r)
+	if err != nil || userCtx == nil || userCtx.BusinessContext == nil {
+		return uuid.Nil
+	}
+
+	return userCtx.BusinessContext.BusinessID
 }
 
 // GetUserRoleLevel returns highest role level for user (lowest number = highest privilege)

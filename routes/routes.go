@@ -35,6 +35,8 @@ func RegisterRoutes() http.Handler {
 
 	// User profile endpoint
 	api.HandleFunc("/profile", handleProfile).Methods("GET")
+	api.HandleFunc("/context/business", handlers.GetActiveBusinessContext).Methods("GET")
+	api.HandleFunc("/context/business", handlers.SetActiveBusinessContext).Methods("PUT")
 
 	// Register resource routes
 	registerOperationalRoutes(api)
@@ -65,6 +67,8 @@ func RegisterRoutes() http.Handler {
 	RegisterDocumentRoutes(api, admin)
 	RegisterReportRoutes(r)
 	RegisterChatRoutes(api)
+	RegisterWebhookMuxRoutes(r)
+	RegisterIntegrationRoutes(r)
 
 	return r
 }

@@ -66,9 +66,11 @@ func (s *AuthService) LoadUserContext(r *http.Request) (*UserContext, error) {
 	// Load global permissions
 	ctx.GlobalPermissions = s.GetGlobalPermissions(user)
 
-	// Load business context if business ID is present
-	if businessID := getBusinessIDFromRequest(r); businessID != uuid.Nil {
+	// Load business context from explicit request selector or stored active business context.
+	if businessID, resolveErr := ResolveEffectiveBusinessID(r, ctx); resolveErr == nil {
 		ctx.BusinessContext = s.LoadBusinessContext(user, businessID)
+	} else if resolveErr != ErrBusinessNotSpecified {
+		return nil, resolveErr
 	}
 
 	return ctx, nil

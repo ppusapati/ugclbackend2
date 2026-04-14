@@ -52,10 +52,10 @@ func (scheduler *WebhookRetryScheduler) Stop() {
 
 // WebhookCleanupScheduler manages periodic cleanup of old webhook records
 type WebhookCleanupScheduler struct {
-	db           interface{} // *gorm.DB
-	interval     time.Duration
+	db            interface{} // *gorm.DB
+	interval      time.Duration
 	retentionDays int
-	stopChan     chan struct{}
+	stopChan      chan struct{}
 }
 
 // NewWebhookCleanupScheduler creates a new webhook cleanup scheduler

@@ -1,8 +1,8 @@
 package migrations
 
 import (
-	"p9e.in/ugcl/models"
 	"gorm.io/gorm"
+	"p9e.in/ugcl/models"
 )
 
 // CreateWebhookTables creates webhook-related tables

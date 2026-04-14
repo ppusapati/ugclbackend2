@@ -1,91 +1,51 @@
 package middleware
 
 import (
-	"fmt"
-	"strconv"
-
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 // GetBusinessIDFromContext extracts numeric business ID for webhook handlers.
-func GetBusinessIDFromContext(c *gin.Context) (uint, bool) {
+func GetBusinessIDFromContext(c *gin.Context) (uuid.UUID, bool) {
 	if c == nil {
-		return 0, false
+		return uuid.Nil, false
 	}
 
 	if id, ok := c.Get("business_id"); ok {
-		if businessID, parsed := toUint(id); parsed {
+		if businessID, parsed := toUUID(id); parsed {
 			return businessID, true
 		}
 	}
 
-	if raw := c.Param("businessId"); raw != "" {
-		if parsed, err := strconv.ParseUint(raw, 10, 64); err == nil {
-			return uint(parsed), true
+	for _, raw := range []string{
+		c.Param("businessCode"),
+		c.Param("businessId"),
+		c.Query("business_code"),
+		c.Query("business_id"),
+		c.GetHeader("X-Business-Code"),
+		c.GetHeader("X-Business-ID"),
+	} {
+		if businessID := ResolveBusinessIdentifier(raw); businessID != uuid.Nil {
+			return businessID, true
 		}
 	}
 
-	if raw := c.Query("business_id"); raw != "" {
-		if parsed, err := strconv.ParseUint(raw, 10, 64); err == nil {
-			return uint(parsed), true
-		}
-	}
-
-	if raw := c.GetHeader("X-Business-ID"); raw != "" {
-		if parsed, err := strconv.ParseUint(raw, 10, 64); err == nil {
-			return uint(parsed), true
-		}
-	}
-
-	return 0, false
+	return uuid.Nil, false
 }
 
-func toUint(v interface{}) (uint, bool) {
+func toUUID(v interface{}) (uuid.UUID, bool) {
 	switch t := v.(type) {
-	case uint:
-		return t, true
-	case uint8:
-		return uint(t), true
-	case uint16:
-		return uint(t), true
-	case uint32:
-		return uint(t), true
-	case uint64:
-		return uint(t), true
-	case int:
-		if t >= 0 {
-			return uint(t), true
-		}
-	case int8:
-		if t >= 0 {
-			return uint(t), true
-		}
-	case int16:
-		if t >= 0 {
-			return uint(t), true
-		}
-	case int32:
-		if t >= 0 {
-			return uint(t), true
-		}
-	case int64:
-		if t >= 0 {
-			return uint(t), true
-		}
-	case float64:
-		if t >= 0 {
-			return uint(t), true
+	case uuid.UUID:
+		return t, t != uuid.Nil
+	case *uuid.UUID:
+		if t != nil {
+			return *t, *t != uuid.Nil
 		}
 	case string:
-		if parsed, err := strconv.ParseUint(t, 10, 64); err == nil {
-			return uint(parsed), true
-		}
-	default:
-		s := fmt.Sprint(v)
-		if parsed, err := strconv.ParseUint(s, 10, 64); err == nil {
-			return uint(parsed), true
+		if parsed, err := uuid.Parse(t); err == nil {
+			return parsed, true
 		}
 	}
 
-	return 0, false
+	return uuid.Nil, false
 }
