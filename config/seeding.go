@@ -147,6 +147,13 @@ func SeedPermissions() {
 		{ID: uuid.New(), Name: "site:manage_access", Resource: "site", Action: "manage", Description: "Manage user access to sites"},
 		{ID: uuid.New(), Name: "site:view", Resource: "site", Action: "read", Description: "View sites"},
 
+		// Attendance Tracking
+		{ID: uuid.New(), Name: "attendance:checkin", Resource: "attendance", Action: "checkin", Description: "Check in to a site attendance session"},
+		{ID: uuid.New(), Name: "attendance:heartbeat", Resource: "attendance", Action: "heartbeat", Description: "Send attendance heartbeat updates"},
+		{ID: uuid.New(), Name: "attendance:checkout", Resource: "attendance", Action: "checkout", Description: "Check out from a site attendance session"},
+		{ID: uuid.New(), Name: "attendance:read", Resource: "attendance", Action: "read", Description: "View attendance sessions, logs, and timelines"},
+		{ID: uuid.New(), Name: "attendance:headcount", Resource: "attendance", Action: "headcount", Description: "View live attendance headcount by site"},
+
 		// ABAC & Policy Management
 		{ID: uuid.New(), Name: "manage_policies", Resource: "policy", Action: "manage", Description: "Manage access control policies"},
 		{ID: uuid.New(), Name: "manage_attributes", Resource: "attribute", Action: "manage", Description: "Manage attribute definitions"},
@@ -439,6 +446,7 @@ func getHORoles(businessID uuid.UUID) []models.BusinessRole {
 			Permissions: []models.Permission{
 				{Name: "hr:create"}, {Name: "hr:read"}, {Name: "hr:update"}, {Name: "hr:delete"},
 				{Name: "payroll:generate"}, {Name: "payroll:approve"},
+				{Name: "attendance:read"}, {Name: "attendance:headcount"},
 			},
 		},
 		{
@@ -467,6 +475,8 @@ func getWaterRoles(businessID uuid.UUID) []models.BusinessRole {
 				{Name: "report:read"}, {Name: "report:export"},
 				{Name: "document:upload"}, {Name: "document:read"}, {Name: "document:update"}, {Name: "document:delete"},
 				{Name: "site:manage_access"}, {Name: "site:view"},
+				{Name: "attendance:checkin"}, {Name: "attendance:heartbeat"}, {Name: "attendance:checkout"},
+				{Name: "attendance:read"}, {Name: "attendance:headcount"},
 			},
 		},
 		{
@@ -475,6 +485,7 @@ func getWaterRoles(businessID uuid.UUID) []models.BusinessRole {
 			Permissions: []models.Permission{
 				{Name: "project:read"}, {Name: "project:update"}, {Name: "project:assign"},
 				{Name: "planning:read"},
+				{Name: "attendance:read"}, {Name: "attendance:headcount"},
 			},
 		},
 		{
@@ -484,6 +495,7 @@ func getWaterRoles(businessID uuid.UUID) []models.BusinessRole {
 				{Name: "project:read"}, {Name: "project:update"},
 				{Name: "inventory:create"}, {Name: "inventory:read"}, {Name: "inventory:update"},
 				{Name: "water:read_consumption"}, {Name: "water:manage_supply"}, {Name: "water:quality_control"},
+				{Name: "attendance:checkin"}, {Name: "attendance:heartbeat"}, {Name: "attendance:checkout"},
 			},
 		},
 		{
@@ -493,6 +505,8 @@ func getWaterRoles(businessID uuid.UUID) []models.BusinessRole {
 				{Name: "project:read"},
 				{Name: "inventory:read"}, {Name: "inventory:update"},
 				{Name: "water:read_consumption"},
+				{Name: "attendance:checkin"}, {Name: "attendance:heartbeat"}, {Name: "attendance:checkout"},
+				{Name: "attendance:read"}, {Name: "attendance:headcount"},
 			},
 		},
 		{
@@ -502,6 +516,7 @@ func getWaterRoles(businessID uuid.UUID) []models.BusinessRole {
 				{Name: "project:read"},
 				{Name: "inventory:create"},
 				{Name: "water:read_consumption"}, {Name: "water:manage_supply"},
+				{Name: "attendance:checkin"}, {Name: "attendance:heartbeat"}, {Name: "attendance:checkout"},
 			},
 		},
 	}
@@ -522,6 +537,8 @@ func getSolarRoles(businessID uuid.UUID) []models.BusinessRole {
 				{Name: "report:read"}, {Name: "report:export"},
 				{Name: "document:upload"}, {Name: "document:read"}, {Name: "document:update"}, {Name: "document:delete"},
 				{Name: "site:manage_access"}, {Name: "site:view"},
+				{Name: "attendance:checkin"}, {Name: "attendance:heartbeat"}, {Name: "attendance:checkout"},
+				{Name: "attendance:read"}, {Name: "attendance:headcount"},
 			},
 		},
 		{
@@ -530,6 +547,7 @@ func getSolarRoles(businessID uuid.UUID) []models.BusinessRole {
 			Permissions: []models.Permission{
 				{Name: "project:read"}, {Name: "project:update"}, {Name: "project:approve"}, {Name: "project:assign"},
 				{Name: "planning:read"}, {Name: "planning:update"}, {Name: "planning:approve"},
+				{Name: "attendance:read"}, {Name: "attendance:headcount"},
 			},
 		},
 		{
@@ -537,6 +555,8 @@ func getSolarRoles(businessID uuid.UUID) []models.BusinessRole {
 			BusinessVerticalID: businessID, Level: 3, IsActive: true,
 			Permissions: []models.Permission{
 				{Name: "solar:read_generation"}, {Name: "solar:manage_panels"}, {Name: "solar:maintenance"},
+				{Name: "attendance:checkin"}, {Name: "attendance:heartbeat"}, {Name: "attendance:checkout"},
+				{Name: "attendance:read"}, {Name: "attendance:headcount"},
 			},
 		},
 	}
@@ -884,9 +904,9 @@ func SeedUsers() {
 		Name               string
 		Email              string
 		Phone              string
-		RoleID             *uuid.UUID        // Global role (for super admin)
-		BusinessVerticalID *uuid.UUID        // Primary business vertical
-		BusinessRoleID     *uuid.UUID        // Business-specific role
+		RoleID             *uuid.UUID // Global role (for super admin)
+		BusinessVerticalID *uuid.UUID // Primary business vertical
+		BusinessRoleID     *uuid.UUID // Business-specific role
 		Description        string
 	}{
 		// Super Admin - has access to everything

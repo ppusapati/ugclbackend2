@@ -23,7 +23,10 @@ type User struct {
 	UpdatedAt          time.Time
 
 	// Business role relationships
-	UserBusinessRoles []UserBusinessRole `gorm:"foreignKey:UserID"`
+	UserBusinessRoles  []UserBusinessRole  `gorm:"foreignKey:UserID"`
+	AttendanceSessions []AttendanceSession `gorm:"foreignKey:UserID"`
+	AttendanceEvents   []AttendanceEvent   `gorm:"foreignKey:UserID"`
+	TrackingPings      []TrackingPing      `gorm:"foreignKey:UserID"`
 }
 
 func (u *User) BeforeCreate(tx *gorm.DB) (err error) {

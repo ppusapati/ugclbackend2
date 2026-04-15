@@ -2,11 +2,14 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
+	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/middleware"
 	"p9e.in/ugcl/models"
 )
@@ -140,15 +143,31 @@ func GetFormSubmissions(w http.ResponseWriter, r *http.Request) {
 
 	// Convert to DTOs
 	dtos := make([]models.FormSubmissionDTO, len(submissions))
+	includeResolved := strings.EqualFold(r.URL.Query().Get("include_resolved"), "true")
+	resolvedItems := make([]map[string]interface{}, 0, len(submissions))
 	for i, sub := range submissions {
 		dtos[i] = sub.ToDTO(sub.Workflow)
+		if includeResolved {
+			fieldIndex := buildFieldSchemaIndex(&sub)
+			resolvedFields, resolvedFormData := resolveSubmissionFormData(&sub, fieldIndex)
+			resolvedItems = append(resolvedItems, map[string]interface{}{
+				"submission":         dtos[i],
+				"resolved_fields":    resolvedFields,
+				"resolved_form_data": resolvedFormData,
+			})
+		}
+	}
+
+	response := map[string]interface{}{
+		"submissions": dtos,
+		"count":       len(dtos),
+	}
+	if includeResolved {
+		response["resolved_submissions"] = resolvedItems
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"submissions": dtos,
-		"count":       len(dtos),
-	})
+	json.NewEncoder(w).Encode(response)
 }
 
 // GetFormSubmission retrieves a single submission by ID
@@ -194,6 +213,195 @@ func GetFormSubmission(w http.ResponseWriter, r *http.Request) {
 		"submission": submission.ToDTO(submission.Workflow),
 		"history":    submission.Transitions,
 	})
+}
+
+type formFieldSchema struct {
+	ID           string            `json:"id"`
+	Type         string            `json:"type"`
+	Label        string            `json:"label"`
+	Options      []formFieldOption `json:"options"`
+	DataSource   string            `json:"dataSource"`
+	APIEndpoint  string            `json:"apiEndpoint"`
+	DisplayField string            `json:"displayField"`
+	ValueField   string            `json:"valueField"`
+}
+
+type formFieldOption struct {
+	Label string      `json:"label"`
+	Value interface{} `json:"value"`
+}
+
+type formStepSchema struct {
+	Fields []formFieldSchema `json:"fields"`
+}
+
+type resolvedFieldValue struct {
+	FieldID      string      `json:"field_id"`
+	Label        string      `json:"label"`
+	Type         string      `json:"type,omitempty"`
+	RawValue     interface{} `json:"raw_value"`
+	DisplayValue interface{} `json:"display_value"`
+	Resolved     bool        `json:"resolved"`
+}
+
+// GetResolvedFormSubmission returns submission data enriched with field labels
+// and best-effort display value resolution for select fields.
+// GET /api/v1/business/{businessCode}/forms/{formCode}/submissions/{submissionId}/resolved
+func GetResolvedFormSubmission(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetClaims(r)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	vars := mux.Vars(r)
+	submissionIDStr := vars["submissionId"]
+
+	submissionID, err := uuid.Parse(submissionIDStr)
+	if err != nil {
+		http.Error(w, "invalid submission ID", http.StatusBadRequest)
+		return
+	}
+
+	submission, err := getWorkflowEngine().GetSubmission(submissionID)
+	if err != nil {
+		log.Printf("Error fetching submission: %v", err)
+		http.Error(w, "submission not found", http.StatusNotFound)
+		return
+	}
+
+	context := middleware.GetUserBusinessContext(r)
+	if context == nil {
+		http.Error(w, "business context not found", http.StatusBadRequest)
+		return
+	}
+
+	businessID, ok := context["business_id"].(uuid.UUID)
+	if !ok || submission.BusinessVerticalID != businessID {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	fieldIndex := buildFieldSchemaIndex(submission)
+	resolvedFields, resolvedFormData := resolveSubmissionFormData(submission, fieldIndex)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"submission":         submission.ToDTO(submission.Workflow),
+		"history":            submission.Transitions,
+		"resolved_fields":    resolvedFields,
+		"resolved_form_data": resolvedFormData,
+	})
+}
+
+func buildFieldSchemaIndex(submission *models.FormSubmission) map[string]formFieldSchema {
+	index := make(map[string]formFieldSchema)
+	if submission == nil || submission.Form == nil || len(submission.Form.Steps) == 0 {
+		return index
+	}
+
+	var steps []formStepSchema
+	if err := json.Unmarshal(submission.Form.Steps, &steps); err != nil {
+		return index
+	}
+
+	for _, step := range steps {
+		for _, field := range step.Fields {
+			if field.ID == "" {
+				continue
+			}
+			index[field.ID] = field
+		}
+	}
+
+	return index
+}
+
+func resolveSubmissionFormData(submission *models.FormSubmission, fieldIndex map[string]formFieldSchema) ([]resolvedFieldValue, map[string]interface{}) {
+	resolved := make([]resolvedFieldValue, 0)
+	resolvedMap := make(map[string]interface{})
+
+	if submission == nil || len(submission.FormData) == 0 {
+		return resolved, resolvedMap
+	}
+
+	var data map[string]interface{}
+	if err := json.Unmarshal(submission.FormData, &data); err != nil {
+		return resolved, resolvedMap
+	}
+
+	for fieldID, rawValue := range data {
+		schema, hasSchema := fieldIndex[fieldID]
+		label := fieldID
+		fieldType := ""
+		if hasSchema {
+			if schema.Label != "" {
+				label = schema.Label
+			}
+			fieldType = schema.Type
+		}
+
+		displayValue := rawValue
+		isResolved := false
+
+		if hasSchema {
+			if optionLabel, ok := resolveFromStaticOptions(schema.Options, rawValue); ok {
+				displayValue = optionLabel
+				isResolved = true
+			} else if siteName, ok := resolveFromSiteReference(schema, rawValue); ok {
+				displayValue = siteName
+				isResolved = true
+			}
+		}
+
+		resolved = append(resolved, resolvedFieldValue{
+			FieldID:      fieldID,
+			Label:        label,
+			Type:         fieldType,
+			RawValue:     rawValue,
+			DisplayValue: displayValue,
+			Resolved:     isResolved,
+		})
+		resolvedMap[label] = displayValue
+	}
+
+	return resolved, resolvedMap
+}
+
+func resolveFromStaticOptions(options []formFieldOption, rawValue interface{}) (string, bool) {
+	for _, option := range options {
+		if fmt.Sprint(option.Value) == fmt.Sprint(rawValue) {
+			return option.Label, true
+		}
+	}
+	return "", false
+}
+
+func resolveFromSiteReference(schema formFieldSchema, rawValue interface{}) (string, bool) {
+	if schema.DataSource != "api" || schema.APIEndpoint == "" {
+		return "", false
+	}
+
+	if !strings.Contains(strings.ToLower(schema.APIEndpoint), "/sites") {
+		return "", false
+	}
+
+	idStr, ok := rawValue.(string)
+	if !ok || idStr == "" {
+		return "", false
+	}
+
+	siteID, err := uuid.Parse(idStr)
+	if err != nil {
+		return "", false
+	}
+
+	var site models.Site
+	if err := config.DB.Select("id", "name").First(&site, "id = ?", siteID).Error; err != nil {
+		return "", false
+	}
+
+	return site.Name, true
 }
 
 // UpdateFormSubmission updates a draft submission's data

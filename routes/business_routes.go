@@ -50,6 +50,7 @@ func RegisterBusinessRoutes(r *mux.Router) {
 	registerBusinessReportRoutes(business)
 	registerBusinessFormRoutes(business)
 	registerBusinessSiteRoutes(business)
+	registerBusinessAttendanceRoutes(business)
 	registerSolarRoutes(business)
 	registerWaterRoutes(business)
 }
@@ -162,6 +163,7 @@ func registerBusinessFormRoutes(business *mux.Router) {
 	business.HandleFunc("/forms/{formCode}/submissions", handlers.CreateFormSubmission).Methods("POST")
 	business.HandleFunc("/forms/{formCode}/submissions", handlers.GetFormSubmissions).Methods("GET")
 	business.HandleFunc("/forms/{formCode}/submissions/{submissionId}", handlers.GetFormSubmission).Methods("GET")
+	business.HandleFunc("/forms/{formCode}/submissions/{submissionId}/resolved", handlers.GetResolvedFormSubmission).Methods("GET")
 	business.HandleFunc("/forms/{formCode}/submissions/{submissionId}", handlers.UpdateFormSubmission).Methods("PUT")
 	business.HandleFunc("/forms/{formCode}/submissions/{submissionId}/transition", handlers.TransitionFormSubmission).Methods("POST")
 	business.HandleFunc("/forms/{formCode}/submissions/{submissionId}/history", handlers.GetWorkflowHistory).Methods("GET")
@@ -191,6 +193,30 @@ func registerBusinessSiteRoutes(business *mux.Router) {
 	business.Handle("/sites/{siteId}/users",
 		middleware.RequireBusinessPermission("site:view")(
 			http.HandlerFunc(masters.GetSiteUsers))).Methods("GET")
+}
+
+func registerBusinessAttendanceRoutes(business *mux.Router) {
+	business.Handle("/attendance/check-in",
+		middleware.RequireBusinessPermission("attendance:checkin")(
+			http.HandlerFunc(handlers.CheckInAttendance))).Methods("POST")
+	business.Handle("/attendance/heartbeat",
+		middleware.RequireBusinessPermission("attendance:heartbeat")(
+			http.HandlerFunc(handlers.HeartbeatAttendance))).Methods("POST")
+	business.Handle("/attendance/check-out",
+		middleware.RequireBusinessPermission("attendance:checkout")(
+			http.HandlerFunc(handlers.CheckOutAttendance))).Methods("POST")
+	business.Handle("/attendance/active",
+		middleware.RequireBusinessPermission("attendance:read")(
+			http.HandlerFunc(handlers.GetActiveAttendanceSessions))).Methods("GET")
+	business.Handle("/attendance/logs",
+		middleware.RequireBusinessPermission("attendance:read")(
+			http.HandlerFunc(handlers.GetAttendanceLogs))).Methods("GET")
+	business.Handle("/attendance/headcount",
+		middleware.RequireBusinessPermission("attendance:headcount")(
+			http.HandlerFunc(handlers.GetAttendanceHeadcount))).Methods("GET")
+	business.Handle("/attendance/users/{userId}/timeline",
+		middleware.RequireBusinessPermission("attendance:read")(
+			http.HandlerFunc(handlers.GetEmployeeAttendanceTimeline))).Methods("GET")
 }
 
 // registerSolarRoutes registers Solar Farm specific routes

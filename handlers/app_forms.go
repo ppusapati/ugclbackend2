@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
@@ -13,6 +16,51 @@ import (
 	"p9e.in/ugcl/middleware"
 	"p9e.in/ugcl/models"
 )
+
+const (
+	formsListCacheTTL  = 30 * time.Second
+	formByCodeCacheTTL = 30 * time.Second
+)
+
+type cachedJSONResponse struct {
+	payload   []byte
+	expiresAt time.Time
+}
+
+var (
+	formsListCache   = make(map[string]cachedJSONResponse)
+	formsListCacheMu sync.RWMutex
+
+	formByCodeCache   = make(map[string]cachedJSONResponse)
+	formByCodeCacheMu sync.RWMutex
+)
+
+func getCachedJSON(cache map[string]cachedJSONResponse, mu *sync.RWMutex, key string) ([]byte, bool) {
+	mu.RLock()
+	entry, ok := cache[key]
+	mu.RUnlock()
+	if !ok || time.Now().After(entry.expiresAt) {
+		if ok {
+			mu.Lock()
+			delete(cache, key)
+			mu.Unlock()
+		}
+		return nil, false
+	}
+	return entry.payload, true
+}
+
+func setCachedJSON(cache map[string]cachedJSONResponse, mu *sync.RWMutex, key string, payload []byte, ttl time.Duration) {
+	mu.Lock()
+	cache[key] = cachedJSONResponse{payload: payload, expiresAt: time.Now().Add(ttl)}
+	mu.Unlock()
+}
+
+func writeJSONBytes(w http.ResponseWriter, payload []byte) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "private, max-age=30")
+	_, _ = w.Write(payload)
+}
 
 // GetFormsForVertical returns all forms accessible in a specific business vertical
 // GET /api/v1/business/{vertical}/forms
@@ -31,6 +79,14 @@ func GetFormsForVertical(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	isMobileClient := strings.Contains(r.Header.Get("User-Agent"), "Dart")
+	normalizedVertical := strings.ToUpper(strings.TrimSpace(verticalCode))
+	formsListCacheKey := strings.Join([]string{claims.UserID, normalizedVertical, fmt.Sprintf("mobile:%t", isMobileClient)}, "|")
+	if payload, ok := getCachedJSON(formsListCache, &formsListCacheMu, formsListCacheKey); ok {
+		writeJSONBytes(w, payload)
+		return
+	}
+
 	log.Printf("📋 Fetching forms for vertical: %s, user: %s", verticalCode, claims.UserID)
 
 	// Get the user to check permissions
@@ -42,29 +98,45 @@ func GetFormsForVertical(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Resolve business vertical so we can match both code and UUID in accessible_verticals.
-	canonicalCode := strings.ToUpper(verticalCode)
-	verticalID := ""
-	var businessVertical models.BusinessVertical
-	if err := config.DB.Where("LOWER(code) = LOWER(?)", verticalCode).First(&businessVertical).Error; err == nil {
-		canonicalCode = businessVertical.Code
-		verticalID = businessVertical.ID.String()
+	candidateTokens := map[string]struct{}{
+		verticalCode:                  {},
+		strings.ToUpper(verticalCode): {},
+	}
+
+	var matchedVerticals []models.BusinessVertical
+	if err := config.DB.Where("LOWER(code) = LOWER(?)", verticalCode).Find(&matchedVerticals).Error; err != nil {
+		log.Printf("⚠️ Failed to resolve business vertical %s: %v", verticalCode, err)
+	}
+
+	for _, v := range matchedVerticals {
+		candidateTokens[v.Code] = struct{}{}
+		candidateTokens[v.ID.String()] = struct{}{}
 	}
 
 	// Mobile clients (Dart/Flutter) must never see inactive forms — users cannot
 	// activate forms from mobile and inactive forms break the mobile UX.
 	// Web super admins see ALL forms (active + inactive) so they can manage them.
 	// Web regular users only see active forms.
-	isMobileClient := strings.Contains(r.Header.Get("User-Agent"), "Dart")
 	isSuperAdmin := user.HasPermission("admin_all") || user.HasPermission("super_admin") || user.HasPermission("*:*:*")
 	filterInactive := isMobileClient || !isSuperAdmin
 
 	// Get forms for this vertical using JSONB contains operator.
 	// Include forms with empty accessible_verticals (globally accessible forms).
 	var forms []models.AppForm
+	filterConditions := []string{"accessible_verticals = '[]'::jsonb"}
+	filterArgs := make([]interface{}, 0, len(candidateTokens))
+	for token := range candidateTokens {
+		if strings.TrimSpace(token) == "" {
+			continue
+		}
+		filterConditions = append(filterConditions, "accessible_verticals @> ?")
+		filterArgs = append(filterArgs, `["`+token+`"]`)
+	}
+
 	query := config.DB.
+		Select("id, code, title, description, module_id, route, icon, display_order, required_permission, accessible_verticals, is_active").
 		Preload("Module").
-		Where("accessible_verticals = '[]'::jsonb OR accessible_verticals @> ? OR accessible_verticals @> ? OR accessible_verticals @> ?",
-			`["`+verticalCode+`"]`, `["`+canonicalCode+`"]`, `["`+verticalID+`"]`).
+		Where(strings.Join(filterConditions, " OR "), filterArgs...).
 		Order("display_order ASC, title ASC")
 
 	if filterInactive {
@@ -102,17 +174,19 @@ func GetFormsForVertical(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("✅ Returning %d forms after permission filtering", len(formDTOs))
 
-	// Get modules for response
-	var modules []models.Module
-	config.DB.Where("is_active = ?", true).Order("display_order ASC").Find(&modules)
-
 	response := map[string]interface{}{
 		"forms":   formDTOs,
 		"modules": moduleMap,
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	payload, err := json.Marshal(response)
+	if err != nil {
+		http.Error(w, "failed to encode forms response", http.StatusInternalServerError)
+		return
+	}
+
+	setCachedJSON(formsListCache, &formsListCacheMu, formsListCacheKey, payload, formsListCacheTTL)
+	writeJSONBytes(w, payload)
 }
 
 // GetFormByCode returns a specific form by its code with full schema
@@ -127,6 +201,12 @@ func GetFormByCode(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	verticalCode := vars["businessCode"]
 	formCode := vars["code"]
+
+	formByCodeCacheKey := strings.Join([]string{claims.UserID, strings.ToUpper(strings.TrimSpace(verticalCode)), strings.TrimSpace(formCode)}, "|")
+	if payload, ok := getCachedJSON(formByCodeCache, &formByCodeCacheMu, formByCodeCacheKey); ok {
+		writeJSONBytes(w, payload)
+		return
+	}
 
 	// if verticalCode == "" || formCode == "" {
 	// 	http.Error(w, "vertical code and form code are required", http.StatusBadRequest)
@@ -164,9 +244,14 @@ func GetFormByCode(w http.ResponseWriter, r *http.Request) {
 
 	// Return full form with schema
 	response := form.ToDTOWithSchema()
+	payload, err := json.Marshal(response)
+	if err != nil {
+		http.Error(w, "failed to encode form response", http.StatusInternalServerError)
+		return
+	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	setCachedJSON(formByCodeCache, &formByCodeCacheMu, formByCodeCacheKey, payload, formByCodeCacheTTL)
+	writeJSONBytes(w, payload)
 }
 
 // GetAllForms returns all forms in the system (admin only)
@@ -198,6 +283,16 @@ func GetAllAppForms(w http.ResponseWriter, r *http.Request) {
 	for _, form := range forms {
 		formDTOs = append(formDTOs, form.ToDTO())
 	}
+
+	sort.SliceStable(formDTOs, func(i, j int) bool {
+		if formDTOs[i].Module == formDTOs[j].Module {
+			if formDTOs[i].DisplayOrder == formDTOs[j].DisplayOrder {
+				return formDTOs[i].Title < formDTOs[j].Title
+			}
+			return formDTOs[i].DisplayOrder < formDTOs[j].DisplayOrder
+		}
+		return formDTOs[i].Module < formDTOs[j].Module
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{

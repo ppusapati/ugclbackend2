@@ -319,6 +319,33 @@ func Migrations(db *gorm.DB) error {
 			},
 		},
 		{
+			ID: "20260415_add_attendance_tracking",
+			Migrate: func(tx *gorm.DB) error {
+				if err := tx.AutoMigrate(
+					&models.AttendanceSession{},
+					&models.AttendanceEvent{},
+					&models.TrackingPing{},
+				); err != nil {
+					return err
+				}
+
+				indexes := []string{
+					"CREATE UNIQUE INDEX IF NOT EXISTS uq_attendance_sessions_active_user ON attendance_sessions(user_id) WHERE deleted_at IS NULL AND status = 'active'",
+					"CREATE INDEX IF NOT EXISTS idx_attendance_sessions_site_last_seen ON attendance_sessions(site_id, last_seen_at DESC) WHERE deleted_at IS NULL",
+					"CREATE INDEX IF NOT EXISTS idx_attendance_events_site_type_time ON attendance_events(site_id, event_type, event_time DESC) WHERE deleted_at IS NULL",
+					"CREATE INDEX IF NOT EXISTS idx_tracking_pings_site_inside_time ON tracking_pings(site_id, inside_geofence, ping_time DESC) WHERE deleted_at IS NULL",
+				}
+
+				for _, idx := range indexes {
+					if err := tx.Exec(idx).Error; err != nil {
+						return err
+					}
+				}
+
+				return nil
+			},
+		},
+		{
 			ID: "20260414_webhook_and_active_business_context",
 			Migrate: func(tx *gorm.DB) error {
 				if err := tx.AutoMigrate(

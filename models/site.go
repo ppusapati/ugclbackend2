@@ -11,8 +11,8 @@ import (
 // For example: Water Works has 4 sites, Solar Works has 12 sites
 type Site struct {
 	ID                 uuid.UUID        `gorm:"type:uuid;primaryKey" json:"id"`
-	Name               string           `gorm:"size:100;not null" json:"name"`               // e.g., "Water Site A", "Solar Panel Site 1"
-	Code               string           `gorm:"size:50;uniqueIndex;not null" json:"code"`   // e.g., "WATER_SITE_A", "SOLAR_01"
+	Name               string           `gorm:"size:100;not null" json:"name"`            // e.g., "Water Site A", "Solar Panel Site 1"
+	Code               string           `gorm:"size:50;uniqueIndex;not null" json:"code"` // e.g., "WATER_SITE_A", "SOLAR_01"
 	Description        string           `gorm:"size:255" json:"description"`
 	BusinessVerticalID uuid.UUID        `gorm:"type:uuid;not null;index" json:"businessVerticalId"`
 	BusinessVertical   BusinessVertical `gorm:"foreignKey:BusinessVerticalID" json:"businessVertical,omitempty"`
@@ -24,17 +24,20 @@ type Site struct {
 	DeletedAt          gorm.DeletedAt   `gorm:"index" json:"-"`
 
 	// Relationships
-	UserSiteAccess []UserSiteAccess `gorm:"foreignKey:SiteID" json:"-"`
+	UserSiteAccess     []UserSiteAccess    `gorm:"foreignKey:SiteID" json:"-"`
+	AttendanceSessions []AttendanceSession `gorm:"foreignKey:SiteID" json:"-"`
+	AttendanceEvents   []AttendanceEvent   `gorm:"foreignKey:SiteID" json:"-"`
+	TrackingPings      []TrackingPing      `gorm:"foreignKey:SiteID" json:"-"`
 }
 
 // UserSiteAccess represents which sites a user has access to within a business vertical
 // This allows fine-grained control: a user might have access to only 2 out of 4 water sites
 type UserSiteAccess struct {
-	ID        uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
-	UserID    uuid.UUID `gorm:"type:uuid;not null;index" json:"userId"`
-	User      User      `gorm:"foreignKey:UserID" json:"user,omitempty"`
-	SiteID    uuid.UUID `gorm:"type:uuid;not null;index" json:"siteId"`
-	Site      Site      `gorm:"foreignKey:SiteID" json:"site,omitempty"`
+	ID     uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
+	UserID uuid.UUID `gorm:"type:uuid;not null;index" json:"userId"`
+	User   User      `gorm:"foreignKey:UserID" json:"user,omitempty"`
+	SiteID uuid.UUID `gorm:"type:uuid;not null;index" json:"siteId"`
+	Site   Site      `gorm:"foreignKey:SiteID" json:"site,omitempty"`
 
 	// Access levels for this specific site
 	CanRead   bool `gorm:"default:true" json:"canRead"`
