@@ -177,7 +177,7 @@ func (we *WorkflowEngineDedicated) ResolveFormFieldValues(form *models.AppForm, 
 
 	// Extract field definitions from form schema
 	fieldDefs := make(map[string]map[string]interface{})
-	
+
 	var formSchema map[string]interface{}
 	if err := json.Unmarshal(form.FormSchema, &formSchema); err == nil {
 		// Extract from top-level fields
@@ -238,8 +238,8 @@ func (we *WorkflowEngineDedicated) ResolveFormFieldValues(form *models.AppForm, 
 			if displayValue != "" {
 				// Store an object with both UUID and display name
 				resolvedData[fieldID] = map[string]interface{}{
-					"id":   strVal,        // UUID
-					"name": displayValue,  // Human-readable name
+					"id":   strVal,       // UUID
+					"name": displayValue, // Human-readable name
 				}
 				// Optionally, also store the display name in a separate column
 				// resolvedData[fieldID+"_name"] = displayValue
