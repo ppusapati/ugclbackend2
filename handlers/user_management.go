@@ -13,11 +13,11 @@ import (
 )
 
 type adminUserBusinessRoleOut struct {
-	ID                 uuid.UUID  `json:"id"`
-	BusinessRoleID     uuid.UUID  `json:"business_role_id"`
-	BusinessRoleName   string     `json:"business_role_name"`
-	BusinessVerticalID uuid.UUID  `json:"business_vertical_id"`
-	BusinessVertical   string     `json:"business_vertical_name"`
+	ID                 uuid.UUID   `json:"id"`
+	BusinessRoleID     uuid.UUID   `json:"business_role_id"`
+	BusinessRoleName   string      `json:"business_role_name"`
+	BusinessVerticalID uuid.UUID   `json:"business_vertical_id"`
+	BusinessVertical   string      `json:"business_vertical_name"`
 	AssignedAt         interface{} `json:"assigned_at,omitempty"`
 }
 

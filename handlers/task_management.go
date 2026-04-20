@@ -684,16 +684,16 @@ func (h *TaskHandler) AddTaskAttachment(w http.ResponseWriter, r *http.Request) 
 	fileType := strings.TrimPrefix(filepath.Ext(upload.OriginalFilename), ".")
 
 	attachment := models.TaskAttachment{
-		TaskID:          taskID,
-		FileName:        upload.OriginalFilename,
-		FilePath:        upload.URL,
-		FileSize:        upload.Size,
-		FileType:        fileType,
-		MimeType:        upload.MimeType,
-		AttachmentType:  attachmentType,
-		Description:     description,
-		UploadedBy:      claims.UserID,
-		UploadedByName:  user.Name,
+		TaskID:         taskID,
+		FileName:       upload.OriginalFilename,
+		FilePath:       upload.URL,
+		FileSize:       upload.Size,
+		FileType:       fileType,
+		MimeType:       upload.MimeType,
+		AttachmentType: attachmentType,
+		Description:    description,
+		UploadedBy:     claims.UserID,
+		UploadedByName: user.Name,
 	}
 
 	if err := h.db.Create(&attachment).Error; err != nil {
