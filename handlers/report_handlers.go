@@ -47,6 +47,35 @@ func CreateReportDefinition(w http.ResponseWriter, r *http.Request) {
 	}
 
 	claims := middleware.GetClaims(r)
+	if claims == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	businessID := req.BusinessVerticalID
+	if businessID == uuid.Nil {
+		businessID = middleware.GetCurrentBusinessID(r)
+	}
+
+	if strings.TrimSpace(req.Name) == "" {
+		http.Error(w, "report name is required", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.DataSources) == 0 || string(req.DataSources) == "null" {
+		http.Error(w, "data_sources is required", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.Fields) == 0 || string(req.Fields) == "null" {
+		http.Error(w, "fields is required", http.StatusBadRequest)
+		return
+	}
+
+	if businessID == uuid.Nil {
+		http.Error(w, "business_vertical_id is required (send in body or X-Business-ID/X-Business-Code header)", http.StatusBadRequest)
+		return
+	}
 
 	report := &models.ReportDefinition{
 		Code:               req.Code,
@@ -64,7 +93,7 @@ func CreateReportDefinition(w http.ResponseWriter, r *http.Request) {
 		ChartType:          req.ChartType,
 		ChartConfig:        req.ChartConfig,
 		Layout:             req.Layout,
-		BusinessVerticalID: req.BusinessVerticalID,
+		BusinessVerticalID: businessID,
 		IsPublic:           req.IsPublic,
 		AllowedRoles:       req.AllowedRoles,
 		AllowedUsers:       req.AllowedUsers,
@@ -75,7 +104,7 @@ func CreateReportDefinition(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := config.DB.Create(report).Error; err != nil {
-		http.Error(w, "Failed to create report", http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("Failed to create report: %v", err), http.StatusInternalServerError)
 		return
 	}
 
