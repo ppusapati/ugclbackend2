@@ -12,6 +12,73 @@ import (
 	"p9e.in/ugcl/models"
 )
 
+type adminUserBusinessRoleOut struct {
+	ID                 uuid.UUID  `json:"id"`
+	BusinessRoleID     uuid.UUID  `json:"business_role_id"`
+	BusinessRoleName   string     `json:"business_role_name"`
+	BusinessVerticalID uuid.UUID  `json:"business_vertical_id"`
+	BusinessVertical   string     `json:"business_vertical_name"`
+	AssignedAt         interface{} `json:"assigned_at,omitempty"`
+}
+
+type adminUserOut struct {
+	ID                   uuid.UUID                  `json:"id"`
+	Name                 string                     `json:"name"`
+	Email                string                     `json:"email"`
+	Phone                string                     `json:"phone"`
+	RoleID               *uuid.UUID                 `json:"role_id,omitempty"`
+	GlobalRole           string                     `json:"global_role,omitempty"`
+	BusinessVerticalID   *uuid.UUID                 `json:"business_vertical_id,omitempty"`
+	BusinessVerticalName string                     `json:"business_vertical_name,omitempty"`
+	IsActive             bool                       `json:"is_active"`
+	CreatedAt            interface{}                `json:"created_at,omitempty"`
+	UpdatedAt            interface{}                `json:"updated_at,omitempty"`
+	BusinessRoles        []adminUserBusinessRoleOut `json:"business_roles,omitempty"`
+}
+
+func buildAdminUserResponse(user models.User) adminUserOut {
+	globalRoleName := ""
+	if user.RoleModel != nil {
+		globalRoleName = user.RoleModel.Name
+	}
+
+	businessVerticalName := ""
+	if user.BusinessVertical != nil {
+		businessVerticalName = user.BusinessVertical.Name
+	}
+
+	businessRoles := make([]adminUserBusinessRoleOut, 0, len(user.UserBusinessRoles))
+	for _, assignment := range user.UserBusinessRoles {
+		if !assignment.IsActive || assignment.BusinessRole.ID == uuid.Nil {
+			continue
+		}
+
+		businessRoles = append(businessRoles, adminUserBusinessRoleOut{
+			ID:                 assignment.ID,
+			BusinessRoleID:     assignment.BusinessRoleID,
+			BusinessRoleName:   assignment.BusinessRole.DisplayName,
+			BusinessVerticalID: assignment.BusinessRole.BusinessVerticalID,
+			BusinessVertical:   assignment.BusinessRole.BusinessVertical.Name,
+			AssignedAt:         assignment.AssignedAt,
+		})
+	}
+
+	return adminUserOut{
+		ID:                   user.ID,
+		Name:                 user.Name,
+		Email:                user.Email,
+		Phone:                user.Phone,
+		RoleID:               user.RoleID,
+		GlobalRole:           globalRoleName,
+		BusinessVerticalID:   user.BusinessVerticalID,
+		BusinessVerticalName: businessVerticalName,
+		IsActive:             user.IsActive,
+		CreatedAt:            user.CreatedAt,
+		UpdatedAt:            user.UpdatedAt,
+		BusinessRoles:        businessRoles,
+	}
+}
+
 type updateUserReq struct {
 	Name     string `json:"name"`
 	Email    string `json:"email"`
@@ -174,13 +241,15 @@ func GetbyID(w http.ResponseWriter, r *http.Request) {
 
 	// Get user
 	var user models.User
-	if err := config.DB.First(&user, "id = ?", id).Error; err != nil {
+	if err := config.DB.
+		Preload("RoleModel").
+		Preload("BusinessVertical").
+		Preload("UserBusinessRoles.BusinessRole.BusinessVertical").
+		First(&user, "id = ?", id).Error; err != nil {
 		http.Error(w, "user not found", http.StatusNotFound)
 		return
 	}
 
-	// Return user (without password hash)
-	user.PasswordHash = ""
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(user)
+	json.NewEncoder(w).Encode(buildAdminUserResponse(user))
 }

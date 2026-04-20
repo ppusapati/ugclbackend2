@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"p9e.in/ugcl/config"
@@ -645,4 +647,104 @@ func (h *TaskHandler) GetTaskComments(w http.ResponseWriter, r *http.Request) {
 		"comments": comments,
 		"count":    len(comments),
 	})
+}
+
+// AddTaskAttachment uploads and links an attachment to a task
+func (h *TaskHandler) AddTaskAttachment(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	taskIDStr := vars["id"]
+
+	taskID, err := uuid.Parse(taskIDStr)
+	if err != nil {
+		http.Error(w, "Invalid task ID", http.StatusBadRequest)
+		return
+	}
+
+	var task models.Tasks
+	if err := h.db.First(&task, "id = ?", taskID).Error; err != nil {
+		http.Error(w, "Task not found", http.StatusNotFound)
+		return
+	}
+
+	upload, err := storeUploadedFile(r, "file", "./uploads/tasks")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	claims := middleware.GetClaims(r)
+	user := middleware.GetUser(r)
+
+	attachmentType := r.FormValue("attachment_type")
+	if attachmentType == "" {
+		attachmentType = inferAttachmentType(upload.MimeType)
+	}
+
+	description := r.FormValue("description")
+	fileType := strings.TrimPrefix(filepath.Ext(upload.OriginalFilename), ".")
+
+	attachment := models.TaskAttachment{
+		TaskID:          taskID,
+		FileName:        upload.OriginalFilename,
+		FilePath:        upload.URL,
+		FileSize:        upload.Size,
+		FileType:        fileType,
+		MimeType:        upload.MimeType,
+		AttachmentType:  attachmentType,
+		Description:     description,
+		UploadedBy:      claims.UserID,
+		UploadedByName:  user.Name,
+	}
+
+	if err := h.db.Create(&attachment).Error; err != nil {
+		http.Error(w, "Failed to save attachment metadata", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message":    "Attachment uploaded successfully",
+		"attachment": attachment,
+	})
+}
+
+// GetTaskAttachments retrieves attachments for a task
+func (h *TaskHandler) GetTaskAttachments(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	taskIDStr := vars["id"]
+
+	taskID, err := uuid.Parse(taskIDStr)
+	if err != nil {
+		http.Error(w, "Invalid task ID", http.StatusBadRequest)
+		return
+	}
+
+	var attachments []models.TaskAttachment
+	if err := h.db.
+		Where("task_id = ? AND deleted_at IS NULL", taskID).
+		Order("created_at DESC").
+		Find(&attachments).Error; err != nil {
+		http.Error(w, "Failed to fetch attachments", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"attachments": attachments,
+		"count":       len(attachments),
+	})
+}
+
+func inferAttachmentType(mimeType string) string {
+	if strings.HasPrefix(mimeType, "image/") {
+		return "image"
+	}
+	if strings.HasPrefix(mimeType, "video/") {
+		return "video"
+	}
+	if mimeType == "" {
+		return "other"
+	}
+	return "document"
 }

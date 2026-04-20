@@ -77,6 +77,10 @@ func RegisterProjectRoutes(r *mux.Router) {
 		http.HandlerFunc(taskHandler.AddTaskComment))).Methods("POST")
 	r.Handle("/api/v1/tasks/{id}/comments", middleware.RequirePermission("task:read")(
 		http.HandlerFunc(taskHandler.GetTaskComments))).Methods("GET")
+	r.Handle("/api/v1/tasks/{id}/attachments", middleware.RequirePermission("task:update")(
+		http.HandlerFunc(taskHandler.AddTaskAttachment))).Methods("POST")
+	r.Handle("/api/v1/tasks/{id}/attachments", middleware.RequirePermission("task:read")(
+		http.HandlerFunc(taskHandler.GetTaskAttachments))).Methods("GET")
 
 	// Task Audit Log
 	r.Handle("/api/v1/tasks/{id}/audit", middleware.RequirePermission("task:read")(
