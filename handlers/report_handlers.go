@@ -262,13 +262,53 @@ func GetFormTableFields(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build response with form fields first (primary), then database fields (secondary for filtering)
+	metadataFields := []map[string]interface{}{
+		{
+			"id":       "created_at",
+			"type":     "datetime",
+			"label":    "Created Time",
+			"dataType": "datetime",
+			"source":   "metadata",
+		},
+		{
+			"id":       "created_by_name",
+			"type":     "text",
+			"label":    "Created By",
+			"dataType": "text",
+			"source":   "metadata",
+		},
+		{
+			"id":       "site_name",
+			"type":     "text",
+			"label":    "Site Name",
+			"dataType": "text",
+			"source":   "metadata",
+		},
+		{
+			"id":       "business_vertical_name",
+			"type":     "text",
+			"label":    "Business Vertical Name",
+			"dataType": "text",
+			"source":   "metadata",
+		},
+		{
+			"id":       "form_code",
+			"type":     "text",
+			"label":    "Form Code",
+			"dataType": "text",
+			"source":   "metadata",
+		},
+	}
+	combinedFields := append([]map[string]interface{}{}, formFields...)
+	combinedFields = append(combinedFields, metadataFields...)
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"table_name":  tableName,
 		"form_title":  formTitle,
-		"form_fields": formFields,                      // Custom form fields (primary)
+		"form_fields": combinedFields,                  // Custom form fields + report metadata (primary)
 		"db_fields":   dbSchema,                        // Database schema fields (secondary)
-		"all_fields":  append(formFields, dbSchema...), // Combined list for convenience
+		"all_fields":  append(combinedFields, dbSchema...), // Combined list for convenience
 	})
 }
 

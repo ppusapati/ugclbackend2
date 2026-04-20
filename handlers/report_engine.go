@@ -212,10 +212,10 @@ func (re *ReportEngine) buildQuery(
 				alias,
 			))
 		} else {
+			fieldExpr := re.resolveFieldExpression(field)
 			selectClauses = append(selectClauses, fmt.Sprintf(
-				"%s.%s AS %s",
-				field.DataSource,
-				field.FieldName,
+				"%s AS %s",
+				fieldExpr,
 				alias,
 			))
 		}
@@ -258,6 +258,10 @@ func (re *ReportEngine) buildQuery(
 	}
 
 	query.WriteString(fmt.Sprintf("\nFROM %s AS %s", dataSources[0].TableName, dataSources[0].Alias))
+	requiredJoins := re.collectRequiredJoins(fields, filters, groupings, sortings)
+	for _, joinClause := range requiredJoins {
+		query.WriteString("\n" + joinClause)
+	}
 
 	// JOIN clauses (for multi-table reports)
 	for i := 1; i < len(dataSources); i++ {
@@ -282,6 +286,9 @@ func (re *ReportEngine) buildQuery(
 	// Always exclude soft-deleted records
 	for _, ds := range dataSources {
 		whereClauses = append(whereClauses, fmt.Sprintf("%s.deleted_at IS NULL", ds.Alias))
+	}
+	if _, ok := requiredJoins["sites"]; ok {
+		whereClauses = append(whereClauses, "sites.deleted_at IS NULL")
 	}
 
 	// Add filters
@@ -327,10 +334,55 @@ func (re *ReportEngine) buildQuery(
 	return query.String(), args, nil
 }
 
+func (re *ReportEngine) resolveFieldExpression(field models.ReportField) string {
+	switch field.FieldName {
+	case "created_by_name":
+		return "creator.name"
+	case "site_name":
+		return "sites.name"
+	case "business_vertical_name":
+		return "business_verticals.name"
+	default:
+		return fmt.Sprintf("%s.%s", field.DataSource, field.FieldName)
+	}
+}
+
+func (re *ReportEngine) collectRequiredJoins(
+	fields []models.ReportField,
+	filters []models.ReportFilter,
+	groupings []models.ReportGrouping,
+	sortings []models.ReportSorting,
+) map[string]string {
+	joins := map[string]string{}
+	register := func(fieldName string, dataSource string) {
+		switch fieldName {
+		case "created_by_name":
+			joins["creator"] = fmt.Sprintf("LEFT JOIN users AS creator ON creator.id::text = %s.created_by", dataSource)
+		case "site_name":
+			joins["sites"] = fmt.Sprintf("LEFT JOIN sites AS sites ON sites.id = %s.site_id", dataSource)
+		case "business_vertical_name":
+			joins["business_verticals"] = fmt.Sprintf("LEFT JOIN business_verticals AS business_verticals ON business_verticals.id = %s.business_vertical_id", dataSource)
+		}
+	}
+	for _, field := range fields {
+		register(field.FieldName, field.DataSource)
+	}
+	for _, filter := range filters {
+		register(filter.FieldName, filter.DataSource)
+	}
+	for _, group := range groupings {
+		register(group.FieldName, group.DataSource)
+	}
+	for _, sort := range sortings {
+		register(sort.FieldName, sort.DataSource)
+	}
+	return joins
+}
+
 // buildFilterClause constructs a WHERE clause for a filter
 func (re *ReportEngine) buildFilterClause(filter models.ReportFilter, argIndex *int) (string, []interface{}) {
 	var args []interface{}
-	fieldRef := fmt.Sprintf("%s.%s", filter.DataSource, filter.FieldName)
+	fieldRef := re.resolveFilterFieldRef(filter)
 
 	switch strings.ToLower(filter.Operator) {
 	case "eq", "=":
@@ -434,6 +486,19 @@ func (re *ReportEngine) buildFilterClause(filter models.ReportFilter, argIndex *
 	}
 
 	return "", nil
+}
+
+func (re *ReportEngine) resolveFilterFieldRef(filter models.ReportFilter) string {
+	switch filter.FieldName {
+	case "created_by_name":
+		return "creator.name"
+	case "site_name":
+		return "sites.name"
+	case "business_vertical_name":
+		return "business_verticals.name"
+	default:
+		return fmt.Sprintf("%s.%s", filter.DataSource, filter.FieldName)
+	}
 }
 
 // buildHeaders creates column headers for the result
