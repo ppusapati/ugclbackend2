@@ -306,8 +306,8 @@ func GetFormTableFields(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"table_name":  tableName,
 		"form_title":  formTitle,
-		"form_fields": combinedFields,                  // Custom form fields + report metadata (primary)
-		"db_fields":   dbSchema,                        // Database schema fields (secondary)
+		"form_fields": combinedFields,                      // Custom form fields + report metadata (primary)
+		"db_fields":   dbSchema,                            // Database schema fields (secondary)
 		"all_fields":  append(combinedFields, dbSchema...), // Combined list for convenience
 	})
 }
