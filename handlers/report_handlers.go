@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -229,7 +230,12 @@ func GetFormTableFields(w http.ResponseWriter, r *http.Request) {
 	engine := NewReportEngine()
 	schema, err := engine.GetFormTableSchema(tableName)
 	if err != nil {
-		http.Error(w, "Failed to fetch table schema", http.StatusInternalServerError)
+		status := http.StatusInternalServerError
+		if strings.Contains(strings.ToLower(err.Error()), "table not found") ||
+			strings.Contains(strings.ToLower(err.Error()), "no readable columns") {
+			status = http.StatusNotFound
+		}
+		http.Error(w, err.Error(), status)
 		return
 	}
 
@@ -251,20 +257,42 @@ func GetAvailableFormTables(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tables := []map[string]interface{}{}
+	skipped := 0
 	for _, form := range forms {
+		var resolved struct {
+			TableSchema string `gorm:"column:table_schema"`
+			TableName   string `gorm:"column:table_name"`
+		}
+
+		err := config.DB.Raw(`
+			SELECT table_schema, table_name
+			FROM information_schema.tables
+			WHERE lower(table_name) = lower(?)
+			  AND table_type = 'BASE TABLE'
+			  AND table_schema NOT IN ('pg_catalog', 'information_schema')
+			ORDER BY CASE WHEN table_schema = 'public' THEN 0 ELSE 1 END, table_schema
+			LIMIT 1
+		`, strings.TrimSpace(form.DBTableName)).Scan(&resolved).Error
+		if err != nil || resolved.TableName == "" {
+			skipped++
+			continue
+		}
+
 		tables = append(tables, map[string]interface{}{
-			"form_id":    form.ID,
-			"form_code":  form.Code,
-			"form_title": form.Title,
-			"table_name": form.DBTableName,
-			"module_id":  form.ModuleID,
+			"form_id":     form.ID,
+			"form_code":   form.Code,
+			"form_title":  form.Title,
+			"table_name":  resolved.TableName,
+			"schema_name": resolved.TableSchema,
+			"module_id":   form.ModuleID,
 		})
 	}
-	fmt.Println(tables)
+	fmt.Printf("[REPORT BUILDER] available tables=%d skipped_missing=%d\n", len(tables), skipped)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"tables": tables,
-		"count":  len(tables),
+		"tables":          tables,
+		"count":           len(tables),
+		"skipped_missing": skipped,
 	})
 }
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/datatypes"
@@ -35,6 +36,60 @@ type UpdateWebhookRequest struct {
 	IsActive      bool              `json:"is_active"`
 }
 
+var supportedWebhookEvents = map[string]struct{}{
+	string(models.EventCreate):        {},
+	string(models.EventUpdate):        {},
+	string(models.EventFormSubmitted): {},
+}
+
+var supportedWebhookResourceTypes = map[string]struct{}{
+	"User":           {},
+	"Business":       {},
+	"Site":           {},
+	"DPRSite":        {},
+	"Wrapping":       {},
+	"EWay":           {},
+	"Water":          {},
+	"Stock":          {},
+	"DairySite":      {},
+	"Material":       {},
+	"Diesel":         {},
+	"Payment":        {},
+	"NMRVehicle":     {},
+	"Report":         {},
+	"Project":        {},
+	"Notification":   {},
+	"Document":       {},
+	"Workflow":       {},
+	"FormSubmission": {},
+	"Test":           {},
+}
+
+func validateWebhookFilters(events []string, resourceTypes []string) error {
+	if len(events) == 0 {
+		return fmt.Errorf("at least one event is required")
+	}
+
+	for _, event := range events {
+		normalized := strings.TrimSpace(event)
+		if _, ok := supportedWebhookEvents[normalized]; !ok {
+			return fmt.Errorf("unsupported webhook event: %s", event)
+		}
+	}
+
+	for _, resourceType := range resourceTypes {
+		normalized := strings.TrimSpace(resourceType)
+		if normalized == "" {
+			continue
+		}
+		if _, ok := supportedWebhookResourceTypes[normalized]; !ok {
+			return fmt.Errorf("unsupported resource type: %s", resourceType)
+		}
+	}
+
+	return nil
+}
+
 // CreateWebhook creates a new webhook subscription
 // @Summary Create webhook subscription
 // @Description Create a new webhook for real-time event notifications
@@ -49,6 +104,10 @@ type UpdateWebhookRequest struct {
 func CreateWebhook(c *gin.Context) {
 	var req CreateWebhookRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := validateWebhookFilters(req.Events, req.ResourceTypes); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -193,6 +252,12 @@ func UpdateWebhook(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+	if len(req.Events) > 0 || len(req.ResourceTypes) > 0 {
+		if err := validateWebhookFilters(req.Events, req.ResourceTypes); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 	}
 
 	webhookService := utils.NewWebhookService(config.DB)

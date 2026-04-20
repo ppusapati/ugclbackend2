@@ -50,6 +50,7 @@ func RegisterBusinessRoutes(r *mux.Router) {
 	registerBusinessReportRoutes(business)
 	registerBusinessFormRoutes(business)
 	registerBusinessSiteRoutes(business)
+	registerBusinessIntegrationRoutes(business)
 	registerBusinessAttendanceRoutes(business)
 	registerSolarRoutes(business)
 	registerWaterRoutes(business)
@@ -193,6 +194,15 @@ func registerBusinessSiteRoutes(business *mux.Router) {
 	business.Handle("/sites/{siteId}/users",
 		middleware.RequireBusinessPermission("site:view")(
 			http.HandlerFunc(masters.GetSiteUsers))).Methods("GET")
+}
+
+func registerBusinessIntegrationRoutes(business *mux.Router) {
+	business.Handle("/integrations/vendor/sites",
+		middleware.RequireBusinessPermission("site:view")(
+			http.HandlerFunc(handlers.IntegrationVendorSitesDropdown))).Methods("GET")
+	business.Handle("/integrations/external-dropdown",
+		middleware.RequireBusinessPermission("site:view")(
+			http.HandlerFunc(handlers.IntegrationExternalDropdownProxy))).Methods("GET")
 }
 
 func registerBusinessAttendanceRoutes(business *mux.Router) {

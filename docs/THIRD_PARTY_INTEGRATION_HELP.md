@@ -91,6 +91,80 @@ Inbound webhook callback endpoints:
 - POST /api/v1/webhooks/incoming
 - POST /api/v1/webhooks/incoming/{provider}
 
+## Recommended Partner Pattern
+
+For client and third-party service provider integrations, the recommended pattern is:
+- Use outbound webhook delivery from UGCL to the provider callback URL.
+- Subscribe only to the `form.submitted` event.
+- Subscribe only to the `FormSubmission` resource type.
+- Consume only the submitted form payload from `data.form_data`.
+
+This keeps the partner contract narrow and avoids exposing internal workflow history, approval actions, or unrelated APIs.
+
+### Recommended Subscription Request
+
+```json
+{
+  "url": "https://partner.example.com/webhooks/ugcl/forms",
+  "events": ["form.submitted"],
+  "resource_types": ["FormSubmission"],
+  "headers": {
+    "X-Client-Name": "provider-a"
+  },
+  "max_retries": 5,
+  "retry_interval": 300
+}
+```
+
+### Payload Scope
+
+UGCL sends a standard webhook envelope with a focused payload.
+
+Use these fields for transport and traceability:
+- `id`
+- `event`
+- `resource_type`
+- `resource_id`
+- `timestamp`
+- `business_id`
+- `version`
+
+Use this field for the actual business payload:
+- `data.form_data`
+
+Minimal metadata is included in `data` to help the receiver route the submission:
+- `submission_id`
+- `form_code`
+- `site_id`
+- `submitted_by`
+- `submitted_at`
+
+### Example Payload
+
+```json
+{
+  "id": "8d06b5fb-07f9-44b6-a9b0-4b5e559872f3",
+  "event": "form.submitted",
+  "resource_type": "FormSubmission",
+  "resource_id": "22222222-2222-2222-2222-222222222222",
+  "timestamp": "2026-04-20T12:30:00Z",
+  "business_id": "11111111-1111-1111-1111-111111111111",
+  "version": "1.0",
+  "data": {
+    "submission_id": "22222222-2222-2222-2222-222222222222",
+    "form_code": "water",
+    "site_id": "33333333-3333-3333-3333-333333333333",
+    "submitted_by": "provider-demo-user",
+    "submitted_at": "2026-04-20T12:30:00Z",
+    "form_data": {
+      "consumer_name": "Acme Infra Pvt Ltd",
+      "connection_id": "WTR-0091",
+      "meter_reading": 1842
+    }
+  }
+}
+```
+
 ## Webhook Security Contract
 
 Outbound webhook headers include:

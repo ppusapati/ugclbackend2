@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -244,6 +245,7 @@ func GetFormByCode(w http.ResponseWriter, r *http.Request) {
 
 	// Return full form with schema
 	response := form.ToDTOWithSchema()
+	rewriteAbsoluteDropdownEndpoints(response, verticalCode)
 	payload, err := json.Marshal(response)
 	if err != nil {
 		http.Error(w, "failed to encode form response", http.StatusInternalServerError)
@@ -252,6 +254,41 @@ func GetFormByCode(w http.ResponseWriter, r *http.Request) {
 
 	setCachedJSON(formByCodeCache, &formByCodeCacheMu, formByCodeCacheKey, payload, formByCodeCacheTTL)
 	writeJSONBytes(w, payload)
+}
+
+func rewriteAbsoluteDropdownEndpoints(node interface{}, businessCode string) {
+	switch typed := node.(type) {
+	case map[string]interface{}:
+		for key, value := range typed {
+			if key == "apiEndpoint" {
+				if endpoint, ok := value.(string); ok {
+					if rewritten, ok := buildSafeDropdownProxyEndpoint(endpoint, businessCode); ok {
+						typed[key] = rewritten
+					}
+				}
+				continue
+			}
+			rewriteAbsoluteDropdownEndpoints(value, businessCode)
+		}
+	case []interface{}:
+		for _, item := range typed {
+			rewriteAbsoluteDropdownEndpoints(item, businessCode)
+		}
+	}
+}
+
+func buildSafeDropdownProxyEndpoint(rawEndpoint, businessCode string) (string, bool) {
+	endpoint := strings.TrimSpace(rawEndpoint)
+	if endpoint == "" {
+		return "", false
+	}
+
+	parsed, err := url.Parse(endpoint)
+	if err != nil || !parsed.IsAbs() || parsed.Host == "" {
+		return "", false
+	}
+
+	return fmt.Sprintf("business/%s/integrations/external-dropdown?target=%s", url.PathEscape(strings.TrimSpace(businessCode)), url.QueryEscape(endpoint)), true
 }
 
 // GetAllForms returns all forms in the system (admin only)

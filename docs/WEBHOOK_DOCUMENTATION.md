@@ -19,6 +19,7 @@ The UGCL backend webhook system enables real-time integration with third-party a
 ### Event Types
 - `CREATE`: Triggered when a resource is created
 - `UPDATE`: Triggered when a resource is updated
+- `form.submitted`: Triggered when a form submission is successfully created
 
 ### Resource Types
 - User
@@ -39,6 +40,59 @@ The UGCL backend webhook system enables real-time integration with third-party a
 - Notification
 - Document
 - Workflow
+- FormSubmission
+
+## Third-Party Form Submission Contract
+
+For client and third-party provider integrations, use the webhook system in a narrow configuration:
+- `events`: `form.submitted`
+- `resource_types`: `FormSubmission`
+
+This contract is intended to deliver submitted form payloads only. Internal workflow history, permissions, and approval metadata are not included.
+
+### Recommended Subscription Body
+
+```json
+{
+  "url": "https://partner.example.com/webhooks/ugcl/forms",
+  "events": ["form.submitted"],
+  "resource_types": ["FormSubmission"],
+  "secret": "partner-shared-secret",
+  "headers": {
+    "X-Client-Name": "provider-a"
+  },
+  "max_retries": 5,
+  "retry_interval": 300
+}
+```
+
+### Form Submission Payload Example
+
+```json
+{
+  "id": "8d06b5fb-07f9-44b6-a9b0-4b5e559872f3",
+  "event": "form.submitted",
+  "resource_type": "FormSubmission",
+  "resource_id": "22222222-2222-2222-2222-222222222222",
+  "timestamp": "2026-04-20T12:30:00Z",
+  "business_id": "11111111-1111-1111-1111-111111111111",
+  "version": "1.0",
+  "data": {
+    "submission_id": "22222222-2222-2222-2222-222222222222",
+    "form_code": "water",
+    "site_id": "33333333-3333-3333-3333-333333333333",
+    "submitted_by": "provider-demo-user",
+    "submitted_at": "2026-04-20T12:30:00Z",
+    "form_data": {
+      "consumer_name": "Acme Infra Pvt Ltd",
+      "connection_id": "WTR-0091",
+      "meter_reading": 1842
+    }
+  }
+}
+```
+
+Partner receivers should treat `data.form_data` as the submitted business payload and use the rest of the envelope for authentication, deduplication, and tracing.
 
 ## Authentication
 

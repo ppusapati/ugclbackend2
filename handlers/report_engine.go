@@ -27,20 +27,20 @@ func NewReportEngine() *ReportEngine {
 
 // ReportResult represents the result of a report execution
 type ReportResult struct {
-	Headers []ReportHeader         `json:"headers"`
-	Data    []map[string]interface{} `json:"data"`
-	Summary map[string]interface{}   `json:"summary,omitempty"`
-	MetaData ReportMetaData         `json:"metadata"`
+	Headers  []ReportHeader           `json:"headers"`
+	Data     []map[string]interface{} `json:"data"`
+	Summary  map[string]interface{}   `json:"summary,omitempty"`
+	MetaData ReportMetaData           `json:"metadata"`
 }
 
 // ReportHeader represents column information
 type ReportHeader struct {
-	Key       string `json:"key"`
-	Label     string `json:"label"`
-	DataType  string `json:"data_type"`
-	Format    string `json:"format,omitempty"`
-	Sortable  bool   `json:"sortable"`
-	Filterable bool  `json:"filterable"`
+	Key        string `json:"key"`
+	Label      string `json:"label"`
+	DataType   string `json:"data_type"`
+	Format     string `json:"format,omitempty"`
+	Sortable   bool   `json:"sortable"`
+	Filterable bool   `json:"filterable"`
 }
 
 // ReportMetaData contains execution metadata
@@ -126,9 +126,9 @@ func (re *ReportEngine) ExecuteReport(
 
 	// Build result
 	result := &ReportResult{
-		Headers:  re.buildHeaders(fields, aggregations),
-		Data:     []map[string]interface{}{},
-		Summary:  make(map[string]interface{}),
+		Headers: re.buildHeaders(fields, aggregations),
+		Data:    []map[string]interface{}{},
+		Summary: make(map[string]interface{}),
 		MetaData: ReportMetaData{
 			GeneratedAt: time.Now(),
 		},
@@ -540,6 +540,34 @@ func (re *ReportEngine) saveExecution(execution *models.ReportExecution) {
 
 // GetFormTableSchema retrieves the schema of a form table for report builder UI
 func (re *ReportEngine) GetFormTableSchema(tableName string) ([]map[string]interface{}, error) {
+	cleanTableName := strings.TrimSpace(tableName)
+	if cleanTableName == "" {
+		return nil, fmt.Errorf("table name is required")
+	}
+
+	var resolved struct {
+		TableSchema string `gorm:"column:table_schema"`
+		TableName   string `gorm:"column:table_name"`
+	}
+
+	resolveQuery := `
+		SELECT table_schema, table_name
+		FROM information_schema.tables
+		WHERE lower(table_name) = lower(?)
+		  AND table_type = 'BASE TABLE'
+		  AND table_schema NOT IN ('pg_catalog', 'information_schema')
+		ORDER BY CASE WHEN table_schema = 'public' THEN 0 ELSE 1 END, table_schema
+		LIMIT 1
+	`
+
+	if err := re.db.Raw(resolveQuery, cleanTableName).Scan(&resolved).Error; err != nil {
+		return nil, err
+	}
+
+	if resolved.TableName == "" {
+		return nil, fmt.Errorf("table not found: %s", cleanTableName)
+	}
+
 	query := `
 		SELECT
 			column_name,
@@ -548,12 +576,12 @@ func (re *ReportEngine) GetFormTableSchema(tableName string) ([]map[string]inter
 			column_default,
 			character_maximum_length
 		FROM information_schema.columns
-		WHERE table_schema = 'public'
-		AND table_name = $1
+		WHERE table_schema = ?
+		AND table_name = ?
 		ORDER BY ordinal_position
 	`
 
-	rows, err := re.db.Raw(query, tableName).Rows()
+	rows, err := re.db.Raw(query, resolved.TableSchema, resolved.TableName).Rows()
 	if err != nil {
 		return nil, err
 	}
@@ -565,7 +593,9 @@ func (re *ReportEngine) GetFormTableSchema(tableName string) ([]map[string]inter
 		var colDefault *string
 		var maxLength *int
 
-		rows.Scan(&colName, &dataType, &isNullable, &colDefault, &maxLength)
+		if err := rows.Scan(&colName, &dataType, &isNullable, &colDefault, &maxLength); err != nil {
+			return nil, err
+		}
 
 		schema = append(schema, map[string]interface{}{
 			"name":       colName,
@@ -573,6 +603,10 @@ func (re *ReportEngine) GetFormTableSchema(tableName string) ([]map[string]inter
 			"nullable":   isNullable == "YES",
 			"max_length": maxLength,
 		})
+	}
+
+	if len(schema) == 0 {
+		return nil, fmt.Errorf("no readable columns found for table: %s", resolved.TableName)
 	}
 
 	return schema, nil

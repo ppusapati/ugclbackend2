@@ -15,8 +15,11 @@ func RegisterIntegrationRoutes(r *mux.Router) {
 
 	integrations.HandleFunc("/health", handlers.IntegrationHealth).Methods(http.MethodGet)
 	integrations.HandleFunc("/webhook-contract", handlers.WebhookContract).Methods(http.MethodGet)
+	integrations.HandleFunc("/forms", handlers.IntegrationFormCatalog).Methods(http.MethodGet)
 	integrations.HandleFunc("/provider-a/health", handlers.IntegrationHealth).Methods(http.MethodGet)
 	integrations.HandleFunc("/provider-a/webhook-contract", handlers.WebhookContract).Methods(http.MethodGet)
+	integrations.HandleFunc("/provider-a/forms", handlers.IntegrationFormCatalog).Methods(http.MethodGet)
 	integrations.HandleFunc("/provider-b/health", handlers.IntegrationHealth).Methods(http.MethodGet)
 	integrations.HandleFunc("/provider-b/webhook-contract", handlers.WebhookContract).Methods(http.MethodGet)
+	integrations.HandleFunc("/provider-b/forms", handlers.IntegrationFormCatalog).Methods(http.MethodGet)
 }

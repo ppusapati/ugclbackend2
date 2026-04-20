@@ -74,6 +74,7 @@ func CreateFormSubmissionDedicated(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("✅ Created submission: %s (state: %s)", record.ID, record.CurrentState)
+	triggerDedicatedFormSubmissionWebhook(record)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)

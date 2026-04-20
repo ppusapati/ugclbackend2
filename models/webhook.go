@@ -14,8 +14,9 @@ import (
 type WebhookEventType string
 
 const (
-	EventCreate WebhookEventType = "CREATE"
-	EventUpdate WebhookEventType = "UPDATE"
+	EventCreate        WebhookEventType = "CREATE"
+	EventUpdate        WebhookEventType = "UPDATE"
+	EventFormSubmitted WebhookEventType = "form.submitted"
 )
 
 // WebhookStatus represents the status of a webhook subscription

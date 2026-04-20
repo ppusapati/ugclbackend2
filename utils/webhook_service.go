@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -67,12 +69,16 @@ func (ws *WebhookService) TriggerWebhook(eventType models.WebhookEventType, reso
 		return fmt.Errorf("failed to fetch webhooks: %w", err)
 	}
 
-	// Create payload
-	payload := models.NewWebhookPayload(eventType, resourceType, resourceID, businessID, data)
-
 	// Check each webhook and create delivery if it matches event and resource type
 	for _, webhook := range webhooks {
-		if ws.shouldTriggerWebhook(&webhook, eventType, resourceType) {
+		if ws.shouldTriggerWebhook(&webhook, eventType, resourceType, data) {
+			outboundData := data
+			if eventType == models.EventFormSubmitted && resourceType == "FormSubmission" {
+				outboundData = sanitizeFormSubmissionPayloadData(data)
+			}
+
+			payload := models.NewWebhookPayload(eventType, resourceType, resourceID, businessID, outboundData)
+
 			// Create delivery record
 			delivery := &models.WebhookDelivery{
 				WebhookID:    webhook.ID,
@@ -122,7 +128,7 @@ func (ws *WebhookService) GetWebhookDelivery(deliveryID uint) (*models.WebhookDe
 }
 
 // shouldTriggerWebhook checks if webhook should be triggered based on configuration
-func (ws *WebhookService) shouldTriggerWebhook(webhook *models.Webhook, eventType models.WebhookEventType, resourceType string) bool {
+func (ws *WebhookService) shouldTriggerWebhook(webhook *models.Webhook, eventType models.WebhookEventType, resourceType string, data map[string]interface{}) bool {
 	// Check event type
 	events := []string(webhook.Events)
 
@@ -148,6 +154,56 @@ func (ws *WebhookService) shouldTriggerWebhook(webhook *models.Webhook, eventTyp
 
 	for _, resType := range resourceTypes {
 		if resType == resourceType {
+			if eventType == models.EventFormSubmitted && resourceType == "FormSubmission" {
+				return isFormCodeAllowedForWebhook(webhook, data)
+			}
+			return true
+		}
+	}
+
+	return false
+}
+
+func sanitizeFormSubmissionPayloadData(data map[string]interface{}) map[string]interface{} {
+	if data == nil {
+		return map[string]interface{}{"form_data": map[string]interface{}{}}
+	}
+
+	formData, ok := data["form_data"]
+	if !ok || formData == nil {
+		return map[string]interface{}{"form_data": map[string]interface{}{}}
+	}
+
+	return map[string]interface{}{
+		"form_data": formData,
+	}
+}
+
+func isFormCodeAllowedForWebhook(webhook *models.Webhook, data map[string]interface{}) bool {
+	if webhook == nil {
+		return false
+	}
+
+	allowedRaw, ok := webhook.Headers["X-UGCL-Allowed-Form-Codes"]
+	if !ok {
+		allowedRaw, ok = webhook.Headers["x-ugcl-allowed-form-codes"]
+	}
+	if !ok {
+		return true
+	}
+
+	allowedStr := strings.TrimSpace(fmt.Sprint(allowedRaw))
+	if allowedStr == "" {
+		return true
+	}
+
+	formCode := strings.TrimSpace(fmt.Sprint(data["form_code"]))
+	if formCode == "" {
+		return false
+	}
+
+	for _, part := range strings.Split(allowedStr, ",") {
+		if strings.EqualFold(strings.TrimSpace(part), formCode) {
 			return true
 		}
 	}
@@ -160,6 +216,23 @@ func (ws *WebhookService) sendWebhookDelivery(webhook *models.Webhook, delivery 
 	headers := make(map[string]string)
 	for key, value := range webhook.Headers {
 		headers[key] = fmt.Sprint(value)
+	}
+
+	if delivery.EventType == models.EventFormSubmitted && delivery.ResourceType == "FormSubmission" {
+		partnerPortalKey := os.Getenv("PARTNER_PORTAL_KEY")
+		if partnerPortalKey == "" {
+			errMsg := "PARTNER_PORTAL_KEY is required for form.submitted webhook delivery"
+			now := time.Now()
+			delivery.Status = "FAILED"
+			delivery.Error = errMsg
+			delivery.UpdatedAt = now
+			ws.logWebhookError(delivery, "FAILED", errMsg)
+			ws.db.Model(delivery).Updates(delivery)
+			log.Printf("Failed to send webhook delivery %d: %s", delivery.ID, errMsg)
+			return
+		}
+
+		headers["X-Partner-Key"] = partnerPortalKey
 	}
 
 	req := &WebhookDeliveryRequest{
@@ -324,20 +397,35 @@ func (ws *WebhookService) TestWebhookDelivery(webhookID uint) error {
 		return err
 	}
 
-	// Create test payload
+	eventType := models.EventCreate
+	resourceType := "Test"
+	resourceID := "test-123"
 	testData := map[string]interface{}{
 		"test":    true,
 		"message": "This is a test webhook delivery",
 	}
 
-	payload := models.NewWebhookPayload(models.EventCreate, "Test", "test-123", webhook.BusinessID, testData)
+	if shouldTriggerFormSubmissionTest(webhook) {
+		eventType = models.EventFormSubmitted
+		resourceType = "FormSubmission"
+		resourceID = uuid.NewString()
+		testData = map[string]interface{}{
+			"form_data": map[string]interface{}{
+				"consumer_name": "Webhook Test",
+				"connection_id": "TEST-001",
+				"meter_reading": 1234,
+			},
+		}
+	}
+
+	payload := models.NewWebhookPayload(eventType, resourceType, resourceID, webhook.BusinessID, testData)
 
 	// Create test delivery
 	delivery := &models.WebhookDelivery{
 		WebhookID:    webhook.ID,
-		EventType:    models.EventCreate,
-		ResourceType: "Test",
-		ResourceID:   "test-123",
+		EventType:    eventType,
+		ResourceType: resourceType,
+		ResourceID:   resourceID,
 		Status:       "PENDING",
 		Attempt:      1,
 		MaxAttempts:  1,
@@ -358,4 +446,24 @@ func (ws *WebhookService) TestWebhookDelivery(webhookID uint) error {
 	go ws.sendWebhookDelivery(webhook, delivery, payload)
 
 	return nil
+}
+
+func shouldTriggerFormSubmissionTest(webhook *models.Webhook) bool {
+	if webhook == nil {
+		return false
+	}
+
+	for _, event := range []string(webhook.Events) {
+		if event == string(models.EventFormSubmitted) {
+			return true
+		}
+	}
+
+	for _, resourceType := range []string(webhook.ResourceTypes) {
+		if resourceType == "FormSubmission" {
+			return true
+		}
+	}
+
+	return false
 }

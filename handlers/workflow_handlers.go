@@ -86,6 +86,7 @@ func CreateFormSubmission(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("✅ Created submission: %s (state: %s)", submission.ID, submission.CurrentState)
+	triggerFormSubmissionWebhook(submission)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)

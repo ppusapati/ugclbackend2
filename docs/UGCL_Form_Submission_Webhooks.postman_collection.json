@@ -1,0 +1,382 @@
+{
+  "info": {
+    "name": "UGCL Form Submission Webhooks",
+    "description": "Partner-facing Postman collection for submitted form data webhook integrations.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "bearerToken",
+      "value": ""
+    },
+    {
+      "key": "webhookId",
+      "value": "1"
+    },
+    {
+      "key": "deliveryId",
+      "value": "1"
+    },
+    {
+      "key": "partnerCallbackUrl",
+      "value": "https://partner.example.com/webhooks/ugcl/forms"
+    },
+    {
+      "key": "allowedFormCodes",
+      "value": "water,dprsite"
+    }
+  ],
+  "item": [
+    {
+      "name": "Integration",
+      "item": [
+        {
+          "name": "Health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/integrations/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "integrations",
+                "health"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Webhook Contract",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/integrations/webhook-contract",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "integrations",
+                "webhook-contract"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Forms Catalog",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/integrations/forms",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "integrations",
+                "forms"
+              ]
+            },
+            "description": "Returns form codes available for third-party integration. Controlled by server env THIRD_PARTY_EXPOSED_FORM_CODES."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Webhook Subscription",
+      "item": [
+        {
+          "name": "Create Form Submission Webhook",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearerToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"url\": \"{{partnerCallbackUrl}}\",\n  \"events\": [\"form.submitted\"],\n  \"resource_types\": [\"FormSubmission\"],\n  \"headers\": {\n    \"X-Client-Name\": \"provider-a\",\n    \"X-UGCL-Allowed-Form-Codes\": \"{{allowedFormCodes}}\"\n  },\n  \"max_retries\": 5,\n  \"retry_interval\": 300\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/webhooks",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "webhooks"
+              ]
+            }
+          }
+        },
+        {
+          "name": "List Webhooks",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearerToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/webhooks",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "webhooks"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Webhook",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearerToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/webhooks/{{webhookId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "webhooks",
+                "{{webhookId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Webhook",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearerToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"events\": [\"form.submitted\"],\n  \"resource_types\": [\"FormSubmission\"],\n  \"is_active\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/webhooks/{{webhookId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "webhooks",
+                "{{webhookId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Webhook",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearerToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/webhooks/{{webhookId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "webhooks",
+                "{{webhookId}}"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Webhook Operations",
+      "item": [
+        {
+          "name": "Test Webhook",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearerToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/webhooks/{{webhookId}}/test",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "webhooks",
+                "{{webhookId}}",
+                "test"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delivery History",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearerToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/webhooks/{{webhookId}}/deliveries?limit=50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "webhooks",
+                "{{webhookId}}",
+                "deliveries"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "50"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delivery Logs",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearerToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/webhooks/deliveries/{{deliveryId}}/logs",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "webhooks",
+                "deliveries",
+                "{{deliveryId}}",
+                "logs"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Examples",
+      "item": [
+        {
+          "name": "Sample form.submitted Payload",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": \"8d06b5fb-07f9-44b6-a9b0-4b5e559872f3\",\n  \"event\": \"form.submitted\",\n  \"resource_type\": \"FormSubmission\",\n  \"resource_id\": \"22222222-2222-2222-2222-222222222222\",\n  \"timestamp\": \"2026-04-20T12:30:00Z\",\n  \"business_id\": \"11111111-1111-1111-1111-111111111111\",\n  \"version\": \"1.0\",\n  \"data\": {\n    \"submission_id\": \"22222222-2222-2222-2222-222222222222\",\n    \"form_code\": \"water\",\n    \"site_id\": \"33333333-3333-3333-3333-333333333333\",\n    \"submitted_by\": \"provider-demo-user\",\n    \"submitted_at\": \"2026-04-20T12:30:00Z\",\n    \"form_data\": {\n      \"consumer_name\": \"Acme Infra Pvt Ltd\",\n      \"connection_id\": \"WTR-0091\",\n      \"meter_reading\": 1842\n    }\n  }\n}"
+            },
+            "url": {
+              "raw": "{{partnerCallbackUrl}}",
+              "host": [
+                "{{partnerCallbackUrl}}"
+              ]
+            },
+            "description": "Use this saved example to simulate a partner-side callback payload. The submitted business payload is in data.form_data."
+          }
+        },
+        {
+          "name": "Sample form catalog response",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/integrations/forms",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "integrations",
+                "forms"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [],
+              "cookie": [],
+              "body": "{\n  \"forms\": [\n    { \"code\": \"water\", \"title\": \"Water Supply Form\" },\n    { \"code\": \"dprsite\", \"title\": \"DPR Site Form\" }\n  ],\n  \"count\": 2,\n  \"notes\": [\n    \"Use these form codes to configure webhook allowlists via X-UGCL-Allowed-Form-Codes.\",\n    \"Outbound form.submitted payload contains submitted fields under data.form_data only.\"\n  ]\n}"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
