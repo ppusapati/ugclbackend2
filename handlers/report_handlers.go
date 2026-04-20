@@ -247,66 +247,12 @@ func GetFormTableFields(w http.ResponseWriter, r *http.Request) {
 
 	dbErr := config.DB.Where("is_active = ? AND db_table_name IS NOT NULL AND db_table_name != ''", true).
 		Where("LOWER(db_table_name) = LOWER(?)", tableName).
-		Select("id", "code", "title", "form_schema", "core_fields").
+		Select("id", "code", "title", "form_schema", "steps", "core_fields").
 		First(&form).Error
 
 	if dbErr == nil && form.ID != uuid.Nil {
-		// Extract form fields from FormSchema
-		var formSchema map[string]interface{}
-		if err := json.Unmarshal(form.FormSchema, &formSchema); err == nil {
-			// 1. Extract top-level fields (single-step forms)
-			if fields, ok := formSchema["fields"].([]interface{}); ok {
-				for _, f := range fields {
-					if fieldMap, ok := f.(map[string]interface{}); ok {
-						formFields = append(formFields, map[string]interface{}{
-							"id":       fieldMap["id"],
-							"type":     fieldMap["type"],
-							"label":    fieldMap["label"],
-							"dataType": fieldMap["dataType"],
-							"source":   "form",
-						})
-					}
-				}
-			}
-
-			// 2. Extract nested fields from steps (multi-step forms)
-			if len(formFields) == 0 {
-				if steps, ok := formSchema["steps"].([]interface{}); ok {
-					for _, step := range steps {
-						if stepMap, ok := step.(map[string]interface{}); ok {
-							if stepFields, ok := stepMap["fields"].([]interface{}); ok {
-								for _, f := range stepFields {
-									if fieldMap, ok := f.(map[string]interface{}); ok {
-										formFields = append(formFields, map[string]interface{}{
-											"id":       fieldMap["id"],
-											"type":     fieldMap["type"],
-											"label":    fieldMap["label"],
-											"dataType": fieldMap["dataType"],
-											"source":   "form",
-										})
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-
-		// Extract from CoreFields if no fields found in FormSchema
-		if len(formFields) == 0 {
-			var coreFields []map[string]interface{}
-			if err := json.Unmarshal(form.CoreFields, &coreFields); err == nil {
-				for _, field := range coreFields {
-					formFields = append(formFields, map[string]interface{}{
-						"id":       field["id"],
-						"type":     field["type"],
-						"label":    field["label"],
-						"dataType": field["dataType"],
-						"source":   "core",
-					})
-				}
-			}
+		for _, field := range buildFormFieldList(form) {
+			formFields = append(formFields, field)
 		}
 
 		// Log what we found
@@ -326,35 +272,45 @@ func GetFormTableFields(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// BuildFormFieldMap creates a map of field ID -> field definition for quick lookup
-func buildFormFieldMap(form models.AppForm) map[string]map[string]interface{} {
-	fieldMap := make(map[string]map[string]interface{})
+func buildFormFieldList(form models.AppForm) []map[string]interface{} {
+	fieldList := []map[string]interface{}{}
+	seen := make(map[string]struct{})
+	appendField := func(field map[string]interface{}, source string) {
+		id, _ := field["id"].(string)
+		if id == "" {
+			return
+		}
+		if _, exists := seen[id]; exists {
+			return
+		}
+		seen[id] = struct{}{}
+		fieldList = append(fieldList, map[string]interface{}{
+			"id":       field["id"],
+			"type":     field["type"],
+			"label":    field["label"],
+			"dataType": field["dataType"],
+			"source":   source,
+		})
+	}
 
 	var formSchema map[string]interface{}
-	if err := json.Unmarshal(form.FormSchema, &formSchema); err != nil {
-		return fieldMap
-	}
-
-	// Extract top-level fields
-	if fields, ok := formSchema["fields"].([]interface{}); ok {
-		for _, f := range fields {
-			if fieldData, ok := f.(map[string]interface{}); ok {
-				if id, ok := fieldData["id"].(string); ok {
-					fieldMap[id] = fieldData
+	if len(form.FormSchema) > 0 && string(form.FormSchema) != "{}" {
+		if err := json.Unmarshal(form.FormSchema, &formSchema); err == nil {
+			if fields, ok := formSchema["fields"].([]interface{}); ok {
+				for _, raw := range fields {
+					if field, ok := raw.(map[string]interface{}); ok {
+						appendField(field, "form")
+					}
 				}
 			}
-		}
-	}
-
-	// Extract fields from steps
-	if steps, ok := formSchema["steps"].([]interface{}); ok {
-		for _, step := range steps {
-			if stepMap, ok := step.(map[string]interface{}); ok {
-				if stepFields, ok := stepMap["fields"].([]interface{}); ok {
-					for _, f := range stepFields {
-						if fieldData, ok := f.(map[string]interface{}); ok {
-							if id, ok := fieldData["id"].(string); ok {
-								fieldMap[id] = fieldData
+			if steps, ok := formSchema["steps"].([]interface{}); ok {
+				for _, rawStep := range steps {
+					if step, ok := rawStep.(map[string]interface{}); ok {
+						if stepFields, ok := step["fields"].([]interface{}); ok {
+							for _, rawField := range stepFields {
+								if field, ok := rawField.(map[string]interface{}); ok {
+									appendField(field, "form")
+								}
 							}
 						}
 					}
@@ -363,15 +319,40 @@ func buildFormFieldMap(form models.AppForm) map[string]map[string]interface{} {
 		}
 	}
 
-	// Extract from CoreFields if empty
-	if len(fieldMap) == 0 {
+	if len(form.Steps) > 0 && string(form.Steps) != "[]" {
+		var steps []map[string]interface{}
+		if err := json.Unmarshal(form.Steps, &steps); err == nil {
+			for _, step := range steps {
+				if stepFields, ok := step["fields"].([]interface{}); ok {
+					for _, rawField := range stepFields {
+						if field, ok := rawField.(map[string]interface{}); ok {
+							appendField(field, "form")
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if len(fieldList) == 0 {
 		var coreFields []map[string]interface{}
 		if err := json.Unmarshal(form.CoreFields, &coreFields); err == nil {
 			for _, field := range coreFields {
-				if id, ok := field["id"].(string); ok {
-					fieldMap[id] = field
-				}
+				appendField(field, "core")
 			}
+		}
+	}
+
+	return fieldList
+}
+
+// BuildFormFieldMap creates a map of field ID -> field definition for quick lookup
+func buildFormFieldMap(form models.AppForm) map[string]map[string]interface{} {
+	fieldMap := make(map[string]map[string]interface{})
+
+	for _, field := range buildFormFieldList(form) {
+		if id, ok := field["id"].(string); ok && id != "" {
+			fieldMap[id] = field
 		}
 	}
 
