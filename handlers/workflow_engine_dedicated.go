@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"p9e.in/ugcl/config"
@@ -140,6 +141,9 @@ func (we *WorkflowEngineDedicated) CreateSubmissionDedicated(
 		initialState = workflowDef.InitialState
 	}
 
+	// Resolve reference field values (UUIDs to display names)
+	enhancedFormData := we.ResolveFormFieldValues(&form, formData)
+
 	// Insert data into dedicated table
 	recordID, err := we.tableManager.InsertFormData(
 		form.DBTableName,
@@ -149,7 +153,7 @@ func (we *WorkflowEngineDedicated) CreateSubmissionDedicated(
 		siteID,
 		form.WorkflowID,
 		initialState,
-		formData,
+		enhancedFormData,
 		userID,
 	)
 	if err != nil {
@@ -160,6 +164,137 @@ func (we *WorkflowEngineDedicated) CreateSubmissionDedicated(
 
 	// Retrieve and return the created record
 	return we.GetSubmissionDedicated(form.DBTableName, recordID)
+}
+
+// ResolveFormFieldValues enhances form data by resolving reference fields to display names
+// For fields with dataSource: "api" or reference types, this function fetches the display value
+// E.g., converts UUID of dairy site to "Malabad Dairy Site"
+func (we *WorkflowEngineDedicated) ResolveFormFieldValues(form *models.AppForm, formData map[string]interface{}) map[string]interface{} {
+	resolvedData := make(map[string]interface{})
+	for k, v := range formData {
+		resolvedData[k] = v
+	}
+
+	// Extract field definitions from form schema
+	fieldDefs := make(map[string]map[string]interface{})
+	
+	var formSchema map[string]interface{}
+	if err := json.Unmarshal(form.FormSchema, &formSchema); err == nil {
+		// Extract from top-level fields
+		if fields, ok := formSchema["fields"].([]interface{}); ok {
+			for _, f := range fields {
+				if fieldMap, ok := f.(map[string]interface{}); ok {
+					if id, ok := fieldMap["id"].(string); ok {
+						fieldDefs[id] = fieldMap
+					}
+				}
+			}
+		}
+
+		// Extract from steps
+		if steps, ok := formSchema["steps"].([]interface{}); ok {
+			for _, step := range steps {
+				if stepMap, ok := step.(map[string]interface{}); ok {
+					if stepFields, ok := stepMap["fields"].([]interface{}); ok {
+						for _, f := range stepFields {
+							if fieldMap, ok := f.(map[string]interface{}); ok {
+								if id, ok := fieldMap["id"].(string); ok {
+									fieldDefs[id] = fieldMap
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Resolve each field in the form data
+	for fieldID, value := range formData {
+		fieldDef, exists := fieldDefs[fieldID]
+		if !exists {
+			continue
+		}
+
+		// Only resolve if the field has a data source (API lookup)
+		dataSource, ok := fieldDef["dataSource"].(string)
+		if !ok || dataSource != "api" {
+			continue
+		}
+
+		// Get the display and value fields
+		displayField, _ := fieldDef["displayField"].(string)
+		if displayField == "" {
+			displayField = "name"
+		}
+		valueField, _ := fieldDef["valueField"].(string)
+		if valueField == "" {
+			valueField = "id"
+		}
+
+		// If value is a string (UUID), try to resolve it
+		if strVal, ok := value.(string); ok {
+			displayValue := we.resolveReferenceValue(fieldDef, strVal, displayField, valueField)
+			if displayValue != "" {
+				// Store an object with both UUID and display name
+				resolvedData[fieldID] = map[string]interface{}{
+					"id":   strVal,        // UUID
+					"name": displayValue,  // Human-readable name
+				}
+				// Optionally, also store the display name in a separate column
+				// resolvedData[fieldID+"_name"] = displayValue
+			}
+		}
+	}
+
+	return resolvedData
+}
+
+// resolveReferenceValue looks up the display value for a reference field
+func (we *WorkflowEngineDedicated) resolveReferenceValue(fieldDef map[string]interface{}, valueID string, displayField string, valueField string) string {
+	apiEndpoint, ok := fieldDef["apiEndpoint"].(string)
+	if !ok || apiEndpoint == "" {
+		return ""
+	}
+
+	// Special handling for site references
+	if strings.Contains(apiEndpoint, "/sites") {
+		return we.resolveSiteName(valueID, displayField)
+	}
+
+	// Add more special handlers as needed for other reference types
+	log.Printf("🔍 Reference resolution not yet implemented for endpoint: %s", apiEndpoint)
+	return ""
+}
+
+// resolveSiteName looks up a site's name by its UUID
+func (we *WorkflowEngineDedicated) resolveSiteName(siteID string, displayField string) string {
+	if siteID == "" {
+		return ""
+	}
+
+	// Parse UUID
+	id, err := uuid.Parse(siteID)
+	if err != nil {
+		log.Printf("⚠️  Invalid site UUID: %s", siteID)
+		return ""
+	}
+
+	// Look up site from database
+	var site struct {
+		Name string `gorm:"column:name"`
+	}
+
+	if err := we.db.Table("sites").
+		Where("id = ? AND deleted_at IS NULL", id).
+		Select("name").
+		First(&site).Error; err != nil {
+		log.Printf("⚠️  Site not found for UUID: %s - %v", siteID, err)
+		return ""
+	}
+
+	log.Printf("✅ Resolved site UUID %s to name: %s", siteID, site.Name)
+	return site.Name
 }
 
 // TransitionStateDedicated performs a workflow state transition for a dedicated table record
