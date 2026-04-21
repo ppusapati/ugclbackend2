@@ -4,14 +4,104 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/sync/singleflight"
 	"gorm.io/gorm"
 	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/models"
 )
+
+var sqlIdentifierPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+const reportEngineMetadataCacheTTL = 15 * time.Minute
+
+type cachedResolvedTable struct {
+	qualified string
+	expiresAt time.Time
+}
+
+type cachedFormSchema struct {
+	schema    []map[string]interface{}
+	expiresAt time.Time
+}
+
+var reportTableResolutionLoadGroup singleflight.Group
+var reportFormSchemaLoadGroup singleflight.Group
+
+var reportTableResolutionCache = struct {
+	mu      sync.Mutex
+	entries map[string]cachedResolvedTable
+}{entries: make(map[string]cachedResolvedTable)}
+
+var reportFormSchemaCache = struct {
+	mu      sync.Mutex
+	entries map[string]cachedFormSchema
+}{entries: make(map[string]cachedFormSchema)}
+
+func getCachedResolvedTable(key string) (string, bool) {
+	reportTableResolutionCache.mu.Lock()
+	defer reportTableResolutionCache.mu.Unlock()
+
+	entry, ok := reportTableResolutionCache.entries[key]
+	if !ok {
+		return "", false
+	}
+	if time.Now().After(entry.expiresAt) {
+		delete(reportTableResolutionCache.entries, key)
+		return "", false
+	}
+	return entry.qualified, true
+}
+
+func setCachedResolvedTable(key, qualified string) {
+	reportTableResolutionCache.mu.Lock()
+	reportTableResolutionCache.entries[key] = cachedResolvedTable{qualified: qualified, expiresAt: time.Now().Add(reportEngineMetadataCacheTTL)}
+	reportTableResolutionCache.mu.Unlock()
+}
+
+func getCachedFormSchema(key string) ([]map[string]interface{}, bool) {
+	reportFormSchemaCache.mu.Lock()
+	defer reportFormSchemaCache.mu.Unlock()
+
+	entry, ok := reportFormSchemaCache.entries[key]
+	if !ok {
+		return nil, false
+	}
+	if time.Now().After(entry.expiresAt) {
+		delete(reportFormSchemaCache.entries, key)
+		return nil, false
+	}
+
+	cloned := make([]map[string]interface{}, len(entry.schema))
+	for i := range entry.schema {
+		row := make(map[string]interface{}, len(entry.schema[i]))
+		for k, v := range entry.schema[i] {
+			row[k] = v
+		}
+		cloned[i] = row
+	}
+	return cloned, true
+}
+
+func setCachedFormSchema(key string, schema []map[string]interface{}) {
+	cloned := make([]map[string]interface{}, len(schema))
+	for i := range schema {
+		row := make(map[string]interface{}, len(schema[i]))
+		for k, v := range schema[i] {
+			row[k] = v
+		}
+		cloned[i] = row
+	}
+
+	reportFormSchemaCache.mu.Lock()
+	reportFormSchemaCache.entries[key] = cachedFormSchema{schema: cloned, expiresAt: time.Now().Add(reportEngineMetadataCacheTTL)}
+	reportFormSchemaCache.mu.Unlock()
+}
 
 // ReportEngine handles dynamic report generation from form submission tables
 type ReportEngine struct {
@@ -50,6 +140,9 @@ type ReportMetaData struct {
 	GeneratedAt   time.Time `json:"generated_at"`
 	CacheKey      string    `json:"cache_key,omitempty"`
 }
+
+// formFieldIDPattern matches auto-generated form field IDs like "field_1775802520595"
+var formFieldIDPattern = regexp.MustCompile(`^field_\d+$`)
 
 // ExecuteReport generates a report based on the definition
 func (re *ReportEngine) ExecuteReport(
@@ -188,6 +281,12 @@ func (re *ReportEngine) buildQuery(
 	var args []interface{}
 	argIndex := 1
 
+	resolvedDataSources, err := re.resolveDataSources(dataSources)
+	if err != nil {
+		return "", nil, err
+	}
+	dataSources = resolvedDataSources
+
 	// SELECT clause
 	query.WriteString("SELECT ")
 	selectClauses := []string{}
@@ -204,19 +303,25 @@ func (re *ReportEngine) buildQuery(
 		}
 
 		if field.Aggregation != "" {
+			fieldRef, refErr := re.safeFieldRef(field.DataSource, field.FieldName)
+			if refErr != nil {
+				return "", nil, refErr
+			}
 			selectClauses = append(selectClauses, fmt.Sprintf(
-				"%s(%s.%s) AS %s",
+				"%s(%s) AS %s",
 				strings.ToUpper(field.Aggregation),
-				field.DataSource,
-				field.FieldName,
-				alias,
+				fieldRef,
+				re.quoteIdentifier(alias),
 			))
 		} else {
-			fieldExpr := re.resolveFieldExpression(field)
+			fieldExpr, refErr := re.resolveFieldExpression(field)
+			if refErr != nil {
+				return "", nil, refErr
+			}
 			selectClauses = append(selectClauses, fmt.Sprintf(
 				"%s AS %s",
 				fieldExpr,
-				alias,
+				re.quoteIdentifier(alias),
 			))
 		}
 	}
@@ -228,20 +333,23 @@ func (re *ReportEngine) buildQuery(
 			alias = fmt.Sprintf("%s_%s", strings.ToLower(agg.Function), agg.FieldName)
 		}
 
+		fieldRef, refErr := re.safeFieldRef(agg.DataSource, agg.FieldName)
+		if refErr != nil {
+			return "", nil, refErr
+		}
+
 		if agg.Function == "COUNT_DISTINCT" {
 			selectClauses = append(selectClauses, fmt.Sprintf(
-				"COUNT(DISTINCT %s.%s) AS %s",
-				agg.DataSource,
-				agg.FieldName,
-				alias,
+				"COUNT(DISTINCT %s) AS %s",
+				fieldRef,
+				re.quoteIdentifier(alias),
 			))
 		} else {
 			selectClauses = append(selectClauses, fmt.Sprintf(
-				"%s(%s.%s) AS %s",
+				"%s(%s) AS %s",
 				agg.Function,
-				agg.DataSource,
-				agg.FieldName,
-				alias,
+				fieldRef,
+				re.quoteIdentifier(alias),
 			))
 		}
 	}
@@ -257,7 +365,11 @@ func (re *ReportEngine) buildQuery(
 		return "", nil, fmt.Errorf("no data sources specified")
 	}
 
-	query.WriteString(fmt.Sprintf("\nFROM %s AS %s", dataSources[0].TableName, dataSources[0].Alias))
+	baseAlias, aliasErr := re.safeIdentifier(dataSources[0].Alias)
+	if aliasErr != nil {
+		return "", nil, aliasErr
+	}
+	query.WriteString(fmt.Sprintf("\nFROM %s AS %s", dataSources[0].TableName, baseAlias))
 	requiredJoins := re.collectRequiredJoins(fields, filters, groupings, sortings)
 	for _, joinClause := range requiredJoins {
 		query.WriteString("\n" + joinClause)
@@ -266,6 +378,10 @@ func (re *ReportEngine) buildQuery(
 	// JOIN clauses (for multi-table reports)
 	for i := 1; i < len(dataSources); i++ {
 		ds := dataSources[i]
+		dsAlias, dsAliasErr := re.safeIdentifier(ds.Alias)
+		if dsAliasErr != nil {
+			return "", nil, dsAliasErr
+		}
 		joinType := "LEFT JOIN"
 		if ds.JoinType != "" {
 			joinType = strings.ToUpper(ds.JoinType) + " JOIN"
@@ -275,7 +391,7 @@ func (re *ReportEngine) buildQuery(
 			"\n%s %s AS %s ON %s",
 			joinType,
 			ds.TableName,
-			ds.Alias,
+			dsAlias,
 			ds.JoinOn,
 		))
 	}
@@ -283,9 +399,29 @@ func (re *ReportEngine) buildQuery(
 	// WHERE clause
 	whereClauses := []string{}
 
+	// Automatic form_code filter: scope query to the selected form's submissions only.
+	// Parameterized to prevent SQL injection.
+	for _, ds := range dataSources {
+		if strings.TrimSpace(ds.FormCode) == "" {
+			continue
+		}
+		dsAlias, aliasErr := re.safeIdentifier(ds.Alias)
+		if aliasErr != nil {
+			return "", nil, aliasErr
+		}
+		whereClauses = append(whereClauses,
+			fmt.Sprintf("%s.form_code = $%d", re.quoteIdentifier(dsAlias), argIndex))
+		args = append(args, strings.TrimSpace(ds.FormCode))
+		argIndex++
+	}
+
 	// Always exclude soft-deleted records
 	for _, ds := range dataSources {
-		whereClauses = append(whereClauses, fmt.Sprintf("%s.deleted_at IS NULL", ds.Alias))
+		alias, aliasErr := re.safeIdentifier(ds.Alias)
+		if aliasErr != nil {
+			return "", nil, aliasErr
+		}
+		whereClauses = append(whereClauses, fmt.Sprintf("%s.deleted_at IS NULL", alias))
 	}
 	if _, ok := requiredJoins["sites"]; ok {
 		whereClauses = append(whereClauses, "sites.deleted_at IS NULL")
@@ -293,7 +429,10 @@ func (re *ReportEngine) buildQuery(
 
 	// Add filters
 	for _, filter := range filters {
-		clause, filterArgs := re.buildFilterClause(filter, &argIndex)
+		clause, filterArgs, filterErr := re.buildFilterClause(filter, &argIndex)
+		if filterErr != nil {
+			return "", nil, filterErr
+		}
 		if clause != "" {
 			whereClauses = append(whereClauses, clause)
 			args = append(args, filterArgs...)
@@ -308,7 +447,11 @@ func (re *ReportEngine) buildQuery(
 	if len(groupings) > 0 {
 		groupClauses := []string{}
 		for _, group := range groupings {
-			groupClauses = append(groupClauses, fmt.Sprintf("%s.%s", group.DataSource, group.FieldName))
+			groupRef, refErr := re.safeFieldRef(group.DataSource, group.FieldName)
+			if refErr != nil {
+				return "", nil, refErr
+			}
+			groupClauses = append(groupClauses, groupRef)
 		}
 		query.WriteString("\nGROUP BY " + strings.Join(groupClauses, ", "))
 	}
@@ -323,9 +466,17 @@ func (re *ReportEngine) buildQuery(
 			}
 
 			if sort.DataSource != "" {
-				orderClauses = append(orderClauses, fmt.Sprintf("%s.%s %s", sort.DataSource, sort.FieldName, direction))
+				sortRef, refErr := re.safeFieldRef(sort.DataSource, sort.FieldName)
+				if refErr != nil {
+					return "", nil, refErr
+				}
+				orderClauses = append(orderClauses, fmt.Sprintf("%s %s", sortRef, direction))
 			} else {
-				orderClauses = append(orderClauses, fmt.Sprintf("%s %s", sort.FieldName, direction))
+				sortField, sortErr := re.safeIdentifier(sort.FieldName)
+				if sortErr != nil {
+					return "", nil, sortErr
+				}
+				orderClauses = append(orderClauses, fmt.Sprintf("%s %s", sortField, direction))
 			}
 		}
 		query.WriteString("\nORDER BY " + strings.Join(orderClauses, ", "))
@@ -334,16 +485,35 @@ func (re *ReportEngine) buildQuery(
 	return query.String(), args, nil
 }
 
-func (re *ReportEngine) resolveFieldExpression(field models.ReportField) string {
+func (re *ReportEngine) resolveFieldExpression(field models.ReportField) (string, error) {
 	switch field.FieldName {
-	case "created_by_name":
-		return "creator.name"
+	case "submitted_by_name", "created_by_name":
+		return re.safeFieldRef("creator", "name")
 	case "site_name":
-		return "sites.name"
+		return re.safeFieldRef("sites", "name")
 	case "business_vertical_name":
-		return "business_verticals.name"
+		return re.safeFieldRef("business_verticals", "name")
+	case "submitted_at", "current_state", "form_code":
+		return re.safeFieldRef(field.DataSource, field.FieldName)
 	default:
-		return fmt.Sprintf("%s.%s", field.DataSource, field.FieldName)
+		// Form field IDs (e.g. "field_1775802520595") are stored as JSONB keys in
+		// form_submissions.form_data. Extract them with the ->> operator.
+		if formFieldIDPattern.MatchString(field.FieldName) {
+			safeAlias, err := re.safeIdentifier(field.DataSource)
+			if err != nil {
+				return "", err
+			}
+			aliasRef := re.quoteIdentifier(safeAlias)
+			// Safe: field.FieldName is validated to match ^field_\d+$ (no SQL injection risk).
+			// 1) If JSON value is an object, prefer its "name" display value.
+			// 2) Else, for UUID-like legacy values, try resolving site name.
+			// 3) Fallback to the raw text value.
+			return fmt.Sprintf(`CASE
+	WHEN jsonb_typeof(%s.form_data->'%s') = 'object' THEN COALESCE(%s.form_data->'%s'->>'name', %s.form_data->>'%s')
+	ELSE COALESCE((SELECT s.name FROM sites AS s WHERE s.id::text = %s.form_data->>'%s' AND s.deleted_at IS NULL LIMIT 1), %s.form_data->>'%s')
+END`, aliasRef, field.FieldName, aliasRef, field.FieldName, aliasRef, field.FieldName, aliasRef, field.FieldName, aliasRef, field.FieldName), nil
+		}
+		return re.safeFieldRef(field.DataSource, field.FieldName)
 	}
 }
 
@@ -356,8 +526,9 @@ func (re *ReportEngine) collectRequiredJoins(
 	joins := map[string]string{}
 	register := func(fieldName string, dataSource string) {
 		switch fieldName {
-		case "created_by_name":
-			joins["creator"] = fmt.Sprintf("LEFT JOIN users AS creator ON creator.id::text = %s.created_by", dataSource)
+		case "submitted_by_name", "created_by_name":
+			// form_submissions uses submitted_by; legacy reports may use created_by_name alias.
+			joins["creator"] = fmt.Sprintf("LEFT JOIN users AS creator ON creator.id::text = %s.submitted_by", dataSource)
 		case "site_name":
 			joins["sites"] = fmt.Sprintf("LEFT JOIN sites AS sites ON sites.id = %s.site_id", dataSource)
 		case "business_vertical_name":
@@ -380,55 +551,58 @@ func (re *ReportEngine) collectRequiredJoins(
 }
 
 // buildFilterClause constructs a WHERE clause for a filter
-func (re *ReportEngine) buildFilterClause(filter models.ReportFilter, argIndex *int) (string, []interface{}) {
+func (re *ReportEngine) buildFilterClause(filter models.ReportFilter, argIndex *int) (string, []interface{}, error) {
 	var args []interface{}
-	fieldRef := re.resolveFilterFieldRef(filter)
+	fieldRef, refErr := re.resolveFilterFieldRef(filter)
+	if refErr != nil {
+		return "", nil, refErr
+	}
 
 	switch strings.ToLower(filter.Operator) {
 	case "eq", "=":
 		clause := fmt.Sprintf("%s = $%d", fieldRef, *argIndex)
 		*argIndex++
-		return clause, []interface{}{filter.Value}
+		return clause, []interface{}{filter.Value}, nil
 
 	case "ne", "!=", "<>":
 		clause := fmt.Sprintf("%s != $%d", fieldRef, *argIndex)
 		*argIndex++
-		return clause, []interface{}{filter.Value}
+		return clause, []interface{}{filter.Value}, nil
 
 	case "gt", ">":
 		clause := fmt.Sprintf("%s > $%d", fieldRef, *argIndex)
 		*argIndex++
-		return clause, []interface{}{filter.Value}
+		return clause, []interface{}{filter.Value}, nil
 
 	case "gte", ">=":
 		clause := fmt.Sprintf("%s >= $%d", fieldRef, *argIndex)
 		*argIndex++
-		return clause, []interface{}{filter.Value}
+		return clause, []interface{}{filter.Value}, nil
 
 	case "lt", "<":
 		clause := fmt.Sprintf("%s < $%d", fieldRef, *argIndex)
 		*argIndex++
-		return clause, []interface{}{filter.Value}
+		return clause, []interface{}{filter.Value}, nil
 
 	case "lte", "<=":
 		clause := fmt.Sprintf("%s <= $%d", fieldRef, *argIndex)
 		*argIndex++
-		return clause, []interface{}{filter.Value}
+		return clause, []interface{}{filter.Value}, nil
 
 	case "like", "contains":
 		clause := fmt.Sprintf("%s ILIKE $%d", fieldRef, *argIndex)
 		*argIndex++
-		return clause, []interface{}{fmt.Sprintf("%%%v%%", filter.Value)}
+		return clause, []interface{}{fmt.Sprintf("%%%v%%", filter.Value)}, nil
 
 	case "starts_with":
 		clause := fmt.Sprintf("%s ILIKE $%d", fieldRef, *argIndex)
 		*argIndex++
-		return clause, []interface{}{fmt.Sprintf("%v%%", filter.Value)}
+		return clause, []interface{}{fmt.Sprintf("%v%%", filter.Value)}, nil
 
 	case "ends_with":
 		clause := fmt.Sprintf("%s ILIKE $%d", fieldRef, *argIndex)
 		*argIndex++
-		return clause, []interface{}{fmt.Sprintf("%%%v", filter.Value)}
+		return clause, []interface{}{fmt.Sprintf("%%%v", filter.Value)}, nil
 
 	case "in":
 		if values, ok := filter.Value.([]interface{}); ok && len(values) > 0 {
@@ -439,66 +613,206 @@ func (re *ReportEngine) buildFilterClause(filter models.ReportFilter, argIndex *
 				*argIndex++
 			}
 			clause := fmt.Sprintf("%s IN (%s)", fieldRef, strings.Join(placeholders, ", "))
-			return clause, args
+			return clause, args, nil
 		}
 
 	case "between":
 		if values, ok := filter.Value.([]interface{}); ok && len(values) == 2 {
 			clause := fmt.Sprintf("%s BETWEEN $%d AND $%d", fieldRef, *argIndex, *argIndex+1)
 			*argIndex += 2
-			return clause, []interface{}{values[0], values[1]}
+			return clause, []interface{}{values[0], values[1]}, nil
 		}
 
 	case "is_null":
-		return fmt.Sprintf("%s IS NULL", fieldRef), nil
+		return fmt.Sprintf("%s IS NULL", fieldRef), nil, nil
 
 	case "is_not_null":
-		return fmt.Sprintf("%s IS NOT NULL", fieldRef), nil
+		return fmt.Sprintf("%s IS NOT NULL", fieldRef), nil, nil
 
 	case "date_equals":
 		clause := fmt.Sprintf("DATE(%s) = $%d", fieldRef, *argIndex)
 		*argIndex++
-		return clause, []interface{}{filter.Value}
+		return clause, []interface{}{filter.Value}, nil
 
 	case "date_before":
 		clause := fmt.Sprintf("DATE(%s) < $%d", fieldRef, *argIndex)
 		*argIndex++
-		return clause, []interface{}{filter.Value}
+		return clause, []interface{}{filter.Value}, nil
 
 	case "date_after":
 		clause := fmt.Sprintf("DATE(%s) > $%d", fieldRef, *argIndex)
 		*argIndex++
-		return clause, []interface{}{filter.Value}
+		return clause, []interface{}{filter.Value}, nil
 
 	case "this_week":
-		return fmt.Sprintf("%s >= date_trunc('week', CURRENT_DATE) AND %s < date_trunc('week', CURRENT_DATE) + interval '1 week'", fieldRef, fieldRef), nil
+		return fmt.Sprintf("%s >= date_trunc('week', CURRENT_DATE) AND %s < date_trunc('week', CURRENT_DATE) + interval '1 week'", fieldRef, fieldRef), nil, nil
 
 	case "this_month":
-		return fmt.Sprintf("%s >= date_trunc('month', CURRENT_DATE) AND %s < date_trunc('month', CURRENT_DATE) + interval '1 month'", fieldRef, fieldRef), nil
+		return fmt.Sprintf("%s >= date_trunc('month', CURRENT_DATE) AND %s < date_trunc('month', CURRENT_DATE) + interval '1 month'", fieldRef, fieldRef), nil, nil
 
 	case "this_year":
-		return fmt.Sprintf("%s >= date_trunc('year', CURRENT_DATE) AND %s < date_trunc('year', CURRENT_DATE) + interval '1 year'", fieldRef, fieldRef), nil
+		return fmt.Sprintf("%s >= date_trunc('year', CURRENT_DATE) AND %s < date_trunc('year', CURRENT_DATE) + interval '1 year'", fieldRef, fieldRef), nil, nil
 
 	case "last_n_days":
 		if days, ok := filter.Value.(float64); ok {
-			return fmt.Sprintf("%s >= CURRENT_DATE - interval '%d days'", fieldRef, int(days)), nil
+			return fmt.Sprintf("%s >= CURRENT_DATE - interval '%d days'", fieldRef, int(days)), nil, nil
 		}
 	}
 
-	return "", nil
+	return "", nil, nil
 }
 
-func (re *ReportEngine) resolveFilterFieldRef(filter models.ReportFilter) string {
+func (re *ReportEngine) resolveFilterFieldRef(filter models.ReportFilter) (string, error) {
 	switch filter.FieldName {
 	case "created_by_name":
-		return "creator.name"
+		return re.safeFieldRef("creator", "name")
 	case "site_name":
-		return "sites.name"
+		return re.safeFieldRef("sites", "name")
 	case "business_vertical_name":
-		return "business_verticals.name"
+		return re.safeFieldRef("business_verticals", "name")
 	default:
-		return fmt.Sprintf("%s.%s", filter.DataSource, filter.FieldName)
+		return re.safeFieldRef(filter.DataSource, filter.FieldName)
 	}
+}
+
+func (re *ReportEngine) safeIdentifier(identifier string) (string, error) {
+	id := strings.TrimSpace(identifier)
+	if id == "" {
+		return "", fmt.Errorf("empty SQL identifier")
+	}
+	if !sqlIdentifierPattern.MatchString(id) {
+		return "", fmt.Errorf("invalid SQL identifier: %s", id)
+	}
+	return id, nil
+}
+
+func (re *ReportEngine) quoteIdentifier(identifier string) string {
+	return `"` + strings.ReplaceAll(identifier, `"`, `""`) + `"`
+}
+
+func (re *ReportEngine) safeFieldRef(alias, fieldName string) (string, error) {
+	safeAlias, err := re.safeIdentifier(alias)
+	if err != nil {
+		return "", err
+	}
+	safeField, err := re.safeIdentifier(fieldName)
+	if err != nil {
+		return "", err
+	}
+	return re.quoteIdentifier(safeAlias) + "." + re.quoteIdentifier(safeField), nil
+}
+
+func (re *ReportEngine) resolveDataSources(dataSources []models.DataSource) ([]models.DataSource, error) {
+	resolved := make([]models.DataSource, len(dataSources))
+	for i, ds := range dataSources {
+		if strings.TrimSpace(ds.Alias) == "" {
+			ds.Alias = fmt.Sprintf("t%d", i+1)
+		}
+		if _, err := re.safeIdentifier(ds.Alias); err != nil {
+			return nil, fmt.Errorf("invalid data source alias '%s': %w", ds.Alias, err)
+		}
+
+		tableRef, err := re.resolveDataSourceTable(ds)
+		if err != nil {
+			return nil, err
+		}
+		ds.TableName = tableRef
+		resolved[i] = ds
+	}
+	return resolved, nil
+}
+
+func (re *ReportEngine) resolveDataSourceTable(ds models.DataSource) (string, error) {
+	// Form-based reports use a deterministic per-form view with extracted field_* columns.
+	// This keeps filters/grouping/sorting stable and avoids direct JSONB expressions everywhere.
+	if strings.TrimSpace(ds.FormCode) != "" {
+		viewName, err := EnsureReportFormViewByCode(re.db, ds.FormCode)
+		if err != nil {
+			return "", fmt.Errorf("failed to resolve report view for form_code %s: %w", ds.FormCode, err)
+		}
+		return re.quoteIdentifier("public") + "." + re.quoteIdentifier(viewName), nil
+	}
+
+	// No form_code: use the literal table_name (for custom datasources or legacy reports).
+	tableCandidate := strings.TrimSpace(ds.TableName)
+	if tableCandidate == "" {
+		return "", fmt.Errorf("data source requires either form_code or table_name")
+	}
+
+	// Legacy auto-heal: if table_name matches an app form code or db_table_name,
+	// route through the deterministic per-form reporting view.
+	tableLookup := tableCandidate
+	if dot := strings.Index(tableLookup, "."); dot >= 0 {
+		tableLookup = tableLookup[dot+1:]
+	}
+	tableLookup = strings.Trim(tableLookup, `"`)
+	if tableLookup != "" {
+		var form models.AppForm
+		if err := re.db.Where("LOWER(code) = LOWER(?) OR LOWER(db_table_name) = LOWER(?)", tableLookup, tableLookup).
+			Select("code").
+			First(&form).Error; err == nil && strings.TrimSpace(form.Code) != "" {
+			viewName, viewErr := EnsureReportFormViewByCode(re.db, form.Code)
+			if viewErr != nil {
+				return "", fmt.Errorf("failed to resolve report view for legacy datasource %s: %w", tableCandidate, viewErr)
+			}
+			return re.quoteIdentifier("public") + "." + re.quoteIdentifier(viewName), nil
+		}
+	}
+
+	parts := strings.SplitN(tableCandidate, ".", 2)
+	if len(parts) == 2 {
+		schema := strings.Trim(parts[0], `"`)
+		table := strings.Trim(parts[1], `"`)
+		if _, err := re.safeIdentifier(schema); err == nil {
+			if _, err := re.safeIdentifier(table); err == nil {
+				return re.quoteIdentifier(schema) + "." + re.quoteIdentifier(table), nil
+			}
+		}
+	}
+
+	cleanTableName := strings.Trim(parts[0], `"`)
+	if _, err := re.safeIdentifier(cleanTableName); err != nil {
+		return "", fmt.Errorf("invalid table name '%s': %w", cleanTableName, err)
+	}
+
+	cacheKey := strings.ToLower(cleanTableName)
+	if cachedQualified, ok := getCachedResolvedTable(cacheKey); ok {
+		return cachedQualified, nil
+	}
+
+	loaded, err, _ := reportTableResolutionLoadGroup.Do(cacheKey, func() (interface{}, error) {
+		if cachedQualified, ok := getCachedResolvedTable(cacheKey); ok {
+			return cachedQualified, nil
+		}
+
+		var resolved struct {
+			TableSchema string `gorm:"column:table_schema"`
+			TableName   string `gorm:"column:table_name"`
+		}
+		if dbErr := re.db.Raw(`
+		SELECT table_schema, table_name
+		FROM information_schema.tables
+		WHERE lower(table_name) = lower(?)
+		  AND table_type = 'BASE TABLE'
+		  AND table_schema NOT IN ('pg_catalog', 'information_schema')
+		ORDER BY CASE WHEN table_schema = 'public' THEN 0 ELSE 1 END, table_schema
+		LIMIT 1
+		`, cleanTableName).Scan(&resolved).Error; dbErr != nil {
+			return "", dbErr
+		}
+		if resolved.TableName == "" {
+			return "", fmt.Errorf("report data source table not found: %s", cleanTableName)
+		}
+
+		qualified := re.quoteIdentifier(resolved.TableSchema) + "." + re.quoteIdentifier(resolved.TableName)
+		setCachedResolvedTable(cacheKey, qualified)
+		return qualified, nil
+	})
+	if err != nil {
+		return "", err
+	}
+
+	return loaded.(string), nil
 }
 
 // buildHeaders creates column headers for the result
@@ -567,12 +881,61 @@ func (re *ReportEngine) formatValue(value interface{}, dataType string) interfac
 		return nil
 	}
 
+	normalizedType := strings.ToLower(strings.TrimSpace(dataType))
+	shouldFormatDateTime := strings.Contains(normalizedType, "date") || strings.Contains(normalizedType, "time")
+	if shouldFormatDateTime {
+		switch v := value.(type) {
+		case time.Time:
+			return v.Format("02-01-2006 15:04")
+		case *time.Time:
+			if v != nil {
+				return v.Format("02-01-2006 15:04")
+			}
+		case string:
+			if parsed, ok := parseReportDateTime(v); ok {
+				return parsed.Format("02-01-2006 15:04")
+			}
+		case []byte:
+			s := string(v)
+			if parsed, ok := parseReportDateTime(s); ok {
+				return parsed.Format("02-01-2006 15:04")
+			}
+			return s
+		}
+	}
+
 	// Handle byte arrays (from database)
 	if b, ok := value.([]byte); ok {
 		return string(b)
 	}
 
 	return value
+}
+
+func parseReportDateTime(raw string) (time.Time, bool) {
+	v := strings.TrimSpace(raw)
+	if v == "" {
+		return time.Time{}, false
+	}
+
+	layouts := []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02 15:04:05.999999-07:00",
+		"2006-01-02 15:04:05.999999",
+		"2006-01-02 15:04:05-07:00",
+		"2006-01-02 15:04:05",
+		"2006-01-02 15:04",
+		"2006-01-02",
+	}
+
+	for _, layout := range layouts {
+		if parsed, err := time.Parse(layout, v); err == nil {
+			return parsed, true
+		}
+	}
+
+	return time.Time{}, false
 }
 
 // calculateSummary calculates summary statistics
@@ -610,12 +973,22 @@ func (re *ReportEngine) GetFormTableSchema(tableName string) ([]map[string]inter
 		return nil, fmt.Errorf("table name is required")
 	}
 
-	var resolved struct {
-		TableSchema string `gorm:"column:table_schema"`
-		TableName   string `gorm:"column:table_name"`
+	cacheKey := strings.ToLower(cleanTableName)
+	if cachedSchema, ok := getCachedFormSchema(cacheKey); ok {
+		return cachedSchema, nil
 	}
 
-	resolveQuery := `
+	loaded, loadErr, _ := reportFormSchemaLoadGroup.Do(cacheKey, func() (interface{}, error) {
+		if cachedSchema, ok := getCachedFormSchema(cacheKey); ok {
+			return cachedSchema, nil
+		}
+
+		var resolved struct {
+			TableSchema string `gorm:"column:table_schema"`
+			TableName   string `gorm:"column:table_name"`
+		}
+
+		resolveQuery := `
 		SELECT table_schema, table_name
 		FROM information_schema.tables
 		WHERE lower(table_name) = lower(?)
@@ -625,15 +998,15 @@ func (re *ReportEngine) GetFormTableSchema(tableName string) ([]map[string]inter
 		LIMIT 1
 	`
 
-	if err := re.db.Raw(resolveQuery, cleanTableName).Scan(&resolved).Error; err != nil {
-		return nil, err
-	}
+		if err := re.db.Raw(resolveQuery, cleanTableName).Scan(&resolved).Error; err != nil {
+			return nil, err
+		}
 
-	if resolved.TableName == "" {
-		return nil, fmt.Errorf("table not found: %s", cleanTableName)
-	}
+		if resolved.TableName == "" {
+			return nil, fmt.Errorf("table not found: %s", cleanTableName)
+		}
 
-	query := `
+		query := `
 		SELECT
 			column_name,
 			data_type,
@@ -646,35 +1019,42 @@ func (re *ReportEngine) GetFormTableSchema(tableName string) ([]map[string]inter
 		ORDER BY ordinal_position
 	`
 
-	rows, err := re.db.Raw(query, resolved.TableSchema, resolved.TableName).Rows()
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var schema []map[string]interface{}
-	for rows.Next() {
-		var colName, dataType, isNullable string
-		var colDefault *string
-		var maxLength *int
-
-		if err := rows.Scan(&colName, &dataType, &isNullable, &colDefault, &maxLength); err != nil {
+		rows, err := re.db.Raw(query, resolved.TableSchema, resolved.TableName).Rows()
+		if err != nil {
 			return nil, err
 		}
+		defer rows.Close()
 
-		schema = append(schema, map[string]interface{}{
-			"name":       colName,
-			"type":       re.mapSQLTypeToReportType(dataType),
-			"nullable":   isNullable == "YES",
-			"max_length": maxLength,
-		})
+		var schema []map[string]interface{}
+		for rows.Next() {
+			var colName, dataType, isNullable string
+			var colDefault *string
+			var maxLength *int
+
+			if err := rows.Scan(&colName, &dataType, &isNullable, &colDefault, &maxLength); err != nil {
+				return nil, err
+			}
+
+			schema = append(schema, map[string]interface{}{
+				"name":       colName,
+				"type":       re.mapSQLTypeToReportType(dataType),
+				"nullable":   isNullable == "YES",
+				"max_length": maxLength,
+			})
+		}
+
+		if len(schema) == 0 {
+			return nil, fmt.Errorf("no readable columns found for table: %s", resolved.TableName)
+		}
+
+		setCachedFormSchema(cacheKey, schema)
+		return schema, nil
+	})
+	if loadErr != nil {
+		return nil, loadErr
 	}
 
-	if len(schema) == 0 {
-		return nil, fmt.Errorf("no readable columns found for table: %s", resolved.TableName)
-	}
-
-	return schema, nil
+	return loaded.([]map[string]interface{}), nil
 }
 
 // mapSQLTypeToReportType maps SQL types to report field types

@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
+	"gorm.io/gorm"
 	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/middleware"
 	"p9e.in/ugcl/models"
@@ -79,7 +80,16 @@ func AssignBusinessRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if user already has this role in this vertical
+	// Ensure target user exists before any assignment work.
+	var targetUser models.User
+	if err := config.DB.First(&targetUser, "id = ?", targetUserID).Error; err != nil {
+		http.Error(w, "Target user not found", http.StatusNotFound)
+		return
+	}
+
+	assignedByID, _ := uuid.Parse(claims.UserID)
+
+	// Check if user already has a role in this vertical
 	var existingRole models.UserBusinessRole
 	err = config.DB.
 		Joins("JOIN business_roles ON business_roles.id = user_business_roles.business_role_id").
@@ -87,13 +97,109 @@ func AssignBusinessRole(w http.ResponseWriter, r *http.Request) {
 			targetUserID, businessRole.BusinessVerticalID, true).
 		First(&existingRole).Error
 
+	if err != nil && err != gorm.ErrRecordNotFound {
+		http.Error(w, "Failed to check existing role assignment: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	if err == nil {
-		http.Error(w, "User already has a role in this vertical", http.StatusConflict)
+		// If the same role is already assigned, treat as success (idempotent behavior).
+		if existingRole.BusinessRoleID == businessRoleID {
+			tx := config.DB.Begin()
+			if tx.Error != nil {
+				http.Error(w, "Failed to start transaction: "+tx.Error.Error(), http.StatusInternalServerError)
+				return
+			}
+
+			// Keep the user's primary business vertical aligned with the assigned business role.
+			updateResult := tx.Model(&models.User{}).
+				Where("id = ?", targetUserID).
+				Update("business_vertical_id", businessRole.BusinessVerticalID)
+			if updateResult.Error != nil {
+				tx.Rollback()
+				http.Error(w, "Failed to sync user business vertical: "+updateResult.Error.Error(), http.StatusInternalServerError)
+				return
+			}
+			if updateResult.RowsAffected != 1 {
+				tx.Rollback()
+				http.Error(w, "Failed to sync user business vertical: user row not updated", http.StatusInternalServerError)
+				return
+			}
+
+			if commitErr := tx.Commit().Error; commitErr != nil {
+				http.Error(w, "Failed to commit vertical sync: "+commitErr.Error(), http.StatusInternalServerError)
+				return
+			}
+
+			response := map[string]interface{}{
+				"success": true,
+				"message": "Role already assigned for this vertical",
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(response)
+			return
+		}
+
+		// Replace existing role assignment in the same vertical.
+		tx := config.DB.Begin()
+		if tx.Error != nil {
+			http.Error(w, "Failed to start transaction: "+tx.Error.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		existingRole.BusinessRoleID = businessRoleID
+		existingRole.AssignedAt = time.Now()
+		existingRole.AssignedBy = &assignedByID
+		existingRole.IsActive = true
+
+		if saveErr := tx.Save(&existingRole).Error; saveErr != nil {
+			tx.Rollback()
+			http.Error(w, "Failed to update role assignment: "+saveErr.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		updateResult := tx.Model(&models.User{}).
+			Where("id = ?", targetUserID).
+			Update("business_vertical_id", businessRole.BusinessVerticalID)
+		if updateResult.Error != nil {
+			tx.Rollback()
+			http.Error(w, "Failed to sync user business vertical: "+updateResult.Error.Error(), http.StatusInternalServerError)
+			return
+		}
+		if updateResult.RowsAffected != 1 {
+			tx.Rollback()
+			http.Error(w, "Failed to sync user business vertical: user row not updated", http.StatusInternalServerError)
+			return
+		}
+
+		if commitErr := tx.Commit().Error; commitErr != nil {
+			http.Error(w, "Failed to commit role assignment update: "+commitErr.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		config.DB.
+			Preload("BusinessRole.BusinessVertical").
+			Preload("User").
+			First(&existingRole, "id = ?", existingRole.ID)
+
+		// Evict the affected user from the auth cache.
+		middleware.InvalidateUserCache(userID)
+		invalidateAdminUsersCache()
+		invalidateUnifiedRolesCache()
+
+		response := map[string]interface{}{
+			"success":            true,
+			"user_business_role": existingRole,
+			"message":            "Role assignment updated successfully",
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
 		return
 	}
 
 	// Create user business role assignment
-	assignedByID, _ := uuid.Parse(claims.UserID)
 	userBusinessRole := models.UserBusinessRole{
 		UserID:         targetUserID,
 		BusinessRoleID: businessRoleID,
@@ -102,8 +208,35 @@ func AssignBusinessRole(w http.ResponseWriter, r *http.Request) {
 		AssignedBy:     &assignedByID,
 	}
 
-	if err := config.DB.Create(&userBusinessRole).Error; err != nil {
+	tx := config.DB.Begin()
+	if tx.Error != nil {
+		http.Error(w, "Failed to start transaction: "+tx.Error.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if err := tx.Create(&userBusinessRole).Error; err != nil {
+		tx.Rollback()
 		http.Error(w, "Failed to assign role: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Keep the user's primary business vertical aligned with the assigned business role.
+	updateResult := tx.Model(&models.User{}).
+		Where("id = ?", targetUserID).
+		Update("business_vertical_id", businessRole.BusinessVerticalID)
+	if updateResult.Error != nil {
+		tx.Rollback()
+		http.Error(w, "Failed to sync user business vertical: "+updateResult.Error.Error(), http.StatusInternalServerError)
+		return
+	}
+	if updateResult.RowsAffected != 1 {
+		tx.Rollback()
+		http.Error(w, "Failed to sync user business vertical: user row not updated", http.StatusInternalServerError)
+		return
+	}
+
+	if commitErr := tx.Commit().Error; commitErr != nil {
+		http.Error(w, "Failed to commit role assignment: "+commitErr.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -112,6 +245,11 @@ func AssignBusinessRole(w http.ResponseWriter, r *http.Request) {
 		Preload("BusinessRole.BusinessVertical").
 		Preload("User").
 		First(&userBusinessRole, "id = ?", userBusinessRole.ID)
+
+	// Evict the newly assigned user from the auth cache.
+	middleware.InvalidateUserCache(userID)
+	invalidateAdminUsersCache()
+	invalidateUnifiedRolesCache()
 
 	response := map[string]interface{}{
 		"success":            true,
@@ -183,6 +321,11 @@ func RemoveBusinessRole(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to remove role: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	// Evict the affected user from the auth cache so the next request re-fetches updated permissions.
+	middleware.InvalidateUserCache(userID)
+	invalidateAdminUsersCache()
+	invalidateUnifiedRolesCache()
 
 	response := map[string]interface{}{
 		"success": true,

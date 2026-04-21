@@ -37,9 +37,10 @@ func Connect() {
 	maxOpenConns := getEnvAsInt("DB_MAX_OPEN_CONNS", 100)
 	sqlDB.SetMaxOpenConns(maxOpenConns)
 
-	// Set maximum number of idle connections in the pool
-	// This keeps connections ready for reuse, reducing connection overhead
-	maxIdleConns := getEnvAsInt("DB_MAX_IDLE_CONNS", 10)
+	// Set maximum number of idle connections in the pool.
+	// Raised from 10 → 25 so concurrent auth-middleware queries (which previously
+	// each needed 3 DB round-trips) no longer wait for a free connection.
+	maxIdleConns := getEnvAsInt("DB_MAX_IDLE_CONNS", 25)
 	sqlDB.SetMaxIdleConns(maxIdleConns)
 
 	// Set maximum lifetime of a connection

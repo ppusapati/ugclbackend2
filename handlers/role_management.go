@@ -4,12 +4,100 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
+	"golang.org/x/sync/singleflight"
 	"p9e.in/ugcl/config"
+	"p9e.in/ugcl/middleware"
 	"p9e.in/ugcl/models"
 )
+
+const unifiedRolesCacheTTL = 10 * time.Minute
+
+type unifiedRolesCacheEntry struct {
+	payload   []byte
+	expiresAt time.Time
+}
+
+type unifiedRolesCacheStore struct {
+	mu      sync.Mutex // get() deletes expired entries so always needs the write lock; Mutex is correct.
+	entries map[string]unifiedRolesCacheEntry
+}
+
+var unifiedRolesCache = &unifiedRolesCacheStore{entries: make(map[string]unifiedRolesCacheEntry)}
+var unifiedRolesLoadGroup singleflight.Group
+
+var permissionsListLoadGroup singleflight.Group
+
+const permissionsListCacheKey = "all"
+
+var permissionsListCache = struct {
+	mu      sync.Mutex
+	entries map[string]unifiedRolesCacheEntry
+}{
+	entries: make(map[string]unifiedRolesCacheEntry),
+}
+
+func getCachedPermissionsList() ([]byte, bool) {
+	permissionsListCache.mu.Lock()
+	defer permissionsListCache.mu.Unlock()
+
+	entry, ok := permissionsListCache.entries[permissionsListCacheKey]
+	if !ok {
+		return nil, false
+	}
+	if time.Now().After(entry.expiresAt) {
+		delete(permissionsListCache.entries, permissionsListCacheKey)
+		return nil, false
+	}
+	return entry.payload, true
+}
+
+func setCachedPermissionsList(payload []byte) {
+	permissionsListCache.mu.Lock()
+	permissionsListCache.entries[permissionsListCacheKey] = unifiedRolesCacheEntry{payload: payload, expiresAt: time.Now().Add(unifiedRolesCacheTTL)}
+	permissionsListCache.mu.Unlock()
+}
+
+func invalidatePermissionsListCache() {
+	permissionsListCache.mu.Lock()
+	clear(permissionsListCache.entries)
+	permissionsListCache.mu.Unlock()
+}
+
+func unifiedRolesCacheKey(includeBusiness bool, businessVerticalID string) string {
+	return strconv.FormatBool(includeBusiness) + ":" + businessVerticalID
+}
+
+func (c *unifiedRolesCacheStore) get(key string) ([]byte, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	entry, ok := c.entries[key]
+	if !ok {
+		return nil, false
+	}
+	if time.Now().After(entry.expiresAt) {
+		delete(c.entries, key)
+		return nil, false
+	}
+	return entry.payload, true
+}
+
+func (c *unifiedRolesCacheStore) set(key string, payload []byte) {
+	c.mu.Lock()
+	c.entries[key] = unifiedRolesCacheEntry{payload: payload, expiresAt: time.Now().Add(unifiedRolesCacheTTL)}
+	c.mu.Unlock()
+}
+
+func invalidateUnifiedRolesCache() {
+	unifiedRolesCache.mu.Lock()
+	clear(unifiedRolesCache.entries)
+	unifiedRolesCache.mu.Unlock()
+}
 
 type createRoleReq struct {
 	Name        string   `json:"name"`
@@ -104,26 +192,48 @@ func GetAllRoles(w http.ResponseWriter, r *http.Request) {
 
 // GetAllPermissions returns all available permissions
 func GetAllPermissions(w http.ResponseWriter, r *http.Request) {
-	var permissions []models.Permission
-	if err := config.DB.Find(&permissions).Error; err != nil {
+	if payload, ok := getCachedPermissionsList(); ok {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(payload)
+		return
+	}
+
+	loaded, err, _ := permissionsListLoadGroup.Do(permissionsListCacheKey, func() (interface{}, error) {
+		if payload, ok := getCachedPermissionsList(); ok {
+			return payload, nil
+		}
+
+		var permissions []models.Permission
+		if err := config.DB.Find(&permissions).Error; err != nil {
+			return nil, err
+		}
+
+		// Convert to response format
+		permResponses := make([]permissionResponse, len(permissions))
+		for i, perm := range permissions {
+			permResponses[i] = permissionResponse{
+				ID:          perm.ID,
+				Name:        perm.Name,
+				Description: perm.Description,
+				Resource:    perm.Resource,
+				Action:      perm.Action,
+			}
+		}
+
+		payload, marshalErr := json.Marshal(permResponses)
+		if marshalErr != nil {
+			return nil, marshalErr
+		}
+		setCachedPermissionsList(payload)
+		return payload, nil
+	})
+	if err != nil {
 		http.Error(w, "DB error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// Convert to response format
-	permResponses := make([]permissionResponse, len(permissions))
-	for i, perm := range permissions {
-		permResponses[i] = permissionResponse{
-			ID:          perm.ID,
-			Name:        perm.Name,
-			Description: perm.Description,
-			Resource:    perm.Resource,
-			Action:      perm.Action,
-		}
-	}
-
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(permResponses)
+	w.Write(loaded.([]byte))
 }
 
 func CreatePermission(w http.ResponseWriter, r *http.Request) {
@@ -136,6 +246,7 @@ func CreatePermission(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to create permission: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	invalidatePermissionsListCache()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(perm)
 }
@@ -159,6 +270,7 @@ func CreateRole(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to create role: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	invalidateUnifiedRolesCache()
 
 	// Assign permissions
 	for _, permName := range req.Permissions {
@@ -265,6 +377,16 @@ func UpdateRole(w http.ResponseWriter, r *http.Request) {
 		Permissions: permissions,
 	}
 
+	// Invalidate cache for every user assigned this global role so updated permissions
+	// apply immediately rather than after the 30s TTL expires.
+	var affectedUserIDs []uuid.UUID
+	config.DB.Model(&models.User{}).Where("role_id = ?", id).Pluck("id", &affectedUserIDs)
+	for _, uid := range affectedUserIDs {
+		middleware.InvalidateUserCache(uid.String())
+	}
+	invalidateAdminUsersCache()
+	invalidateUnifiedRolesCache()
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
@@ -300,23 +422,25 @@ func DeleteRole(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to delete role: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	invalidateAdminUsersCache()
+	invalidateUnifiedRolesCache()
 
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // UnifiedRoleResponse represents a role that could be either global or business-specific
 type UnifiedRoleResponse struct {
-	ID                 uuid.UUID            `json:"id"`
-	Name               string               `json:"name"`
-	DisplayName        string               `json:"display_name,omitempty"`
-	Description        string               `json:"description"`
-	Level              int                  `json:"level"`
-	IsActive           bool                 `json:"is_active"`
-	IsGlobal           bool                 `json:"is_global"`
-	BusinessVerticalID *uuid.UUID           `json:"business_vertical_id,omitempty"`
+	ID                 uuid.UUID             `json:"id"`
+	Name               string                `json:"name"`
+	DisplayName        string                `json:"display_name,omitempty"`
+	Description        string                `json:"description"`
+	Level              int                   `json:"level"`
+	IsActive           bool                  `json:"is_active"`
+	IsGlobal           bool                  `json:"is_global"`
+	BusinessVerticalID *uuid.UUID            `json:"business_vertical_id,omitempty"`
 	BusinessVertical   *BusinessVerticalInfo `json:"business_vertical,omitempty"`
-	Permissions        []permissionResponse `json:"permissions"`
-	UserCount          int64                `json:"user_count"`
+	Permissions        []permissionResponse  `json:"permissions"`
+	UserCount          int64                 `json:"user_count"`
 }
 
 type BusinessVerticalInfo struct {
@@ -332,99 +456,55 @@ type BusinessVerticalInfo struct {
 func GetAllRolesUnified(w http.ResponseWriter, r *http.Request) {
 	includeBusiness := r.URL.Query().Get("include_business") != "false" // Default true
 	businessVerticalID := r.URL.Query().Get("business_vertical_id")
+	cacheKey := unifiedRolesCacheKey(includeBusiness, businessVerticalID)
 
-	var unifiedRoles []UnifiedRoleResponse
-
-	// 1. Fetch Global Roles
-	var globalRoles []models.Role
-	if err := config.DB.Preload("Permissions").
-		Where("is_active = ?", true).
-		Order("level ASC").
-		Find(&globalRoles).Error; err != nil {
-		http.Error(w, "Failed to fetch global roles: "+err.Error(), http.StatusInternalServerError)
+	if payload, ok := unifiedRolesCache.get(cacheKey); ok {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(payload)
 		return
 	}
 
-	// Get user counts for global roles
-	globalRoleUserCounts := make(map[uuid.UUID]int64)
-	for _, role := range globalRoles {
-		var count int64
-		config.DB.Model(&models.User{}).Where("role_id = ?", role.ID).Count(&count)
-		globalRoleUserCounts[role.ID] = count
-	}
+	loaded, err, _ := unifiedRolesLoadGroup.Do(cacheKey, func() (interface{}, error) {
+		if payload, ok := unifiedRolesCache.get(cacheKey); ok {
+			return payload, nil
+		}
 
-	// Convert global roles to unified format
-	for _, role := range globalRoles {
-		permissions := make([]permissionResponse, len(role.Permissions))
-		for j, perm := range role.Permissions {
-			permissions[j] = permissionResponse{
-				ID:          perm.ID,
-				Name:        perm.Name,
-				Description: perm.Description,
-				Resource:    perm.Resource,
-				Action:      perm.Action,
+		var unifiedRoles []UnifiedRoleResponse
+
+		// 1. Fetch Global Roles
+		var globalRoles []models.Role
+		if err := config.DB.Preload("Permissions").
+			Where("is_active = ?", true).
+			Order("level ASC").
+			Find(&globalRoles).Error; err != nil {
+			return nil, err
+		}
+
+		// Get user counts for global roles
+		globalRoleUserCounts := make(map[uuid.UUID]int64)
+		if len(globalRoles) > 0 {
+			globalRoleIDs := make([]uuid.UUID, len(globalRoles))
+			for i, r := range globalRoles {
+				globalRoleIDs[i] = r.ID
+			}
+
+			var globalCounts []struct {
+				RoleID uuid.UUID
+				Count  int64
+			}
+			config.DB.Model(&models.User{}).
+				Select("role_id, COUNT(*) as count").
+				Where("role_id IN ?", globalRoleIDs).
+				Group("role_id").
+				Scan(&globalCounts)
+
+			for _, gc := range globalCounts {
+				globalRoleUserCounts[gc.RoleID] = gc.Count
 			}
 		}
 
-		unifiedRoles = append(unifiedRoles, UnifiedRoleResponse{
-			ID:                 role.ID,
-			Name:               role.Name,
-			DisplayName:        role.Name, // Global roles don't have separate display name
-			Description:        role.Description,
-			Level:              role.Level,
-			IsActive:           role.IsActive,
-			IsGlobal:           true,
-			BusinessVerticalID: nil,
-			BusinessVertical:   nil,
-			Permissions:        permissions,
-			UserCount:          globalRoleUserCounts[role.ID],
-		})
-	}
-
-	// 2. Fetch Business Roles (if requested)
-	if includeBusiness {
-		query := config.DB.Preload("Permissions").
-			Preload("BusinessVertical").
-			Where("is_active = ?", true)
-
-		// Filter by specific vertical if provided
-		if businessVerticalID != "" {
-			if verticalUUID, err := uuid.Parse(businessVerticalID); err == nil {
-				query = query.Where("business_vertical_id = ?", verticalUUID)
-			}
-		}
-
-		var businessRoles []models.BusinessRole
-		if err := query.Order("level ASC").Find(&businessRoles).Error; err != nil {
-			http.Error(w, "Failed to fetch business roles: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		// Get user counts for business roles
-		businessRoleUserCounts := make(map[uuid.UUID]int64)
-		if len(businessRoles) > 0 {
-			roleIDs := make([]uuid.UUID, len(businessRoles))
-			for i, r := range businessRoles {
-				roleIDs[i] = r.ID
-			}
-
-			var roleUserCounts []struct {
-				BusinessRoleID uuid.UUID
-				Count          int64
-			}
-			config.DB.Model(&models.UserBusinessRole{}).
-				Select("business_role_id, COUNT(*) as count").
-				Where("business_role_id IN ? AND is_active = ?", roleIDs, true).
-				Group("business_role_id").
-				Scan(&roleUserCounts)
-
-			for _, result := range roleUserCounts {
-				businessRoleUserCounts[result.BusinessRoleID] = result.Count
-			}
-		}
-
-		// Convert business roles to unified format
-		for _, role := range businessRoles {
+		// Convert global roles to unified format
+		for _, role := range globalRoles {
 			permissions := make([]permissionResponse, len(role.Permissions))
 			for j, perm := range role.Permissions {
 				permissions[j] = permissionResponse{
@@ -436,33 +516,115 @@ func GetAllRolesUnified(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
-			verticalInfo := &BusinessVerticalInfo{
-				ID:   role.BusinessVertical.ID,
-				Code: role.BusinessVertical.Code,
-				Name: role.BusinessVertical.Name,
-			}
-
 			unifiedRoles = append(unifiedRoles, UnifiedRoleResponse{
 				ID:                 role.ID,
 				Name:               role.Name,
-				DisplayName:        role.DisplayName,
+				DisplayName:        role.Name, // Global roles don't have separate display name
 				Description:        role.Description,
 				Level:              role.Level,
 				IsActive:           role.IsActive,
-				IsGlobal:           false,
-				BusinessVerticalID: &role.BusinessVerticalID,
-				BusinessVertical:   verticalInfo,
+				IsGlobal:           true,
+				BusinessVerticalID: nil,
+				BusinessVertical:   nil,
 				Permissions:        permissions,
-				UserCount:          businessRoleUserCounts[role.ID],
+				UserCount:          globalRoleUserCounts[role.ID],
 			})
 		}
-	}
 
-	response := map[string]interface{}{
-		"roles": unifiedRoles,
-		"total": len(unifiedRoles),
+		// 2. Fetch Business Roles (if requested)
+		if includeBusiness {
+			query := config.DB.Preload("Permissions").
+				Preload("BusinessVertical").
+				Where("is_active = ?", true)
+
+			// Filter by specific vertical if provided
+			if businessVerticalID != "" {
+				if verticalUUID, err := uuid.Parse(businessVerticalID); err == nil {
+					query = query.Where("business_vertical_id = ?", verticalUUID)
+				}
+			}
+
+			var businessRoles []models.BusinessRole
+			if err := query.Order("level ASC").Find(&businessRoles).Error; err != nil {
+				return nil, err
+			}
+
+			// Get user counts for business roles
+			businessRoleUserCounts := make(map[uuid.UUID]int64)
+			if len(businessRoles) > 0 {
+				roleIDs := make([]uuid.UUID, len(businessRoles))
+				for i, r := range businessRoles {
+					roleIDs[i] = r.ID
+				}
+
+				var roleUserCounts []struct {
+					BusinessRoleID uuid.UUID
+					Count          int64
+				}
+				config.DB.Model(&models.UserBusinessRole{}).
+					Select("business_role_id, COUNT(*) as count").
+					Where("business_role_id IN ? AND is_active = ?", roleIDs, true).
+					Group("business_role_id").
+					Scan(&roleUserCounts)
+
+				for _, result := range roleUserCounts {
+					businessRoleUserCounts[result.BusinessRoleID] = result.Count
+				}
+			}
+
+			// Convert business roles to unified format
+			for _, role := range businessRoles {
+				permissions := make([]permissionResponse, len(role.Permissions))
+				for j, perm := range role.Permissions {
+					permissions[j] = permissionResponse{
+						ID:          perm.ID,
+						Name:        perm.Name,
+						Description: perm.Description,
+						Resource:    perm.Resource,
+						Action:      perm.Action,
+					}
+				}
+
+				verticalInfo := &BusinessVerticalInfo{
+					ID:   role.BusinessVertical.ID,
+					Code: role.BusinessVertical.Code,
+					Name: role.BusinessVertical.Name,
+				}
+
+				unifiedRoles = append(unifiedRoles, UnifiedRoleResponse{
+					ID:                 role.ID,
+					Name:               role.Name,
+					DisplayName:        role.DisplayName,
+					Description:        role.Description,
+					Level:              role.Level,
+					IsActive:           role.IsActive,
+					IsGlobal:           false,
+					BusinessVerticalID: &role.BusinessVerticalID,
+					BusinessVertical:   verticalInfo,
+					Permissions:        permissions,
+					UserCount:          businessRoleUserCounts[role.ID],
+				})
+			}
+		}
+
+		response := map[string]interface{}{
+			"roles": unifiedRoles,
+			"total": len(unifiedRoles),
+		}
+
+		payload, marshalErr := json.Marshal(response)
+		if marshalErr != nil {
+			return nil, marshalErr
+		}
+
+		unifiedRolesCache.set(cacheKey, payload)
+		return payload, nil
+	})
+	if err != nil {
+		http.Error(w, "Failed to fetch unified roles: "+err.Error(), http.StatusInternalServerError)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	w.Write(loaded.([]byte))
 }

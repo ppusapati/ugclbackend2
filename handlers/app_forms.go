@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	formsListCacheTTL  = 30 * time.Second
+	formsListCacheTTL  = 10 * time.Minute
 	formByCodeCacheTTL = 30 * time.Second
 )
 
@@ -294,16 +294,14 @@ func buildSafeDropdownProxyEndpoint(rawEndpoint, businessCode string) (string, b
 // GetAllForms returns all forms in the system (admin only)
 // GET /api/v1/admin/forms
 func GetAllAppForms(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.GetClaims(r)
-	if claims == nil {
+	if middleware.GetClaims(r) == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	fmt.Println("Hey buddy i am here")
-	// Check if user is admin
-	var user models.User
-	if err := config.DB.First(&user, "id = ?", claims.UserID).Error; err != nil {
-		http.Error(w, "user not found", http.StatusUnauthorized)
+
+	const allAdminFormsCacheKey = "admin:all"
+	if payload, ok := getCachedJSON(formsListCache, &formsListCacheMu, allAdminFormsCacheKey); ok {
+		writeJSONBytes(w, payload)
 		return
 	}
 
@@ -332,10 +330,18 @@ func GetAllAppForms(w http.ResponseWriter, r *http.Request) {
 	})
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	if payload, err := json.Marshal(map[string]interface{}{
 		"forms": formDTOs,
 		"count": len(formDTOs),
-	})
+	}); err == nil {
+		setCachedJSON(formsListCache, &formsListCacheMu, allAdminFormsCacheKey, payload, formsListCacheTTL)
+		writeJSONBytes(w, payload)
+	} else {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"forms": formDTOs,
+			"count": len(formDTOs),
+		})
+	}
 }
 
 // UpdateFormVerticalAccess updates which verticals have access to a form (admin only)
@@ -455,9 +461,32 @@ func CreateForm(w http.ResponseWriter, r *http.Request) {
 		form.DBTableName = generateTableName(form.Code)
 	}
 
+	tx := config.DB.Begin()
+	if tx.Error != nil {
+		log.Printf("❌ Error starting transaction for form create: %v", tx.Error)
+		http.Error(w, "failed to create form", http.StatusInternalServerError)
+		return
+	}
+
 	// Create form record in database first
-	if err := config.DB.Create(&form).Error; err != nil {
+	if err := tx.Create(&form).Error; err != nil {
+		tx.Rollback()
 		log.Printf("❌ Error creating form: %v", err)
+		http.Error(w, "failed to create form", http.StatusInternalServerError)
+		return
+	}
+
+	if form.IsActive {
+		if _, err := EnsureReportFormViewForForm(tx, form); err != nil {
+			tx.Rollback()
+			log.Printf("❌ Error creating report view for form %s: %v", form.Code, err)
+			http.Error(w, "failed to create reporting view for form", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		log.Printf("❌ Error committing form create transaction: %v", err)
 		http.Error(w, "failed to create form", http.StatusInternalServerError)
 		return
 	}
@@ -558,9 +587,31 @@ func ToggleFormStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	tx := config.DB.Begin()
+	if tx.Error != nil {
+		log.Printf("❌ Error starting transaction for form status update: %v", tx.Error)
+		http.Error(w, "failed to update form status", http.StatusInternalServerError)
+		return
+	}
+
 	form.IsActive = body.IsActive
-	if err := config.DB.Save(&form).Error; err != nil {
+	if body.IsActive {
+		if _, err := EnsureReportFormViewForForm(tx, form); err != nil {
+			tx.Rollback()
+			log.Printf("❌ Error creating report view while activating form %s: %v", form.Code, err)
+			http.Error(w, "failed to activate form reporting view", http.StatusInternalServerError)
+			return
+		}
+	}
+	if err := tx.Save(&form).Error; err != nil {
+		tx.Rollback()
 		log.Printf("❌ Error updating form status: %v", err)
+		http.Error(w, "failed to update form status", http.StatusInternalServerError)
+		return
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		log.Printf("❌ Error committing form status transaction: %v", err)
 		http.Error(w, "failed to update form status", http.StatusInternalServerError)
 		return
 	}
@@ -670,9 +721,32 @@ func UpdateForm(w http.ResponseWriter, r *http.Request) {
 		existingForm.IsActive = updateData.IsActive
 	}
 
+	tx := config.DB.Begin()
+	if tx.Error != nil {
+		log.Printf("❌ Error starting transaction for form update: %v", tx.Error)
+		http.Error(w, "failed to update form", http.StatusInternalServerError)
+		return
+	}
+
 	// Save updates
-	if err := config.DB.Save(&existingForm).Error; err != nil {
+	if err := tx.Save(&existingForm).Error; err != nil {
+		tx.Rollback()
 		log.Printf("❌ Error updating form: %v", err)
+		http.Error(w, "failed to update form", http.StatusInternalServerError)
+		return
+	}
+
+	if existingForm.IsActive {
+		if _, err := EnsureReportFormViewForForm(tx, existingForm); err != nil {
+			tx.Rollback()
+			log.Printf("❌ Error syncing report view for form %s: %v", existingForm.Code, err)
+			http.Error(w, "failed to sync reporting view for form", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		log.Printf("❌ Error committing form update transaction: %v", err)
 		http.Error(w, "failed to update form", http.StatusInternalServerError)
 		return
 	}

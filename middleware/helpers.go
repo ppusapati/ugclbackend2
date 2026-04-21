@@ -3,12 +3,63 @@ package middleware
 import (
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
+	"golang.org/x/sync/singleflight"
 	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/models"
 )
+
+const businessIdentifierCacheTTL = 15 * time.Minute
+
+var businessIdentifierResolveGroup singleflight.Group
+
+type businessIdentifierCacheStore struct {
+	mu      sync.Mutex
+	entries map[string]businessIdentifierCacheEntry
+}
+
+type businessIdentifierCacheEntry struct {
+	businessID uuid.UUID
+	expiresAt  time.Time
+}
+
+var businessIdentifierCache = &businessIdentifierCacheStore{entries: make(map[string]businessIdentifierCacheEntry)}
+
+func (c *businessIdentifierCacheStore) get(identifier string) (uuid.UUID, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	entry, ok := c.entries[identifier]
+	if !ok {
+		return uuid.Nil, false
+	}
+	if time.Now().After(entry.expiresAt) {
+		delete(c.entries, identifier)
+		return uuid.Nil, false
+	}
+	return entry.businessID, true
+}
+
+func (c *businessIdentifierCacheStore) set(identifier string, businessID uuid.UUID) {
+	c.mu.Lock()
+	c.entries[identifier] = businessIdentifierCacheEntry{businessID: businessID, expiresAt: time.Now().Add(businessIdentifierCacheTTL)}
+	c.mu.Unlock()
+}
+
+func (c *businessIdentifierCacheStore) invalidate() {
+	c.mu.Lock()
+	clear(c.entries)
+	c.mu.Unlock()
+}
+
+// InvalidateBusinessIdentifierCache clears the identifier-to-business lookup cache.
+func InvalidateBusinessIdentifierCache() {
+	businessIdentifierCache.invalidate()
+}
 
 // GetMuxVars extracts mux variables from request
 func GetMuxVars(r *http.Request) map[string]string {
@@ -69,25 +120,41 @@ func getBusinessIDFromRequest(r *http.Request) uuid.UUID {
 
 // resolveBusinessIdentifier converts business code, name, or UUID to UUID
 func resolveBusinessIdentifier(identifier string) uuid.UUID {
+	identifier = strings.TrimSpace(identifier)
+	if identifier == "" {
+		return uuid.Nil
+	}
+
 	// First try to parse as UUID
 	if businessID, err := uuid.Parse(identifier); err == nil {
 		return businessID
 	}
 
-	// Try to find by business code (case-insensitive)
-	var business models.BusinessVertical
-	if err := config.DB.Where("UPPER(code) = UPPER(?) AND is_active = ?", identifier, true).
-		First(&business).Error; err == nil {
-		return business.ID
+	normalizedIdentifier := strings.ToUpper(identifier)
+	if cachedBusinessID, ok := businessIdentifierCache.get(normalizedIdentifier); ok {
+		return cachedBusinessID
 	}
 
-	// Try to find by business name (case-insensitive)
-	if err := config.DB.Where("UPPER(name) = UPPER(?) AND is_active = ?", identifier, true).
-		First(&business).Error; err == nil {
-		return business.ID
+	loaded, err, _ := businessIdentifierResolveGroup.Do(normalizedIdentifier, func() (interface{}, error) {
+		if cachedBusinessID, ok := businessIdentifierCache.get(normalizedIdentifier); ok {
+			return cachedBusinessID, nil
+		}
+
+		var business models.BusinessVertical
+		if dbErr := config.DB.
+			Where("is_active = ? AND (UPPER(code) = ? OR UPPER(name) = ?)", true, normalizedIdentifier, normalizedIdentifier).
+			First(&business).Error; dbErr != nil {
+			return uuid.Nil, dbErr
+		}
+
+		businessIdentifierCache.set(normalizedIdentifier, business.ID)
+		return business.ID, nil
+	})
+	if err != nil {
+		return uuid.Nil
 	}
 
-	return uuid.Nil
+	return loaded.(uuid.UUID)
 }
 
 // ResolveBusinessIdentifier resolves a business code, name, or UUID to a business UUID.
@@ -111,11 +178,8 @@ func GetCurrentBusinessID(r *http.Request) uuid.UUID {
 
 // GetUserRoleLevel returns highest role level for user (lowest number = highest privilege)
 func GetUserRoleLevel(userID uuid.UUID) int {
-	var user models.User
-	if err := config.DB.
-		Preload("RoleModel").
-		Preload("UserBusinessRoles.BusinessRole").
-		First(&user, "id = ?", userID).Error; err != nil {
+	user, err := loadUserWithAuthGraph(userID)
+	if err != nil {
 		return 5 // Default to lowest privilege if user not found
 	}
 
@@ -142,10 +206,8 @@ func GetMaxAssignableLevel(userID uuid.UUID) int {
 
 // IsSuperAdminByID checks if user has super admin privileges by user ID
 func IsSuperAdminByID(userID uuid.UUID) bool {
-	var user models.User
-	if err := config.DB.
-		Preload("RoleModel").
-		First(&user, "id = ?", userID).Error; err != nil {
+	user, err := loadUserWithAuthGraph(userID)
+	if err != nil {
 		return false
 	}
 
@@ -154,11 +216,8 @@ func IsSuperAdminByID(userID uuid.UUID) bool {
 
 // HasPermissionInVertical checks if user has a specific permission in a business vertical
 func HasPermissionInVertical(userID uuid.UUID, permission string, verticalID uuid.UUID) bool {
-	var user models.User
-	if err := config.DB.
-		Preload("RoleModel.Permissions").
-		Preload("UserBusinessRoles.BusinessRole.Permissions").
-		First(&user, "id = ?", userID).Error; err != nil {
+	user, err := loadUserWithAuthGraph(userID)
+	if err != nil {
 		return false
 	}
 
@@ -167,13 +226,42 @@ func HasPermissionInVertical(userID uuid.UUID, permission string, verticalID uui
 
 // GetUserAccessibleVerticals returns list of vertical IDs user has access to
 func GetUserAccessibleVerticals(userID uuid.UUID) []uuid.UUID {
-	var user models.User
-	if err := config.DB.
-		Preload("RoleModel").
-		Preload("UserBusinessRoles.BusinessRole").
-		First(&user, "id = ?", userID).Error; err != nil {
+	user, err := loadUserWithAuthGraph(userID)
+	if err != nil {
 		return []uuid.UUID{}
 	}
 
 	return authService.GetAccessibleBusinessVerticals(user)
+}
+
+func loadUserWithAuthGraph(userID uuid.UUID) (models.User, error) {
+	cacheKey := userID.String()
+	if cachedUser, ok := userCache.get(cacheKey); ok {
+		return cachedUser, nil
+	}
+
+	loaded, err, _ := userContextLoadGroup.Do(cacheKey, func() (interface{}, error) {
+		if cachedUser, ok := userCache.get(cacheKey); ok {
+			return cachedUser, nil
+		}
+
+		var freshUser models.User
+		if dbErr := config.DB.
+			Preload("RoleModel.Permissions").
+			Preload("UserBusinessRoles", "is_active = ?", true).
+			Preload("UserBusinessRoles.BusinessRole", "is_active = ?", true).
+			Preload("UserBusinessRoles.BusinessRole.Permissions").
+			Preload("UserBusinessRoles.BusinessRole.BusinessVertical").
+			First(&freshUser, "id = ?", userID).Error; dbErr != nil {
+			return nil, dbErr
+		}
+
+		userCache.set(cacheKey, freshUser)
+		return freshUser, nil
+	})
+	if err != nil {
+		return models.User{}, err
+	}
+
+	return loaded.(models.User), nil
 }

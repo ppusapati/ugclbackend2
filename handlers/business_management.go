@@ -5,13 +5,59 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
+	"golang.org/x/sync/singleflight"
 	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/middleware"
 	"p9e.in/ugcl/models"
 )
+
+// businessVerticalsCacheTTL is how long the paginated business verticals list response is cached.
+const businessVerticalsCacheTTL = 10 * time.Minute
+
+type businessVerticalsResponseCache struct {
+	mu      sync.Mutex // get() deletes expired entries so always needs the write lock; Mutex is correct.
+	entries map[string]businessVerticalsResponseEntry
+}
+
+type businessVerticalsResponseEntry struct {
+	payload   []byte
+	expiresAt time.Time
+}
+
+func (c *businessVerticalsResponseCache) get(key string) ([]byte, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	e, ok := c.entries[key]
+	if !ok {
+		return nil, false
+	}
+	if time.Now().After(e.expiresAt) {
+		delete(c.entries, key)
+		return nil, false
+	}
+	return e.payload, true
+}
+
+func (c *businessVerticalsResponseCache) set(key string, payload []byte) {
+	c.mu.Lock()
+	c.entries[key] = businessVerticalsResponseEntry{payload: payload, expiresAt: time.Now().Add(businessVerticalsCacheTTL)}
+	c.mu.Unlock()
+}
+
+func (c *businessVerticalsResponseCache) invalidate() {
+	c.mu.Lock()
+	clear(c.entries)
+	c.mu.Unlock()
+}
+
+var businessVerticalsCache = &businessVerticalsResponseCache{entries: make(map[string]businessVerticalsResponseEntry)}
+var businessVerticalsLoadGroup singleflight.Group
 
 type createBusinessReq struct {
 	Name        string `json:"name"`
@@ -69,93 +115,112 @@ func GetAllBusinessVerticals(w http.ResponseWriter, r *http.Request) {
 	if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
 		limit = l
 	}
-	offset := (page - 1) * limit
 
-	var businesses []models.BusinessVertical
-	if err := config.DB.Where("is_active = ?", true).
-		Limit(limit).
-		Offset(offset).
-		Find(&businesses).Error; err != nil {
+	cacheKey := strconv.Itoa(page) + ":" + strconv.Itoa(limit)
+	if payload, ok := businessVerticalsCache.get(cacheKey); ok {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(payload)
+		return
+	}
+
+	loaded, err, _ := businessVerticalsLoadGroup.Do(cacheKey, func() (interface{}, error) {
+		if payload, ok := businessVerticalsCache.get(cacheKey); ok {
+			return payload, nil
+		}
+
+		offset := (page - 1) * limit
+
+		var businesses []models.BusinessVertical
+		if err := config.DB.Where("is_active = ?", true).
+			Limit(limit).
+			Offset(offset).
+			Find(&businesses).Error; err != nil {
+			return nil, err
+		}
+
+		var total int64
+		if err := config.DB.Model(&models.BusinessVertical{}).Where("is_active = ?", true).Count(&total).Error; err != nil {
+			return nil, err
+		}
+
+		// Get user counts for all businesses in one query
+		userCounts := make(map[uuid.UUID]int64)
+		var userCountResults []struct {
+			BusinessVerticalID uuid.UUID
+			Count              int64
+		}
+		config.DB.Model(&models.User{}).
+			Select("business_vertical_id, COUNT(*) as count").
+			Where("business_vertical_id IN ?", func() []uuid.UUID {
+				ids := make([]uuid.UUID, len(businesses))
+				for i, b := range businesses {
+					ids[i] = b.ID
+				}
+				return ids
+			}()).
+			Group("business_vertical_id").
+			Scan(&userCountResults)
+
+		for _, result := range userCountResults {
+			userCounts[result.BusinessVerticalID] = result.Count
+		}
+
+		// Get role counts for all businesses in one query
+		roleCounts := make(map[uuid.UUID]int64)
+		var roleCountResults []struct {
+			BusinessVerticalID uuid.UUID
+			Count              int64
+		}
+		config.DB.Model(&models.BusinessRole{}).
+			Select("business_vertical_id, COUNT(*) as count").
+			Where("business_vertical_id IN ? AND is_active = ?", func() []uuid.UUID {
+				ids := make([]uuid.UUID, len(businesses))
+				for i, b := range businesses {
+					ids[i] = b.ID
+				}
+				return ids
+			}(), true).
+			Group("business_vertical_id").
+			Scan(&roleCountResults)
+
+		for _, result := range roleCountResults {
+			roleCounts[result.BusinessVerticalID] = result.Count
+		}
+
+		// Convert to response format with counts
+		businessResponses := make([]businessResponse, len(businesses))
+		for i, business := range businesses {
+			businessResponses[i] = businessResponse{
+				ID:          business.ID,
+				Name:        business.Name,
+				Code:        business.Code,
+				Description: business.Description,
+				IsActive:    business.IsActive,
+				UserCount:   userCounts[business.ID],
+				RoleCount:   roleCounts[business.ID],
+			}
+		}
+
+		response := map[string]interface{}{
+			"total": total,
+			"page":  page,
+			"limit": limit,
+			"data":  businessResponses,
+		}
+		payload, marshalErr := json.Marshal(response)
+		if marshalErr != nil {
+			return nil, marshalErr
+		}
+		businessVerticalsCache.set(cacheKey, payload)
+		return payload, nil
+	})
+	if err != nil {
 		http.Error(w, "DB error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	var total int64
-	config.DB.Model(&models.BusinessVertical{}).Where("is_active = ?", true).Count(&total)
-
-	// Get counts in a single query using aggregation
-	type CountResult struct {
-		BusinessVerticalID uuid.UUID
-		UserCount          int64
-		RoleCount          int64
-	}
-
-	// Get user counts for all businesses in one query
-	userCounts := make(map[uuid.UUID]int64)
-	var userCountResults []struct {
-		BusinessVerticalID uuid.UUID
-		Count              int64
-	}
-	config.DB.Model(&models.User{}).
-		Select("business_vertical_id, COUNT(*) as count").
-		Where("business_vertical_id IN ?", func() []uuid.UUID {
-			ids := make([]uuid.UUID, len(businesses))
-			for i, b := range businesses {
-				ids[i] = b.ID
-			}
-			return ids
-		}()).
-		Group("business_vertical_id").
-		Scan(&userCountResults)
-
-	for _, result := range userCountResults {
-		userCounts[result.BusinessVerticalID] = result.Count
-	}
-
-	// Get role counts for all businesses in one query
-	roleCounts := make(map[uuid.UUID]int64)
-	var roleCountResults []struct {
-		BusinessVerticalID uuid.UUID
-		Count              int64
-	}
-	config.DB.Model(&models.BusinessRole{}).
-		Select("business_vertical_id, COUNT(*) as count").
-		Where("business_vertical_id IN ? AND is_active = ?", func() []uuid.UUID {
-			ids := make([]uuid.UUID, len(businesses))
-			for i, b := range businesses {
-				ids[i] = b.ID
-			}
-			return ids
-		}(), true).
-		Group("business_vertical_id").
-		Scan(&roleCountResults)
-
-	for _, result := range roleCountResults {
-		roleCounts[result.BusinessVerticalID] = result.Count
-	}
-
-	// Convert to response format with counts
-	businessResponses := make([]businessResponse, len(businesses))
-	for i, business := range businesses {
-		businessResponses[i] = businessResponse{
-			ID:          business.ID,
-			Name:        business.Name,
-			Code:        business.Code,
-			Description: business.Description,
-			IsActive:    business.IsActive,
-			UserCount:   userCounts[business.ID],
-			RoleCount:   roleCounts[business.ID],
-		}
-	}
-
-	response := map[string]interface{}{
-		"total": total,
-		"page":  page,
-		"limit": limit,
-		"data":  businessResponses,
-	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	w.Write(loaded.([]byte))
 }
 
 // CreateBusinessVertical creates a new business vertical
@@ -179,6 +244,10 @@ func CreateBusinessVertical(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to create business vertical: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	middleware.InvalidateAccessibleBusinessVerticalsCache()
+	middleware.InvalidateBusinessIdentifierCache()
+	invalidateAdminUsersCache()
+	businessVerticalsCache.invalidate()
 
 	// Create default roles for this business
 	createDefaultBusinessRoles(business.ID)
@@ -296,6 +365,7 @@ func CreateBusinessRole(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to create role: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	invalidateUnifiedRolesCache()
 
 	// Assign permissions - support multiple formats
 	if len(req.PermissionIDs) > 0 {
@@ -498,6 +568,17 @@ func UpdateBusinessRole(w http.ResponseWriter, r *http.Request) {
 		UserCount:          0,
 	}
 
+	// Invalidate cache for every user currently assigned this business role so
+	// updated permissions apply immediately rather than after the 30s TTL expires.
+	var affectedUserIDs []uuid.UUID
+	config.DB.Model(&models.UserBusinessRole{}).
+		Where("business_role_id = ? AND is_active = ?", role.ID, true).
+		Pluck("user_id", &affectedUserIDs)
+	for _, uid := range affectedUserIDs {
+		middleware.InvalidateUserCache(uid.String())
+	}
+	invalidateUnifiedRolesCache()
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
@@ -566,6 +647,11 @@ func AssignUserToBusinessRole(w http.ResponseWriter, r *http.Request) {
 		}
 		config.DB.Create(&assignment)
 	}
+
+	// Evict auth cache so assigned permissions are reflected immediately.
+	middleware.InvalidateUserCache(userID.String())
+	invalidateAdminUsersCache()
+	invalidateUnifiedRolesCache()
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"message": "user assigned to role successfully"})

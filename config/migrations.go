@@ -375,6 +375,46 @@ func Migrations(db *gorm.DB) error {
 				return nil
 			},
 		},
+		{
+			ID: "20260421_perf_indexes_auth_policy",
+			Migrate: func(tx *gorm.DB) error {
+				queries := []string{
+					"CREATE INDEX IF NOT EXISTS idx_users_is_active ON users (is_active)",
+					"CREATE INDEX IF NOT EXISTS idx_users_role_id ON users (role_id)",
+					"CREATE INDEX IF NOT EXISTS idx_users_business_vertical_id ON users (business_vertical_id)",
+					"CREATE INDEX IF NOT EXISTS idx_business_verticals_is_active ON business_verticals (is_active)",
+					"CREATE INDEX IF NOT EXISTS idx_ubr_user_active ON user_business_roles (user_id, is_active)",
+					"CREATE INDEX IF NOT EXISTS idx_ubr_role_active ON user_business_roles (business_role_id, is_active)",
+					"CREATE INDEX IF NOT EXISTS idx_policies_status ON policies (status)",
+					"CREATE INDEX IF NOT EXISTS idx_policies_effect ON policies (effect)",
+					"CREATE INDEX IF NOT EXISTS idx_policies_status_priority_created ON policies (status, priority DESC, created_at DESC)",
+				}
+
+				for _, q := range queries {
+					if err := tx.Exec(q).Error; err != nil {
+						return err
+					}
+				}
+
+				return nil
+			},
+		},
+		{
+			ID: "20260421_perf_indexes_auth_policy_v2",
+			Migrate: func(tx *gorm.DB) error {
+				queries := []string{
+					"CREATE INDEX IF NOT EXISTS idx_users_is_active_updated_at ON users (is_active, updated_at DESC)",
+				}
+
+				for _, q := range queries {
+					if err := tx.Exec(q).Error; err != nil {
+						return err
+					}
+				}
+
+				return nil
+			},
+		},
 	})
 
 	return m.Migrate()

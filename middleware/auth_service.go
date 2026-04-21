@@ -1,13 +1,85 @@
 package middleware
 
 import (
+	"log"
 	"net/http"
+	"sync"
+	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/sync/singleflight"
 	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/models"
 	"p9e.in/ugcl/utils"
 )
+
+var userContextLoadGroup singleflight.Group
+var superAdminVerticalsLoadGroup singleflight.Group
+
+const superAdminVerticalsCacheTTL = 15 * time.Minute
+
+type superAdminVerticalsCache struct {
+	mu        sync.RWMutex
+	ids       []uuid.UUID
+	expiresAt time.Time
+}
+
+var superAdminAccessibleVerticalsCache superAdminVerticalsCache
+
+func InvalidateAccessibleBusinessVerticalsCache() {
+	superAdminAccessibleVerticalsCache.mu.Lock()
+	superAdminAccessibleVerticalsCache.ids = nil
+	superAdminAccessibleVerticalsCache.expiresAt = time.Time{}
+	superAdminAccessibleVerticalsCache.mu.Unlock()
+}
+
+// PrewarmAuthorizationCaches proactively loads frequently-used auth data into memory.
+// This avoids first-request spikes immediately after process startup.
+func PrewarmAuthorizationCaches(userLimit int) {
+	if userLimit <= 0 {
+		return
+	}
+
+	// Preload active users with full auth graph used by LoadUserContext.
+	var users []models.User
+	if err := config.DB.
+		Preload("RoleModel.Permissions").
+		Preload("UserBusinessRoles", "is_active = ?", true).
+		Preload("UserBusinessRoles.BusinessRole", "is_active = ?", true).
+		Preload("UserBusinessRoles.BusinessRole.Permissions").
+		Preload("UserBusinessRoles.BusinessRole.BusinessVertical").
+		Where("is_active = ?", true).
+		Order("updated_at DESC").
+		Limit(userLimit).
+		Find(&users).Error; err != nil {
+		log.Printf("[PREWARM] auth cache users load failed: %v", err)
+	} else {
+		for _, u := range users {
+			userCache.set(u.ID.String(), u)
+		}
+		log.Printf("[PREWARM] auth cache loaded users: %d", len(users))
+	}
+
+	// Preload active business vertical IDs for super-admin fast path.
+	var verticals []models.BusinessVertical
+	if err := config.DB.Where("is_active = ?", true).Find(&verticals).Error; err != nil {
+		log.Printf("[PREWARM] super-admin vertical cache load failed: %v", err)
+		return
+	}
+
+	verticalIDs := make([]uuid.UUID, len(verticals))
+	for i, v := range verticals {
+		verticalIDs[i] = v.ID
+	}
+
+	superAdminAccessibleVerticalsCache.mu.Lock()
+	superAdminAccessibleVerticalsCache.ids = make([]uuid.UUID, len(verticalIDs))
+	copy(superAdminAccessibleVerticalsCache.ids, verticalIDs)
+	superAdminAccessibleVerticalsCache.expiresAt = time.Now().Add(superAdminVerticalsCacheTTL)
+	superAdminAccessibleVerticalsCache.mu.Unlock()
+
+	log.Printf("[PREWARM] super-admin vertical cache loaded: %d", len(verticalIDs))
+}
 
 // AuthService provides centralized authorization logic
 type AuthService struct{}
@@ -35,7 +107,9 @@ type BusinessContext struct {
 	IsBusinessAdmin bool
 }
 
-// LoadUserContext loads complete user context from request
+// LoadUserContext loads complete user context from request.
+// The heavy Preload query is served from an in-process TTL cache (30 min) so that
+// repeated concurrent requests from the same user do not each hit the database.
 func (s *AuthService) LoadUserContext(r *http.Request) (*UserContext, error) {
 	claims := GetClaims(r)
 	if claims == nil {
@@ -47,14 +121,33 @@ func (s *AuthService) LoadUserContext(r *http.Request) (*UserContext, error) {
 		return nil, ErrInvalidUserID
 	}
 
-	// Load user with all relationships
-	var user models.User
-	if err := config.DB.
-		Preload("RoleModel.Permissions").
-		Preload("UserBusinessRoles.BusinessRole.Permissions").
-		Preload("UserBusinessRoles.BusinessRole.BusinessVertical").
-		First(&user, "id = ?", userID).Error; err != nil {
-		return nil, ErrUserNotFound
+	// Try cache first — avoids 3 DB round-trips on every authenticated request.
+	user, cached := userCache.get(claims.UserID)
+	if !cached {
+		// Deduplicate concurrent misses for the same user to avoid DB stampedes.
+		loaded, loadErr, _ := userContextLoadGroup.Do(claims.UserID, func() (interface{}, error) {
+			if cachedUser, ok := userCache.get(claims.UserID); ok {
+				return cachedUser, nil
+			}
+
+			var freshUser models.User
+			if err := config.DB.
+				Preload("RoleModel.Permissions").
+				Preload("UserBusinessRoles", "is_active = ?", true).
+				Preload("UserBusinessRoles.BusinessRole", "is_active = ?", true).
+				Preload("UserBusinessRoles.BusinessRole.Permissions").
+				Preload("UserBusinessRoles.BusinessRole.BusinessVertical").
+				First(&freshUser, "id = ?", userID).Error; err != nil {
+				return nil, err
+			}
+
+			userCache.set(claims.UserID, freshUser)
+			return freshUser, nil
+		})
+		if loadErr != nil {
+			return nil, ErrUserNotFound
+		}
+		user = loaded.(models.User)
 	}
 
 	ctx := &UserContext{
@@ -197,20 +290,55 @@ func (s *AuthService) GetUserRoleLevel(user models.User) int {
 
 // CanAssignRole checks if user can assign a specific role level
 func (s *AuthService) CanAssignRole(userLevel, targetRoleLevel int) bool {
-	return userLevel < targetRoleLevel
+	return userLevel <= targetRoleLevel
 }
 
 // GetAccessibleBusinessVerticals returns list of business IDs user has access to
 func (s *AuthService) GetAccessibleBusinessVerticals(user models.User) []uuid.UUID {
 	if s.IsSuperAdmin(user) {
-		var verticals []models.BusinessVertical
-		config.DB.Where("is_active = ?", true).Find(&verticals)
-
-		verticalIDs := make([]uuid.UUID, len(verticals))
-		for i, v := range verticals {
-			verticalIDs[i] = v.ID
+		// Fast path: cache hit.
+		superAdminAccessibleVerticalsCache.mu.RLock()
+		if len(superAdminAccessibleVerticalsCache.ids) > 0 && time.Now().Before(superAdminAccessibleVerticalsCache.expiresAt) {
+			idsCopy := make([]uuid.UUID, len(superAdminAccessibleVerticalsCache.ids))
+			copy(idsCopy, superAdminAccessibleVerticalsCache.ids)
+			superAdminAccessibleVerticalsCache.mu.RUnlock()
+			return idsCopy
 		}
-		return verticalIDs
+		superAdminAccessibleVerticalsCache.mu.RUnlock()
+
+		// Slow path: deduplicate concurrent misses via singleflight.
+		loaded, _, _ := superAdminVerticalsLoadGroup.Do("super_admin_verticals", func() (interface{}, error) {
+			// Double-check inside the group in case another goroutine already populated it.
+			superAdminAccessibleVerticalsCache.mu.RLock()
+			if len(superAdminAccessibleVerticalsCache.ids) > 0 && time.Now().Before(superAdminAccessibleVerticalsCache.expiresAt) {
+				idsCopy := make([]uuid.UUID, len(superAdminAccessibleVerticalsCache.ids))
+				copy(idsCopy, superAdminAccessibleVerticalsCache.ids)
+				superAdminAccessibleVerticalsCache.mu.RUnlock()
+				return idsCopy, nil
+			}
+			superAdminAccessibleVerticalsCache.mu.RUnlock()
+
+			var verticals []models.BusinessVertical
+			config.DB.Where("is_active = ?", true).Find(&verticals)
+
+			verticalIDs := make([]uuid.UUID, len(verticals))
+			for i, v := range verticals {
+				verticalIDs[i] = v.ID
+			}
+
+			superAdminAccessibleVerticalsCache.mu.Lock()
+			superAdminAccessibleVerticalsCache.ids = make([]uuid.UUID, len(verticalIDs))
+			copy(superAdminAccessibleVerticalsCache.ids, verticalIDs)
+			superAdminAccessibleVerticalsCache.expiresAt = time.Now().Add(superAdminVerticalsCacheTTL)
+			superAdminAccessibleVerticalsCache.mu.Unlock()
+
+			return verticalIDs, nil
+		})
+
+		if ids, ok := loaded.([]uuid.UUID); ok {
+			return ids
+		}
+		return nil
 	}
 
 	verticalMap := make(map[uuid.UUID]bool)

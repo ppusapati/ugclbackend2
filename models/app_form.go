@@ -94,13 +94,13 @@ type AppForm struct {
 	Version     string    `gorm:"size:50;not null;default:'1.0.0'" json:"version"`
 
 	// Module association
-	ModuleID uuid.UUID `gorm:"type:uuid;not null" json:"module_id"`
+	ModuleID uuid.UUID `gorm:"type:uuid;not null;index:idx_app_forms_module_display" json:"module_id"`
 	Module   *Module   `gorm:"foreignKey:ModuleID" json:"module,omitempty"`
 
 	// Navigation
 	Route        string `gorm:"size:200;not null" json:"route"`
 	Icon         string `gorm:"size:50" json:"icon,omitempty"`
-	DisplayOrder int    `gorm:"default:0" json:"display_order"`
+	DisplayOrder int    `gorm:"default:0;index:idx_app_forms_module_display" json:"display_order"`
 
 	// Access control
 	RequiredPermission  string      `gorm:"size:100" json:"required_permission,omitempty"`

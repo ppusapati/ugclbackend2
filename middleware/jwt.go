@@ -139,9 +139,20 @@ func GetUserID(r *http.Request) string {
 	return ""
 }
 
+// GetUser returns the authenticated user, reading from the shared in-process cache when
+// available.  It never writes to the cache: only LoadUserContext (which uses the full
+// Preload chain required for permission checks) is authoritative for cache writes.  This
+// prevents a partial-preload entry from poisoning the cache and causing silent auth
+// failures for subsequent permission middleware calls.
 func GetUser(r *http.Request) models.User {
 	if c := GetClaims(r); c != nil {
-		// Load full user from database to get role relationships
+		// Fast path: auth middleware has already loaded and cached the full user.
+		if cached, ok := userCache.get(c.UserID); ok {
+			return cached
+		}
+		// Slow path: cache miss (e.g. test/debug endpoints bypassing auth middleware).
+		// Load from DB but do NOT write to cache — the partial preload here lacks
+		// RoleModel.Permissions which permission checks depend on.
 		var user models.User
 		if err := config.DB.
 			Preload("RoleModel").
@@ -149,14 +160,10 @@ func GetUser(r *http.Request) models.User {
 			First(&user, "id = ?", c.UserID).Error; err == nil {
 			return user
 		}
-		// Fallback: return minimal user from claims
-		User := models.User{
-			Name:  c.Name,
-			Phone: c.Phone,
-		}
-		return User
+		// Fallback: return minimal user from claims so callers still get a non-nil struct.
+		return models.User{Name: c.Name, Phone: c.Phone}
 	}
-	return models.User{} // return zero value if no claims found
+	return models.User{}
 }
 func GetRole(r *http.Request) string {
 	if c := GetClaims(r); c != nil {

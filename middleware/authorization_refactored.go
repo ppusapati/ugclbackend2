@@ -208,6 +208,43 @@ func GetBusinessPermissions(r *http.Request) []string {
 	return userCtx.BusinessContext.Permissions
 }
 
+// GetEffectivePermissions returns de-duplicated permissions from both
+// global role and active business context, preserving first-seen order.
+func GetEffectivePermissions(r *http.Request) []string {
+	userCtx, err := authService.LoadUserContext(r)
+	if err != nil {
+		return []string{}
+	}
+
+	permissions := make([]string, 0, len(userCtx.GlobalPermissions)+8)
+	seen := make(map[string]struct{})
+
+	appendUnique := func(values []string) {
+		for _, p := range values {
+			if p == "" {
+				continue
+			}
+			if _, exists := seen[p]; exists {
+				continue
+			}
+			seen[p] = struct{}{}
+			permissions = append(permissions, p)
+		}
+	}
+
+	appendUnique(userCtx.GlobalPermissions)
+	if userCtx.BusinessContext != nil {
+		appendUnique(userCtx.BusinessContext.Permissions)
+	}
+
+	// Keep explicit super-admin shortcuts so downstream checks remain resilient.
+	if userCtx.IsSuperAdmin {
+		appendUnique([]string{"admin_all", "*:*:*"})
+	}
+
+	return permissions
+}
+
 // GetUserBusinessContext returns user's business context (for backward compatibility)
 func GetUserBusinessContext(r *http.Request) map[string]interface{} {
 	userCtx, err := authService.LoadUserContext(r)

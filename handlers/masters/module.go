@@ -25,19 +25,15 @@ func GetModules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get user with roles and permissions
-	var user models.User
-	if err := config.DB.Preload("RoleModel.Permissions").
-		Preload("UserBusinessRoles.BusinessRole.BusinessVertical").
-		Preload("UserBusinessRoles.BusinessRole.Permissions").
-		First(&user, "id = ?", claims.UserID).Error; err != nil {
-		log.Printf("Error fetching user: %v", err)
+	userCtx, err := middleware.NewAuthService().LoadUserContext(r)
+	if err != nil {
 		http.Error(w, "user not found", http.StatusUnauthorized)
 		return
 	}
+	user := userCtx.User
 
 	// Check if user is super admin
-	isSuperAdmin := user.HasPermission("admin_all") || user.HasPermission("super_admin") || user.HasPermission("*:*:*")
+	isSuperAdmin := userCtx.IsSuperAdmin || user.HasPermission("super_admin") || user.HasPermission("*:*:*")
 
 	// Get query parameters
 	verticalCode := r.URL.Query().Get("vertical")

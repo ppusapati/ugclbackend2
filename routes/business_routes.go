@@ -194,6 +194,9 @@ func registerBusinessSiteRoutes(business *mux.Router) {
 	business.Handle("/sites/{siteId}/users",
 		middleware.RequireBusinessPermission("site:view")(
 			http.HandlerFunc(masters.GetSiteUsers))).Methods("GET")
+	business.Handle("/sites/user/{userId}/access",
+		middleware.RequireBusinessPermission("site:view")(
+			http.HandlerFunc(masters.GetUserSiteAccessByUserID))).Methods("GET")
 }
 
 func registerBusinessIntegrationRoutes(business *mux.Router) {

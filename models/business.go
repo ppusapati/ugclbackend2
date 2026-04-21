@@ -13,7 +13,7 @@ type BusinessVertical struct {
 	Name        string    `gorm:"size:100;uniqueIndex;not null"` // e.g., "Solar Farm", "Water Works"
 	Code        string    `gorm:"size:20;uniqueIndex;not null"`  // e.g., "SOLAR", "WATER"
 	Description string    `gorm:"size:255"`
-	IsActive    bool      `gorm:"default:true"`
+	IsActive    bool      `gorm:"default:true;index"`
 	Settings    *string   `gorm:"type:jsonb"` // JSON field for business-specific settings
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
@@ -29,11 +29,11 @@ type BusinessRole struct {
 	Name               string           `gorm:"size:50;not null"`  // e.g., "admin", "manager", "operator"
 	DisplayName        string           `gorm:"size:100;not null"` // e.g., "Solar Farm Admin", "Water Works Manager"
 	Description        string           `gorm:"size:255"`
-	BusinessVerticalID uuid.UUID        `gorm:"type:uuid;not null"`
+	BusinessVerticalID uuid.UUID        `gorm:"type:uuid;not null;index"`
 	BusinessVertical   BusinessVertical `gorm:"foreignKey:BusinessVerticalID"`
 	Permissions        []Permission     `gorm:"many2many:business_role_permissions;"`
-	IsActive           bool             `gorm:"default:true"`
-	Level              int              `gorm:"default:1"` // Hierarchy level (1=highest, 5=lowest)
+	IsActive           bool             `gorm:"default:true;index:idx_business_roles_active_level"` // composite index with level
+	Level              int              `gorm:"default:1;index:idx_business_roles_active_level"`    // composite index with is_active
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
 
@@ -44,11 +44,11 @@ type BusinessRole struct {
 // UserBusinessRole represents a user's role within a specific business vertical
 type UserBusinessRole struct {
 	ID             uuid.UUID    `gorm:"type:uuid;primaryKey"`
-	UserID         uuid.UUID    `gorm:"type:uuid;not null"`
+	UserID         uuid.UUID    `gorm:"type:uuid;not null;index:idx_ubr_user_active"`
 	User           User         `gorm:"foreignKey:UserID"`
-	BusinessRoleID uuid.UUID    `gorm:"type:uuid;not null"`
+	BusinessRoleID uuid.UUID    `gorm:"type:uuid;not null;index:idx_ubr_role_active"`
 	BusinessRole   BusinessRole `gorm:"foreignKey:BusinessRoleID"`
-	IsActive       bool         `gorm:"default:true"`
+	IsActive       bool         `gorm:"default:true;index:idx_ubr_user_active;index:idx_ubr_role_active"`
 	AssignedAt     time.Time    `gorm:"default:CURRENT_TIMESTAMP"`
 	AssignedBy     *uuid.UUID   `gorm:"type:uuid"` // Who assigned this role
 	CreatedAt      time.Time
@@ -79,24 +79,40 @@ func (ubr *UserBusinessRole) BeforeCreate(tx *gorm.DB) (err error) {
 
 // HasPermissionInBusiness checks if a user has a specific permission in a business vertical
 func (u *User) HasPermissionInBusiness(permissionName string, businessVerticalID uuid.UUID) bool {
-	// This method will be called from handlers where config.DB is available
-	// For now, return false - implement in handlers with proper DB access
-	return false
+	// Global super admin permission covers all business contexts.
+	if u.HasPermission("admin_all") || u.HasPermission("*:*:*") {
+		return true
+	}
 
-	// Fallback to global permissions if user is super admin
-	return u.HasPermission("admin_all")
+	for _, ubr := range u.UserBusinessRoles {
+		if !ubr.IsActive {
+			continue
+		}
+		if ubr.BusinessRole.ID == uuid.Nil {
+			continue
+		}
+		if ubr.BusinessRole.BusinessVerticalID != businessVerticalID {
+			continue
+		}
+		for _, perm := range ubr.BusinessRole.Permissions {
+			if matchesPermission(perm.Name, permissionName) {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // GetUserBusinessRoles returns all business roles for a user
 func (u *User) GetUserBusinessRoles() []UserBusinessRole {
-	// This method will be implemented in handlers with proper DB access
-	return []UserBusinessRole{}
-}
-
-// GetBusinessVerticals returns all active business verticals
-func GetBusinessVerticals() []BusinessVertical {
-	// This method will be implemented in handlers with proper DB access
-	return []BusinessVertical{}
+	roles := make([]UserBusinessRole, 0, len(u.UserBusinessRoles))
+	for _, ubr := range u.UserBusinessRoles {
+		if ubr.IsActive {
+			roles = append(roles, ubr)
+		}
+	}
+	return roles
 }
 
 // IsBusinessAdmin checks if user is admin of a specific business

@@ -32,19 +32,19 @@ type Policy struct {
 	Name               string       `gorm:"size:200;not null" json:"name"`
 	DisplayName        string       `gorm:"size:200;not null" json:"display_name"`
 	Description        string       `gorm:"type:text" json:"description"`
-	Effect             PolicyEffect `gorm:"size:10;not null" json:"effect"`           // ALLOW or DENY
-	Priority           int          `gorm:"default:0" json:"priority"`                // Higher priority evaluated first
-	Status             PolicyStatus `gorm:"size:20;default:'draft'" json:"status"`
+	Effect             PolicyEffect `gorm:"size:10;not null;index" json:"effect"`                                 // ALLOW or DENY
+	Priority           int          `gorm:"default:0;index:idx_policies_status_priority_created" json:"priority"` // Higher priority evaluated first
+	Status             PolicyStatus `gorm:"size:20;default:'draft';index:idx_policies_status_priority_created;index" json:"status"`
 	BusinessVerticalID *uuid.UUID   `gorm:"type:uuid;index" json:"business_vertical_id"` // null = global policy
-	Conditions         JSONMap      `gorm:"type:jsonb;not null" json:"conditions"`    // Complex condition tree
-	Actions            JSONArray    `gorm:"type:jsonb" json:"actions"`                // List of actions this policy applies to
-	Resources          JSONArray    `gorm:"type:jsonb" json:"resources"`              // List of resource patterns
-	Metadata           JSONMap      `gorm:"type:jsonb" json:"metadata"`               // Additional metadata
+	Conditions         JSONMap      `gorm:"type:jsonb;not null" json:"conditions"`       // Complex condition tree
+	Actions            JSONArray    `gorm:"type:jsonb" json:"actions"`                   // List of actions this policy applies to
+	Resources          JSONArray    `gorm:"type:jsonb" json:"resources"`                 // List of resource patterns
+	Metadata           JSONMap      `gorm:"type:jsonb" json:"metadata"`                  // Additional metadata
 	ValidFrom          time.Time    `gorm:"default:CURRENT_TIMESTAMP" json:"valid_from"`
 	ValidUntil         *time.Time   `json:"valid_until"`
 	CreatedBy          uuid.UUID    `gorm:"type:uuid;not null" json:"created_by"`
 	UpdatedBy          *uuid.UUID   `gorm:"type:uuid" json:"updated_by"`
-	CreatedAt          time.Time    `json:"created_at"`
+	CreatedAt          time.Time    `gorm:"index:idx_policies_status_priority_created" json:"created_at"`
 	UpdatedAt          time.Time    `json:"updated_at"`
 
 	// Relationships

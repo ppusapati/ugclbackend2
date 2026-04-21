@@ -72,6 +72,11 @@ func CreateReportDefinition(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := ensureReportViewsForDataSources(config.DB, req.DataSources); err != nil {
+		http.Error(w, fmt.Sprintf("invalid report data_sources: %v", err), http.StatusBadRequest)
+		return
+	}
+
 	if businessID == uuid.Nil {
 		http.Error(w, "business_vertical_id is required (send in body or X-Business-ID/X-Business-Code header)", http.StatusBadRequest)
 		return
@@ -185,7 +190,31 @@ func UpdateReportDefinition(w http.ResponseWriter, r *http.Request) {
 	req["updated_by"] = claims.UserID
 	req["updated_at"] = time.Now()
 
-	if err := config.DB.Model(&report).Updates(req).Error; err != nil {
+	tx := config.DB.Begin()
+	if tx.Error != nil {
+		http.Error(w, "Failed to update report", http.StatusInternalServerError)
+		return
+	}
+
+	if err := tx.Model(&report).Updates(req).Error; err != nil {
+		tx.Rollback()
+		http.Error(w, "Failed to update report", http.StatusInternalServerError)
+		return
+	}
+
+	if err := tx.Where("id = ? AND deleted_at IS NULL", reportID).First(&report).Error; err != nil {
+		tx.Rollback()
+		http.Error(w, "Report not found after update", http.StatusNotFound)
+		return
+	}
+
+	if err := ensureReportViewsForDataSources(tx, report.DataSources); err != nil {
+		tx.Rollback()
+		http.Error(w, fmt.Sprintf("failed to sync report views: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	if err := tx.Commit().Error; err != nil {
 		http.Error(w, "Failed to update report", http.StatusInternalServerError)
 		return
 	}
@@ -236,6 +265,11 @@ func ExecuteReport(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&req)
 
+	if err := ensureReportViewsForDataSources(config.DB, report.DataSources); err != nil {
+		http.Error(w, fmt.Sprintf("failed to sync report views: %v", err), http.StatusInternalServerError)
+		return
+	}
+
 	// Execute report
 	engine := NewReportEngine()
 	result, err := engine.ExecuteReport(&report, req.Filters, claims.UserID)
@@ -251,82 +285,45 @@ func ExecuteReport(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GetFormTableFields retrieves all fields from a form table
-// Returns both form field definitions and database schema columns
+// sanitizeColumnName converts a raw string to a safe SQL column name
+// using the same rules as getColumnDefinition in form_table_manager.go.
+// GetFormTableFields retrieves field definitions for a form identified by its code or db_table_name.
+// Form submission data is stored as JSONB in form_submissions.form_data keyed by field ID.
+// column_name returned for each field is the field.id — the JSONB key used for extraction at query time.
 func GetFormTableFields(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	tableName := vars["table_name"]
 
-	engine := NewReportEngine()
-	dbSchema, err := engine.GetFormTableSchema(tableName)
-	if err != nil {
-		status := http.StatusInternalServerError
-		if strings.Contains(strings.ToLower(err.Error()), "table not found") ||
-			strings.Contains(strings.ToLower(err.Error()), "no readable columns") {
-			status = http.StatusNotFound
-		}
-		http.Error(w, err.Error(), status)
-		return
-	}
-
-	// Find the form that corresponds to this table
+	// Find the form by db_table_name OR code (table_name may be a form code for forms without a dedicated table).
 	var form models.AppForm
 	var formFields []map[string]interface{}
 	var formTitle string
 
-	dbErr := config.DB.Where("is_active = ? AND db_table_name IS NOT NULL AND db_table_name != ''", true).
-		Where("LOWER(db_table_name) = LOWER(?)", tableName).
+	dbErr := config.DB.
+		Where("is_active = ? AND (LOWER(db_table_name) = LOWER(?) OR LOWER(code) = LOWER(?))", true, tableName, tableName).
 		Select("id", "code", "title", "form_schema", "steps", "core_fields").
 		First(&form).Error
 
 	if dbErr == nil && form.ID != uuid.Nil {
 		for _, field := range buildFormFieldList(form) {
+			id, _ := field["id"].(string)
+			// column_name = field.id because form_submissions.form_data is a JSONB column
+			// and the field ID is the key used when the submission was stored.
+			field["column_name"] = id
 			formFields = append(formFields, field)
 		}
-
-		// Log what we found
-		fmt.Printf("[REPORT BUILDER] Extracted %d form fields from %s\n", len(formFields), form.Code)
-
+		fmt.Printf("[REPORT BUILDER] Loaded %d form fields for %s\n", len(formFields), form.Code)
 		formTitle = form.Title
 	}
 
-	// Build response with form fields first (primary), then database fields (secondary for filtering)
+	// Metadata fields are direct columns on form_submissions (or resolved via JOIN in the engine).
 	metadataFields := []map[string]interface{}{
-		{
-			"id":       "created_at",
-			"type":     "datetime",
-			"label":    "Created Time",
-			"dataType": "datetime",
-			"source":   "metadata",
-		},
-		{
-			"id":       "created_by_name",
-			"type":     "text",
-			"label":    "Created By",
-			"dataType": "text",
-			"source":   "metadata",
-		},
-		{
-			"id":       "site_name",
-			"type":     "text",
-			"label":    "Site Name",
-			"dataType": "text",
-			"source":   "metadata",
-		},
-		{
-			"id":       "business_vertical_name",
-			"type":     "text",
-			"label":    "Business Vertical Name",
-			"dataType": "text",
-			"source":   "metadata",
-		},
-		{
-			"id":       "form_code",
-			"type":     "text",
-			"label":    "Form Code",
-			"dataType": "text",
-			"source":   "metadata",
-		},
+		{"id": "submitted_at", "type": "datetime", "label": "Submitted At", "dataType": "datetime", "source": "metadata", "column_name": "submitted_at"},
+		{"id": "submitted_by_name", "type": "text", "label": "Submitted By", "dataType": "text", "source": "metadata", "column_name": "submitted_by_name"},
+		{"id": "current_state", "type": "text", "label": "Status", "dataType": "text", "source": "metadata", "column_name": "current_state"},
+		{"id": "site_name", "type": "text", "label": "Site Name", "dataType": "text", "source": "metadata", "column_name": "site_name"},
+		{"id": "business_vertical_name", "type": "text", "label": "Business Vertical", "dataType": "text", "source": "metadata", "column_name": "business_vertical_name"},
+		{"id": "form_code", "type": "text", "label": "Form Code", "dataType": "text", "source": "metadata", "column_name": "form_code"},
 	}
 	combinedFields := append([]map[string]interface{}{}, formFields...)
 	combinedFields = append(combinedFields, metadataFields...)
@@ -335,9 +332,9 @@ func GetFormTableFields(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"table_name":  tableName,
 		"form_title":  formTitle,
-		"form_fields": combinedFields,                      // Custom form fields + report metadata (primary)
-		"db_fields":   dbSchema,                            // Database schema fields (secondary)
-		"all_fields":  append(combinedFields, dbSchema...), // Combined list for convenience
+		"form_fields": combinedFields,
+		"db_fields":   []map[string]interface{}{},
+		"all_fields":  combinedFields,
 	})
 }
 
@@ -353,13 +350,19 @@ func buildFormFieldList(form models.AppForm) []map[string]interface{} {
 			return
 		}
 		seen[id] = struct{}{}
-		fieldList = append(fieldList, map[string]interface{}{
+		// Include "name" if present — it is used as the DB column name by getColumnDefinition.
+		// The handler cross-references this against information_schema to set column_name definitively.
+		entry := map[string]interface{}{
 			"id":       field["id"],
 			"type":     field["type"],
 			"label":    field["label"],
 			"dataType": field["dataType"],
 			"source":   source,
-		})
+		}
+		if name, ok := field["name"].(string); ok && name != "" {
+			entry["name"] = name
+		}
+		fieldList = append(fieldList, entry)
 	}
 
 	var formSchema map[string]interface{}
@@ -431,50 +434,36 @@ func buildFormFieldMap(form models.AppForm) map[string]map[string]interface{} {
 // GetAvailableFormTables retrieves all form tables available for reporting
 func GetAvailableFormTables(w http.ResponseWriter, r *http.Request) {
 	var forms []models.AppForm
-	if err := config.DB.Where("is_active = ? AND db_table_name IS NOT NULL AND db_table_name != ''", true).
-		Select("id", "code", "title", "db_table_name", "module_id").
+	if err := config.DB.Where("is_active = ?", true).
+		Select("id", "code", "title", "db_table_name", "module_id", "form_schema", "steps", "core_fields").
 		Find(&forms).Error; err != nil {
 		http.Error(w, "Failed to fetch forms", http.StatusInternalServerError)
 		return
 	}
 
 	tables := []map[string]interface{}{}
-	skipped := 0
 	for _, form := range forms {
-		var resolved struct {
-			TableSchema string `gorm:"column:table_schema"`
-			TableName   string `gorm:"column:table_name"`
-		}
-
-		err := config.DB.Raw(`
-			SELECT table_schema, table_name
-			FROM information_schema.tables
-			WHERE lower(table_name) = lower(?)
-			  AND table_type = 'BASE TABLE'
-			  AND table_schema NOT IN ('pg_catalog', 'information_schema')
-			ORDER BY CASE WHEN table_schema = 'public' THEN 0 ELSE 1 END, table_schema
-			LIMIT 1
-		`, strings.TrimSpace(form.DBTableName)).Scan(&resolved).Error
-		if err != nil || resolved.TableName == "" {
-			skipped++
+		// Only include forms that have at least one field defined in their schema.
+		fields := buildFormFieldList(form)
+		if len(fields) == 0 {
 			continue
 		}
-
 		tables = append(tables, map[string]interface{}{
-			"form_id":     form.ID,
-			"form_code":   form.Code,
-			"form_title":  form.Title,
-			"table_name":  resolved.TableName,
-			"schema_name": resolved.TableSchema,
+			"form_id":    form.ID,
+			"form_code":  form.Code,
+			"form_title": form.Title,
+			// table_name is the identifier used to call GetFormTableFields.
+			// We use form.Code so the fields API can always find the form regardless of db_table_name.
+			"table_name":  form.Code,
+			"schema_name": "",
 			"module_id":   form.ModuleID,
 		})
 	}
-	fmt.Printf("[REPORT BUILDER] available tables=%d skipped_missing=%d\n", len(tables), skipped)
+	fmt.Printf("[REPORT BUILDER] available forms=%d\n", len(tables))
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"tables":          tables,
-		"count":           len(tables),
-		"skipped_missing": skipped,
+		"tables": tables,
+		"count":  len(tables),
 	})
 }
 

@@ -23,9 +23,9 @@ type Role struct {
 	ID          uuid.UUID    `gorm:"type:uuid;primaryKey"`
 	Name        string       `gorm:"size:50;uniqueIndex;not null"`
 	Description string       `gorm:"size:255"`
-	IsActive    bool         `gorm:"default:true"`
-	IsGlobal    bool         `gorm:"default:true"` // Global roles vs business-specific roles
-	Level       int          `gorm:"default:5"`    // Hierarchy level (0=super_admin, 1=system_admin, etc.)
+	IsActive    bool         `gorm:"default:true;index:idx_roles_active_level"` // composite index with level
+	IsGlobal    bool         `gorm:"default:true"`
+	Level       int          `gorm:"default:5;index:idx_roles_active_level"` // composite index with is_active
 	Permissions []Permission `gorm:"many2many:role_permissions;"`
 	CreatedAt   time.Time
 	UpdatedAt   time.Time

@@ -369,6 +369,12 @@ func GetDocumentHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	documentID := vars["id"]
 
+	// Validate UUID format to avoid SQL errors from path segments like "categories" or "tags".
+	if _, err := uuid.Parse(documentID); err != nil {
+		http.Error(w, "document not found", http.StatusNotFound)
+		return
+	}
+
 	var document models.Document
 	if err := config.DB.Preload("Category").Preload("Tags").Preload("UploadedBy").
 		Preload("Versions").Preload("Permissions").

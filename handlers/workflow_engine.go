@@ -9,6 +9,7 @@ import (
 
 	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/models"
+	"p9e.in/ugcl/utils"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -59,6 +60,19 @@ func (we *WorkflowEngine) CreateSubmission(
 		initialState = workflowDef.InitialState
 	}
 
+	// Resolve reference field UUIDs into readable display objects where supported
+	// so downstream reporting can show human-friendly values.
+	enhancedFormData := formData
+	if len(formData) > 0 && string(formData) != "null" {
+		var formDataMap map[string]interface{}
+		if err := json.Unmarshal(formData, &formDataMap); err == nil {
+			resolvedMap := NewWorkflowEngineDedicated().ResolveFormFieldValues(&form, formDataMap)
+			if resolvedJSON, marshalErr := json.Marshal(resolvedMap); marshalErr == nil {
+				enhancedFormData = resolvedJSON
+			}
+		}
+	}
+
 	// Create submission
 	submission := &models.FormSubmission{
 		FormCode:           formCode,
@@ -67,7 +81,7 @@ func (we *WorkflowEngine) CreateSubmission(
 		SiteID:             siteID,
 		WorkflowID:         form.WorkflowID,
 		CurrentState:       initialState,
-		FormData:           formData,
+		FormData:           enhancedFormData,
 		SubmittedBy:        userID,
 		SubmittedAt:        time.Now(),
 		LastModifiedBy:     userID,
@@ -207,8 +221,23 @@ func (we *WorkflowEngine) UpdateSubmissionData(
 		return nil, fmt.Errorf("cannot update submission in state '%s' - only draft submissions can be edited", submission.CurrentState)
 	}
 
+	// Resolve reference field UUIDs into readable display objects where supported.
+	enhancedFormData := formData
+	if len(formData) > 0 && string(formData) != "null" {
+		var form models.AppForm
+		if err := we.db.Where("id = ?", submission.FormID).First(&form).Error; err == nil {
+			var formDataMap map[string]interface{}
+			if err := json.Unmarshal(formData, &formDataMap); err == nil {
+				resolvedMap := NewWorkflowEngineDedicated().ResolveFormFieldValues(&form, formDataMap)
+				if resolvedJSON, marshalErr := json.Marshal(resolvedMap); marshalErr == nil {
+					enhancedFormData = resolvedJSON
+				}
+			}
+		}
+	}
+
 	// Update data
-	submission.FormData = formData
+	submission.FormData = enhancedFormData
 	submission.LastModifiedBy = userID
 	submission.LastModifiedAt = time.Now()
 	submission.Version++
@@ -313,7 +342,7 @@ func (we *WorkflowEngine) ValidateTransition(
 			if t.Permission != "" {
 				hasPermission := false
 				for _, perm := range userPermissions {
-					if perm == t.Permission || perm == "admin_all" {
+					if perm == "admin_all" || perm == "*:*:*" || utils.MatchesPermission(perm, t.Permission) {
 						hasPermission = true
 						break
 					}

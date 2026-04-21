@@ -4,9 +4,12 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"golang.org/x/sync/singleflight"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 	"p9e.in/ugcl/config"
@@ -14,6 +17,69 @@ import (
 )
 
 const defaultActiveBusinessClientKey = "default"
+
+const activeBusinessContextCacheTTL = 30 * time.Second
+
+type activeBusinessContextCacheEntry struct {
+	ctx       *models.UserActiveBusinessContext
+	found     bool
+	expiresAt time.Time
+}
+
+type activeBusinessContextCacheStore struct {
+	mu      sync.RWMutex
+	entries map[string]activeBusinessContextCacheEntry
+}
+
+var activeBusinessContextCache = &activeBusinessContextCacheStore{
+	entries: make(map[string]activeBusinessContextCacheEntry),
+}
+
+var activeBusinessContextLoadGroup singleflight.Group
+
+func activeBusinessContextCacheKey(userID uuid.UUID, clientKey string) string {
+	return userID.String() + ":" + clientKey
+}
+
+func (c *activeBusinessContextCacheStore) get(userID uuid.UUID, clientKey string) (*models.UserActiveBusinessContext, bool, bool) {
+	key := activeBusinessContextCacheKey(userID, clientKey)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	entry, ok := c.entries[key]
+	if !ok {
+		return nil, false, false
+	}
+	if time.Now().After(entry.expiresAt) {
+		delete(c.entries, key)
+		return nil, false, false
+	}
+	if !entry.found || entry.ctx == nil {
+		return nil, true, false
+	}
+
+	ctxCopy := *entry.ctx
+	return &ctxCopy, true, true
+}
+
+func (c *activeBusinessContextCacheStore) set(userID uuid.UUID, clientKey string, ctx *models.UserActiveBusinessContext, found bool) {
+	key := activeBusinessContextCacheKey(userID, clientKey)
+
+	var ctxCopy *models.UserActiveBusinessContext
+	if found && ctx != nil {
+		copied := *ctx
+		ctxCopy = &copied
+	}
+
+	c.mu.Lock()
+	c.entries[key] = activeBusinessContextCacheEntry{
+		ctx:       ctxCopy,
+		found:     found,
+		expiresAt: time.Now().Add(activeBusinessContextCacheTTL),
+	}
+	c.mu.Unlock()
+}
 
 // GetActiveBusinessClientKey returns the current client key used to scope active business context.
 func GetActiveBusinessClientKey(r *http.Request) string {
@@ -78,6 +144,8 @@ func SaveActiveBusinessContext(userID, businessID uuid.UUID, clientKey string) (
 		return nil, err
 	}
 
+	activeBusinessContextCache.set(userID, clientKey, ctx, true)
+
 	return ctx, nil
 }
 
@@ -87,13 +155,42 @@ func GetStoredActiveBusinessContext(userID uuid.UUID, clientKey string) (*models
 		clientKey = defaultActiveBusinessClientKey
 	}
 
-	var ctx models.UserActiveBusinessContext
-	err := config.DB.Preload("Business").First(&ctx, "user_id = ? AND client_key = ?", userID, clientKey).Error
-	if err != nil {
-		return nil, err
+	if cachedCtx, cached, found := activeBusinessContextCache.get(userID, clientKey); cached {
+		if found {
+			return cachedCtx, nil
+		}
+		return nil, gorm.ErrRecordNotFound
 	}
 
-	return &ctx, nil
+	loaded, loadErr, _ := activeBusinessContextLoadGroup.Do(activeBusinessContextCacheKey(userID, clientKey), func() (interface{}, error) {
+		if cachedCtx, cached, found := activeBusinessContextCache.get(userID, clientKey); cached {
+			if found {
+				return cachedCtx, nil
+			}
+			return nil, gorm.ErrRecordNotFound
+		}
+
+		var ctx models.UserActiveBusinessContext
+		result := config.DB.Preload("Business").
+			Where("user_id = ? AND client_key = ?", userID, clientKey).
+			Limit(1).
+			Find(&ctx)
+		if result.Error != nil {
+			return nil, result.Error
+		}
+		if result.RowsAffected == 0 {
+			activeBusinessContextCache.set(userID, clientKey, nil, false)
+			return nil, gorm.ErrRecordNotFound
+		}
+
+		activeBusinessContextCache.set(userID, clientKey, &ctx, true)
+		return &ctx, nil
+	})
+	if loadErr != nil {
+		return nil, loadErr
+	}
+
+	return loaded.(*models.UserActiveBusinessContext), nil
 }
 
 // ResolveEffectiveBusinessID determines the active business for the request.

@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
 	"time"
 
 	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/models"
+	"p9e.in/ugcl/utils"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -20,6 +22,8 @@ type WorkflowEngineDedicated struct {
 	db           *gorm.DB
 	tableManager *FormTableManager
 }
+
+var lookupIdentifierPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // NewWorkflowEngineDedicated creates a new workflow engine instance that uses dedicated tables
 func NewWorkflowEngineDedicated() *WorkflowEngineDedicated {
@@ -241,9 +245,29 @@ func (we *WorkflowEngineDedicated) ResolveFormFieldValues(form *models.AppForm, 
 					"id":   strVal,       // UUID
 					"name": displayValue, // Human-readable name
 				}
-				// Optionally, also store the display name in a separate column
-				// resolvedData[fieldID+"_name"] = displayValue
 			}
+		}
+
+		// Multi-select reference field support.
+		if listVal, ok := value.([]interface{}); ok {
+			resolvedList := make([]interface{}, 0, len(listVal))
+			for _, item := range listVal {
+				itemStr, isString := item.(string)
+				if !isString {
+					resolvedList = append(resolvedList, item)
+					continue
+				}
+				displayValue := we.resolveReferenceValue(fieldDef, itemStr, displayField, valueField)
+				if displayValue == "" {
+					resolvedList = append(resolvedList, itemStr)
+					continue
+				}
+				resolvedList = append(resolvedList, map[string]interface{}{
+					"id":   itemStr,
+					"name": displayValue,
+				})
+			}
+			resolvedData[fieldID] = resolvedList
 		}
 	}
 
@@ -256,45 +280,107 @@ func (we *WorkflowEngineDedicated) resolveReferenceValue(fieldDef map[string]int
 	if !ok || apiEndpoint == "" {
 		return ""
 	}
-
-	// Special handling for site references
-	if strings.Contains(apiEndpoint, "/sites") {
-		return we.resolveSiteName(valueID, displayField)
+	if strings.TrimSpace(valueID) == "" {
+		return ""
 	}
 
-	// Add more special handlers as needed for other reference types
-	log.Printf("🔍 Reference resolution not yet implemented for endpoint: %s", apiEndpoint)
+	safeDisplayField := sanitizeLookupIdentifier(displayField, "name")
+	safeValueField := sanitizeLookupIdentifier(valueField, "id")
+	normalizedEndpoint := strings.ToLower(strings.TrimSpace(apiEndpoint))
+
+	// First-class resolvers for common reference entities.
+	if strings.Contains(normalizedEndpoint, "/sites") {
+		return we.resolveByTable("sites", valueID, safeDisplayField, safeValueField, "deleted_at IS NULL")
+	}
+	if strings.Contains(normalizedEndpoint, "/users") {
+		return we.resolveByTable("users", valueID, safeDisplayField, safeValueField, "is_active = TRUE")
+	}
+	if strings.Contains(normalizedEndpoint, "business") || strings.Contains(normalizedEndpoint, "vertical") {
+		return we.resolveByTable("business_verticals", valueID, safeDisplayField, safeValueField, "is_active = TRUE")
+	}
+	if strings.Contains(normalizedEndpoint, "/modules") {
+		return we.resolveByTable("modules", valueID, safeDisplayField, safeValueField, "is_active = TRUE")
+	}
+	if strings.Contains(normalizedEndpoint, "business-roles") || strings.Contains(normalizedEndpoint, "business_roles") {
+		return we.resolveByTable("business_roles", valueID, safeDisplayField, safeValueField, "is_active = TRUE")
+	}
+	if strings.Contains(normalizedEndpoint, "/roles") {
+		if val := we.resolveByTable("roles", valueID, safeDisplayField, safeValueField, "is_active = TRUE"); val != "" {
+			return val
+		}
+		return we.resolveByTable("business_roles", valueID, safeDisplayField, safeValueField, "is_active = TRUE")
+	}
+
+	// Generic fallback: infer table from endpoint tail segment.
+	if inferredTable := inferTableNameFromEndpoint(normalizedEndpoint); inferredTable != "" {
+		if val := we.resolveByTable(inferredTable, valueID, safeDisplayField, safeValueField, ""); val != "" {
+			return val
+		}
+	}
+
+	log.Printf("⚠️  Reference resolution did not match endpoint: %s", apiEndpoint)
 	return ""
 }
 
-// resolveSiteName looks up a site's name by its UUID
-func (we *WorkflowEngineDedicated) resolveSiteName(siteID string, displayField string) string {
-	if siteID == "" {
+func (we *WorkflowEngineDedicated) resolveByTable(tableName string, valueID string, displayField string, valueField string, extraCondition string) string {
+	if strings.TrimSpace(tableName) == "" || strings.TrimSpace(valueID) == "" {
 		return ""
 	}
-
-	// Parse UUID
-	id, err := uuid.Parse(siteID)
-	if err != nil {
-		log.Printf("⚠️  Invalid site UUID: %s", siteID)
+	safeTableName := sanitizeLookupIdentifier(tableName, "")
+	if safeTableName == "" {
 		return ""
 	}
+	safeDisplayField := sanitizeLookupIdentifier(displayField, "name")
+	safeValueField := sanitizeLookupIdentifier(valueField, "id")
 
-	// Look up site from database
-	var site struct {
-		Name string `gorm:"column:name"`
+	query := we.db.Table(safeTableName).Select(safeDisplayField)
+	if safeValueField == "id" {
+		query = query.Where("id::text = ?", valueID)
+	} else {
+		query = query.Where(fmt.Sprintf("%s = ?", safeValueField), valueID)
+	}
+	if strings.TrimSpace(extraCondition) != "" {
+		query = query.Where(extraCondition)
 	}
 
-	if err := we.db.Table("sites").
-		Where("id = ? AND deleted_at IS NULL", id).
-		Select("name").
-		First(&site).Error; err != nil {
-		log.Printf("⚠️  Site not found for UUID: %s - %v", siteID, err)
+	var resolved string
+	if err := query.Limit(1).Scan(&resolved).Error; err != nil {
 		return ""
 	}
+	return strings.TrimSpace(resolved)
+}
 
-	log.Printf("✅ Resolved site UUID %s to name: %s", siteID, site.Name)
-	return site.Name
+func sanitizeLookupIdentifier(value string, fallback string) string {
+	v := strings.TrimSpace(value)
+	if lookupIdentifierPattern.MatchString(v) {
+		return v
+	}
+	if fallback != "" {
+		if lookupIdentifierPattern.MatchString(strings.TrimSpace(fallback)) {
+			return strings.TrimSpace(fallback)
+		}
+	}
+	return ""
+}
+
+func inferTableNameFromEndpoint(endpoint string) string {
+	trimmed := strings.Split(strings.TrimSpace(endpoint), "?")[0]
+	if trimmed == "" {
+		return ""
+	}
+	parts := strings.Split(trimmed, "/")
+	for i := len(parts) - 1; i >= 0; i-- {
+		part := strings.TrimSpace(parts[i])
+		if part == "" || strings.HasPrefix(part, "{") {
+			continue
+		}
+		part = strings.ReplaceAll(part, "-", "_")
+		if !lookupIdentifierPattern.MatchString(part) {
+			continue
+		}
+		return part
+	}
+	return ""
 }
 
 // TransitionStateDedicated performs a workflow state transition for a dedicated table record
@@ -660,7 +746,7 @@ func (we *WorkflowEngineDedicated) ValidateTransitionDedicated(
 			if t.Permission != "" {
 				hasPermission := false
 				for _, perm := range userPermissions {
-					if perm == t.Permission || perm == "admin_all" {
+					if perm == "admin_all" || perm == "*:*:*" || utils.MatchesPermission(perm, t.Permission) {
 						hasPermission = true
 						break
 					}

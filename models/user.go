@@ -14,11 +14,11 @@ type User struct {
 	Email              string            `gorm:"size:100;uniqueIndex;not null"`
 	Phone              string            `gorm:"size:15;uniqueIndex;not null"`
 	PasswordHash       string            `gorm:"size:255;not null"`
-	RoleID             *uuid.UUID        `gorm:"type:uuid"`                     // Global role system
+	RoleID             *uuid.UUID        `gorm:"type:uuid;index"`               // Global role system
 	RoleModel          *Role             `gorm:"foreignKey:RoleID"`             // Relationship to global Role
-	BusinessVerticalID *uuid.UUID        `gorm:"type:uuid"`                     // Primary business vertical
+	BusinessVerticalID *uuid.UUID        `gorm:"type:uuid;index"`               // Primary business vertical
 	BusinessVertical   *BusinessVertical `gorm:"foreignKey:BusinessVerticalID"` // Primary business relationship
-	IsActive           bool              `gorm:"default:true"`
+	IsActive           bool              `gorm:"default:true;index"`
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
 
@@ -50,8 +50,8 @@ func (u *User) HasPermission(permissionName string) bool {
 // CanAssignRole checks if user can assign a role based on level hierarchy
 func (u *User) CanAssignRole(targetRoleLevel int) bool {
 	maxLevel := u.GetMaxAssignableLevel()
-	// Can only assign roles with higher level number (lower privilege)
-	return maxLevel < targetRoleLevel
+	// Allow assigning roles at or below max assignable level threshold.
+	return maxLevel <= targetRoleLevel
 }
 
 // GetMaxAssignableLevel returns the highest level this user can assign

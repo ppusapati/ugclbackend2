@@ -263,8 +263,8 @@ func TransitionFormSubmissionDedicated(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get user permissions
-	userPermissions := middleware.GetUserPermissions(r)
+	// Use merged global + business-context permissions for transition authorization.
+	userPermissions := middleware.GetEffectivePermissions(r)
 
 	// Validate transition
 	if err := getWorkflowEngineDedicated().ValidateTransitionDedicated(formCode, submissionID, req.Action, userPermissions); err != nil {

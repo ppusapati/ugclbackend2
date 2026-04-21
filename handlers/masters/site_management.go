@@ -5,14 +5,63 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
+	"golang.org/x/sync/singleflight"
 	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/middleware"
 	"p9e.in/ugcl/models"
 	"p9e.in/ugcl/utils"
 )
+
+const allSitesCacheTTL = 5 * time.Minute
+
+type allSitesCacheEntry struct {
+	payload   []byte
+	expiresAt time.Time
+}
+
+type allSitesCacheStore struct {
+	mu      sync.Mutex
+	entries map[string]allSitesCacheEntry
+}
+
+var allSitesCache = &allSitesCacheStore{entries: make(map[string]allSitesCacheEntry)}
+var allSitesLoadGroup singleflight.Group
+
+func allSitesCacheKey(page, limit int) string {
+	return strconv.Itoa(page) + ":" + strconv.Itoa(limit)
+}
+
+func (c *allSitesCacheStore) get(key string) ([]byte, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	entry, ok := c.entries[key]
+	if !ok {
+		return nil, false
+	}
+	if time.Now().After(entry.expiresAt) {
+		delete(c.entries, key)
+		return nil, false
+	}
+	return entry.payload, true
+}
+
+func (c *allSitesCacheStore) set(key string, payload []byte) {
+	c.mu.Lock()
+	c.entries[key] = allSitesCacheEntry{payload: payload, expiresAt: time.Now().Add(allSitesCacheTTL)}
+	c.mu.Unlock()
+}
+
+func invalidateAllSitesCache() {
+	allSitesCache.mu.Lock()
+	clear(allSitesCache.entries)
+	allSitesCache.mu.Unlock()
+}
 
 // GetAllSites returns all sites irrespective of business vertical (Admin only)
 func GetAllSites(w http.ResponseWriter, r *http.Request) {
@@ -30,42 +79,65 @@ func GetAllSites(w http.ResponseWriter, r *http.Request) {
 		limit = l
 	}
 	offset := (page - 1) * limit
-
-	// Get total count of all active sites
-	var total int64
-	config.DB.Model(&models.Site{}).Where("sites.is_active = ?", true).Count(&total)
-
-	// Use JOIN to get sites with business vertical name in a single query
-	type SiteWithBusinessVertical struct {
-		models.Site
-		BusinessVerticalName string `json:"business_vertical_name"`
-		BusinessVerticalCode string `json:"business_vertical_code"`
+	cacheKey := allSitesCacheKey(page, limit)
+	if payload, ok := allSitesCache.get(cacheKey); ok {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(payload)
+		return
 	}
 
-	var sites []SiteWithBusinessVertical
-	err := config.DB.Table("sites").
-		Select("sites.*, business_verticals.name as business_vertical_name, business_verticals.code as business_vertical_code").
-		Joins("LEFT JOIN business_verticals ON sites.business_vertical_id = business_verticals.id").
-		Where("sites.is_active = ?", true).
-		Order("sites.created_at DESC").
-		Limit(limit).
-		Offset(offset).
-		Scan(&sites).Error
+	loaded, err, _ := allSitesLoadGroup.Do(cacheKey, func() (interface{}, error) {
+		if payload, ok := allSitesCache.get(cacheKey); ok {
+			return payload, nil
+		}
 
+		// Get total count of all active sites
+		var total int64
+		if err := config.DB.Model(&models.Site{}).Where("sites.is_active = ?", true).Count(&total).Error; err != nil {
+			return nil, err
+		}
+
+		// Use JOIN to get sites with business vertical name in a single query
+		type SiteWithBusinessVertical struct {
+			models.Site
+			BusinessVerticalName string `json:"business_vertical_name"`
+			BusinessVerticalCode string `json:"business_vertical_code"`
+		}
+
+		var sites []SiteWithBusinessVertical
+		err := config.DB.Table("sites").
+			Select("sites.*, business_verticals.name as business_vertical_name, business_verticals.code as business_vertical_code").
+			Joins("LEFT JOIN business_verticals ON sites.business_vertical_id = business_verticals.id").
+			Where("sites.is_active = ?", true).
+			Order("sites.created_at DESC").
+			Limit(limit).
+			Offset(offset).
+			Scan(&sites).Error
+		if err != nil {
+			return nil, err
+		}
+
+		response := map[string]interface{}{
+			"total": total,
+			"page":  page,
+			"limit": limit,
+			"data":  sites,
+		}
+
+		payload, marshalErr := json.Marshal(response)
+		if marshalErr != nil {
+			return nil, marshalErr
+		}
+		allSitesCache.set(cacheKey, payload)
+		return payload, nil
+	})
 	if err != nil {
 		http.Error(w, "failed to fetch sites", http.StatusInternalServerError)
 		return
 	}
 
-	response := map[string]interface{}{
-		"total": total,
-		"page":  page,
-		"limit": limit,
-		"data":  sites,
-	}
-
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	w.Write(loaded.([]byte))
 }
 
 func GetSiteByID(w http.ResponseWriter, r *http.Request) {
@@ -113,6 +185,7 @@ func CreateSite(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("failed to create site: %s", err.Error()), http.StatusInternalServerError)
 		return
 	}
+	invalidateAllSitesCache()
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -171,6 +244,7 @@ func UpdateSite(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("failed to update site: %s", err.Error()), http.StatusInternalServerError)
 		return
 	}
+	invalidateAllSitesCache()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(existingSite)
@@ -302,6 +376,100 @@ func GetUserSites(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
+}
+
+type UserSiteAccessWithSite struct {
+	ID         uuid.UUID   `json:"id"`
+	UserID     uuid.UUID   `json:"userId"`
+	SiteID     uuid.UUID   `json:"siteId"`
+	CanRead    bool        `json:"canRead"`
+	CanCreate  bool        `json:"canCreate"`
+	CanUpdate  bool        `json:"canUpdate"`
+	CanDelete  bool        `json:"canDelete"`
+	AssignedAt time.Time   `json:"assignedAt"`
+	AssignedBy *uuid.UUID  `json:"assignedBy,omitempty"`
+	Site       models.Site `json:"site"`
+}
+
+// GetUserSiteAccessByUserID returns all site access records for a specific user within the current business
+func GetUserSiteAccessByUserID(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	userID, err := uuid.Parse(vars["userId"])
+	if err != nil {
+		http.Error(w, "invalid userId", http.StatusBadRequest)
+		return
+	}
+
+	businessContext := middleware.GetUserBusinessContext(r)
+	if businessContext == nil {
+		http.Error(w, "business context not found", http.StatusBadRequest)
+		return
+	}
+
+	businessID, ok := businessContext["business_id"].(uuid.UUID)
+	if !ok {
+		http.Error(w, "invalid business context", http.StatusInternalServerError)
+		return
+	}
+
+	pageStr := r.URL.Query().Get("page")
+	limitStr := r.URL.Query().Get("limit")
+	page := 1
+	limit := 100
+	if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
+		page = p
+	}
+	if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 500 {
+		limit = l
+	}
+	offset := (page - 1) * limit
+
+	baseQuery := config.DB.Model(&models.UserSiteAccess{}).
+		Joins("JOIN sites ON sites.id = user_site_accesses.site_id").
+		Where("user_site_accesses.user_id = ? AND sites.business_vertical_id = ? AND sites.is_active = ?", userID, businessID, true)
+
+	var total int64
+	if err := baseQuery.Count(&total).Error; err != nil {
+		http.Error(w, "failed to count user site access", http.StatusInternalServerError)
+		return
+	}
+
+	var accesses []models.UserSiteAccess
+	if err := config.DB.
+		Preload("Site").
+		Joins("JOIN sites ON sites.id = user_site_accesses.site_id").
+		Where("user_site_accesses.user_id = ? AND sites.business_vertical_id = ? AND sites.is_active = ?", userID, businessID, true).
+		Order("user_site_accesses.assigned_at DESC").
+		Limit(limit).
+		Offset(offset).
+		Find(&accesses).Error; err != nil {
+		http.Error(w, "failed to fetch user site access", http.StatusInternalServerError)
+		return
+	}
+
+	result := make([]UserSiteAccessWithSite, 0, len(accesses))
+	for _, access := range accesses {
+		result = append(result, UserSiteAccessWithSite{
+			ID:         access.ID,
+			UserID:     access.UserID,
+			SiteID:     access.SiteID,
+			CanRead:    access.CanRead,
+			CanCreate:  access.CanCreate,
+			CanUpdate:  access.CanUpdate,
+			CanDelete:  access.CanDelete,
+			AssignedAt: access.AssignedAt,
+			AssignedBy: access.AssignedBy,
+			Site:       access.Site,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"total": total,
+		"page":  page,
+		"limit": limit,
+		"data":  result,
+	})
 }
 
 // AssignUserSiteAccessRequest represents the request body for assigning site access

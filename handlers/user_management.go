@@ -80,12 +80,13 @@ func buildAdminUserResponse(user models.User) adminUserOut {
 }
 
 type updateUserReq struct {
-	Name     string `json:"name"`
-	Email    string `json:"email"`
-	Phone    string `json:"phone"`
-	Role     string `json:"role"`
-	RoleID   string `json:"role_id"`
-	IsActive *bool  `json:"is_active"`
+	Name               string  `json:"name"`
+	Email              string  `json:"email"`
+	Phone              string  `json:"phone"`
+	Role               string  `json:"role"`
+	RoleID             *string `json:"role_id"`
+	BusinessVerticalID *string `json:"business_vertical_id"`
+	IsActive           *bool   `json:"is_active"`
 }
 
 // UpdateUser allows admins to update user information
@@ -113,38 +114,141 @@ func UpdateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Update fields
-	if req.Name != "" {
-		user.Name = req.Name
-	}
-	if req.Email != "" {
-		user.Email = req.Email
-	}
-	if req.Phone != "" {
-		user.Phone = req.Phone
-	}
-	if req.RoleID != "" {
-		roleID, err := uuid.Parse(req.RoleID)
-		if err != nil {
-			http.Error(w, "invalid role ID", http.StatusBadRequest)
-			return
-		}
-		user.RoleID = &roleID
-	}
-	if req.IsActive != nil {
-		user.IsActive = *req.IsActive
+	// Build update map to ensure GORM properly persists pointer fields
+	updateMap := map[string]interface{}{
+		"name":  user.Name,
+		"email": user.Email,
+		"phone": user.Phone,
 	}
 
-	// Save changes
-	if err := config.DB.Save(&user).Error; err != nil {
+	// Update name if provided
+	if req.Name != "" {
+		updateMap["name"] = req.Name
+	}
+
+	// Update email if provided
+	if req.Email != "" {
+		updateMap["email"] = req.Email
+	}
+
+	// Update phone if provided
+	if req.Phone != "" {
+		updateMap["phone"] = req.Phone
+	}
+
+	// Update global role if provided
+	if req.RoleID != nil {
+		if *req.RoleID == "" {
+			updateMap["role_id"] = nil
+		} else {
+			roleID, err := uuid.Parse(*req.RoleID)
+			if err != nil {
+				http.Error(w, "invalid role ID", http.StatusBadRequest)
+				return
+			}
+
+			var role models.Role
+			if err := config.DB.First(&role, "id = ? AND is_active = ?", roleID, true).Error; err != nil {
+				http.Error(w, "role not found", http.StatusBadRequest)
+				return
+			}
+
+			updateMap["role_id"] = roleID
+		}
+	}
+
+	// Update business vertical if provided
+	if req.BusinessVerticalID != nil {
+		if *req.BusinessVerticalID == "" {
+			updateMap["business_vertical_id"] = nil
+		} else {
+			businessVerticalID, err := uuid.Parse(*req.BusinessVerticalID)
+			if err != nil {
+				http.Error(w, "invalid business vertical ID", http.StatusBadRequest)
+				return
+			}
+
+			var businessVertical models.BusinessVertical
+			if err := config.DB.First(&businessVertical, "id = ? AND is_active = ?", businessVerticalID, true).Error; err != nil {
+				http.Error(w, "business vertical not found", http.StatusBadRequest)
+				return
+			}
+
+			updateMap["business_vertical_id"] = businessVerticalID
+		}
+	}
+
+	// Update is_active if provided
+	if req.IsActive != nil {
+		updateMap["is_active"] = *req.IsActive
+	}
+
+	// Use Updates() instead of Save() to explicitly persist pointer fields
+	if err := config.DB.Model(&user).Updates(updateMap).Error; err != nil {
 		http.Error(w, "failed to update user: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// Return updated user (without password hash)
-	user.PasswordHash = ""
+	// Verify critical role/vertical fields actually persisted when requested.
+	if req.RoleID != nil || req.BusinessVerticalID != nil {
+		var persisted models.User
+		if err := config.DB.Select("id", "role_id", "business_vertical_id").First(&persisted, "id = ?", user.ID).Error; err != nil {
+			http.Error(w, "failed to verify user update: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		if req.RoleID != nil {
+			expectedRoleID := (*uuid.UUID)(nil)
+			if *req.RoleID != "" {
+				parsedRoleID, parseErr := uuid.Parse(*req.RoleID)
+				if parseErr != nil {
+					http.Error(w, "invalid role ID", http.StatusBadRequest)
+					return
+				}
+				expectedRoleID = &parsedRoleID
+			}
+
+			if (expectedRoleID == nil) != (persisted.RoleID == nil) ||
+				(expectedRoleID != nil && persisted.RoleID != nil && *expectedRoleID != *persisted.RoleID) {
+				http.Error(w, "failed to persist role update", http.StatusInternalServerError)
+				return
+			}
+		}
+
+		if req.BusinessVerticalID != nil {
+			expectedVerticalID := (*uuid.UUID)(nil)
+			if *req.BusinessVerticalID != "" {
+				parsedVerticalID, parseErr := uuid.Parse(*req.BusinessVerticalID)
+				if parseErr != nil {
+					http.Error(w, "invalid business vertical ID", http.StatusBadRequest)
+					return
+				}
+				expectedVerticalID = &parsedVerticalID
+			}
+
+			if (expectedVerticalID == nil) != (persisted.BusinessVerticalID == nil) ||
+				(expectedVerticalID != nil && persisted.BusinessVerticalID != nil && *expectedVerticalID != *persisted.BusinessVerticalID) {
+				http.Error(w, "failed to persist business vertical update", http.StatusInternalServerError)
+				return
+			}
+		}
+	}
+
+	// Evict the updated user from the auth cache so permissions reflect immediately.
+	middleware.InvalidateUserCache(userID)
+	invalidateAdminUsersCache()
+
+	if err := config.DB.
+		Preload("RoleModel").
+		Preload("BusinessVertical").
+		Preload("UserBusinessRoles.BusinessRole.BusinessVertical").
+		First(&user, "id = ?", user.ID).Error; err != nil {
+		http.Error(w, "failed to reload updated user", http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(user)
+	json.NewEncoder(w).Encode(buildAdminUserResponse(user))
 }
 
 // DeleteUser allows admins to soft delete users
@@ -179,6 +283,11 @@ func DeleteUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to delete user: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	// Evict the deactivated user immediately so they cannot continue to access
+	// protected resources via a still-valid JWT during the cache TTL window.
+	middleware.InvalidateUserCache(userID)
+	invalidateAdminUsersCache()
 
 	w.WriteHeader(http.StatusNoContent)
 }

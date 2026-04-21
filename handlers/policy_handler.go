@@ -4,14 +4,72 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
+	"golang.org/x/sync/singleflight"
 	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/middleware"
 	"p9e.in/ugcl/models"
 	"p9e.in/ugcl/pkg/abac"
 )
+
+const (
+	policyListCacheTTL  = 10 * time.Minute
+	policyStatsCacheTTL = 10 * time.Minute
+)
+
+type policyResponseCacheEntry struct {
+	payload   []byte
+	expiresAt time.Time
+}
+
+type policyResponseCache struct {
+	mu      sync.Mutex
+	entries map[string]policyResponseCacheEntry
+}
+
+var (
+	policyListCache  = &policyResponseCache{entries: make(map[string]policyResponseCacheEntry)}
+	policyStatsCache = &policyResponseCache{entries: make(map[string]policyResponseCacheEntry)}
+
+	policyListLoadGroup  singleflight.Group
+	policyStatsLoadGroup singleflight.Group
+)
+
+func (c *policyResponseCache) get(key string) ([]byte, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	entry, ok := c.entries[key]
+	if !ok {
+		return nil, false
+	}
+	if time.Now().After(entry.expiresAt) {
+		delete(c.entries, key)
+		return nil, false
+	}
+	return entry.payload, true
+}
+
+func (c *policyResponseCache) set(key string, payload []byte, ttl time.Duration) {
+	c.mu.Lock()
+	c.entries[key] = policyResponseCacheEntry{payload: payload, expiresAt: time.Now().Add(ttl)}
+	c.mu.Unlock()
+}
+
+func (c *policyResponseCache) invalidate() {
+	c.mu.Lock()
+	clear(c.entries)
+	c.mu.Unlock()
+}
+
+func invalidatePolicyCaches() {
+	policyListCache.invalidate()
+	policyStatsCache.invalidate()
+}
 
 // CreatePolicy creates a new policy
 func CreatePolicy(w http.ResponseWriter, r *http.Request) {
@@ -37,6 +95,7 @@ func CreatePolicy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	invalidatePolicyCaches()
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -74,6 +133,7 @@ func UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	invalidatePolicyCaches()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(updatedPolicy)
@@ -93,6 +153,7 @@ func DeletePolicy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
+	invalidatePolicyCaches()
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -153,21 +214,53 @@ func ListPolicies(w http.ResponseWriter, r *http.Request) {
 	}
 
 	policyService := abac.NewPolicyService(config.DB)
-	policies, total, err := policyService.ListPolicies(status, businessVerticalID, limit, offset)
+	statusKey := ""
+	if status != nil {
+		statusKey = string(*status)
+	}
+	businessKey := ""
+	if businessVerticalID != nil {
+		businessKey = businessVerticalID.String()
+	}
+	cacheKey := statusKey + "|" + businessKey + "|" + strconv.Itoa(limit) + "|" + strconv.Itoa(offset)
+
+	if payload, ok := policyListCache.get(cacheKey); ok {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(payload)
+		return
+	}
+
+	loaded, err, _ := policyListLoadGroup.Do(cacheKey, func() (interface{}, error) {
+		if payload, ok := policyListCache.get(cacheKey); ok {
+			return payload, nil
+		}
+
+		policies, total, listErr := policyService.ListPolicies(status, businessVerticalID, limit, offset)
+		if listErr != nil {
+			return nil, listErr
+		}
+
+		response := map[string]interface{}{
+			"policies": policies,
+			"total":    total,
+			"limit":    limit,
+			"offset":   offset,
+		}
+
+		payload, marshalErr := json.Marshal(response)
+		if marshalErr != nil {
+			return nil, marshalErr
+		}
+		policyListCache.set(cacheKey, payload, policyListCacheTTL)
+		return payload, nil
+	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	response := map[string]interface{}{
-		"policies": policies,
-		"total":    total,
-		"limit":    limit,
-		"offset":   offset,
-	}
-
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	w.Write(loaded.([]byte))
 }
 
 // ActivatePolicy activates a policy
@@ -190,6 +283,7 @@ func ActivatePolicy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	invalidatePolicyCaches()
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"message": "Policy activated successfully"})
@@ -215,6 +309,7 @@ func DeactivatePolicy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	invalidatePolicyCaches()
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"message": "Policy deactivated successfully"})
@@ -275,6 +370,7 @@ func ClonePolicy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	invalidatePolicyCaches()
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -328,14 +424,38 @@ func GetPolicyEvaluations(w http.ResponseWriter, r *http.Request) {
 // GetPolicyStatistics returns policy statistics
 func GetPolicyStatistics(w http.ResponseWriter, r *http.Request) {
 	policyService := abac.NewPolicyService(config.DB)
-	stats, err := policyService.GetPolicyStatistics()
+	const cacheKey = "all"
+
+	if payload, ok := policyStatsCache.get(cacheKey); ok {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(payload)
+		return
+	}
+
+	loaded, err, _ := policyStatsLoadGroup.Do(cacheKey, func() (interface{}, error) {
+		if payload, ok := policyStatsCache.get(cacheKey); ok {
+			return payload, nil
+		}
+
+		stats, statsErr := policyService.GetPolicyStatistics()
+		if statsErr != nil {
+			return nil, statsErr
+		}
+
+		payload, marshalErr := json.Marshal(stats)
+		if marshalErr != nil {
+			return nil, marshalErr
+		}
+		policyStatsCache.set(cacheKey, payload, policyStatsCacheTTL)
+		return payload, nil
+	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(stats)
+	w.Write(loaded.([]byte))
 }
 
 // EvaluatePolicyRequest evaluates an authorization request against all policies

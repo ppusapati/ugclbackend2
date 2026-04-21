@@ -6,15 +6,60 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
+	"golang.org/x/sync/singleflight"
 	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/middleware"
 	"p9e.in/ugcl/models"
 )
 
 var workflowEngine *WorkflowEngine
+
+const workflowsCacheTTL = 10 * time.Minute
+
+type workflowsCacheEntry struct {
+	payload   []byte
+	expiresAt time.Time
+}
+
+type workflowsCacheStore struct {
+	mu      sync.Mutex
+	entries map[string]workflowsCacheEntry
+}
+
+var workflowsCache = &workflowsCacheStore{entries: make(map[string]workflowsCacheEntry)}
+var workflowsLoadGroup singleflight.Group
+
+func (c *workflowsCacheStore) get(key string) ([]byte, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	entry, ok := c.entries[key]
+	if !ok {
+		return nil, false
+	}
+	if time.Now().After(entry.expiresAt) {
+		delete(c.entries, key)
+		return nil, false
+	}
+	return entry.payload, true
+}
+
+func (c *workflowsCacheStore) set(key string, payload []byte) {
+	c.mu.Lock()
+	c.entries[key] = workflowsCacheEntry{payload: payload, expiresAt: time.Now().Add(workflowsCacheTTL)}
+	c.mu.Unlock()
+}
+
+func invalidateWorkflowsCache() {
+	workflowsCache.mu.Lock()
+	clear(workflowsCache.entries)
+	workflowsCache.mu.Unlock()
+}
 
 // getWorkflowEngine returns the workflow engine instance, initializing it if needed
 func getWorkflowEngine() *WorkflowEngine {
@@ -470,8 +515,8 @@ func TransitionFormSubmission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get user permissions
-	userPermissions := middleware.GetUserPermissions(r)
+	// Use merged global + business-context permissions for transition authorization.
+	userPermissions := middleware.GetEffectivePermissions(r)
 
 	// Validate transition
 	if err := getWorkflowEngine().ValidateTransition(submissionID, req.Action, userPermissions); err != nil {
@@ -620,6 +665,7 @@ func CreateWorkflowDefinition(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to create workflow: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	invalidateWorkflowsCache()
 
 	log.Printf("✅ Created workflow: %s (ID: %s)", workflow.Code, workflow.ID)
 
@@ -640,17 +686,42 @@ func GetAllWorkflows(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var workflows []models.WorkflowDefinition
-	if err := getWorkflowEngine().db.Find(&workflows).Error; err != nil {
+	const cacheKey = "all"
+	if payload, ok := workflowsCache.get(cacheKey); ok {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(payload)
+		return
+	}
+
+	loaded, err, _ := workflowsLoadGroup.Do(cacheKey, func() (interface{}, error) {
+		if payload, ok := workflowsCache.get(cacheKey); ok {
+			return payload, nil
+		}
+
+		var workflows []models.WorkflowDefinition
+		if err := getWorkflowEngine().db.Find(&workflows).Error; err != nil {
+			return nil, err
+		}
+
+		response := map[string]interface{}{
+			"workflows": workflows,
+			"count":     len(workflows),
+		}
+
+		payload, marshalErr := json.Marshal(response)
+		if marshalErr != nil {
+			return nil, marshalErr
+		}
+		workflowsCache.set(cacheKey, payload)
+		return payload, nil
+	})
+	if err != nil {
 		http.Error(w, "failed to fetch workflows", http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"workflows": workflows,
-		"count":     len(workflows),
-	})
+	w.Write(loaded.([]byte))
 }
 
 func UpdateWorkflowDefinition(w http.ResponseWriter, r *http.Request) {
@@ -678,6 +749,7 @@ func UpdateWorkflowDefinition(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to update workflow", http.StatusInternalServerError)
 		return
 	}
+	invalidateWorkflowsCache()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -701,6 +773,7 @@ func DeleteWorkflowDefinition(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to delete workflow", http.StatusInternalServerError)
 		return
 	}
+	invalidateWorkflowsCache()
 
 	w.WriteHeader(http.StatusNoContent)
 }

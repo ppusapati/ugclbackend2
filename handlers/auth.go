@@ -3,19 +3,67 @@ package handlers
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
+	"golang.org/x/sync/singleflight"
 	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/middleware"
 	"p9e.in/ugcl/models"
 )
+
+const adminUsersCacheTTL = 10 * time.Minute
+
+type adminUsersCacheEntry struct {
+	payload   []byte
+	expiresAt time.Time
+}
+
+type adminUsersCacheStore struct {
+	mu      sync.Mutex // get() deletes expired entries so always needs the write lock; Mutex is correct.
+	entries map[string]adminUsersCacheEntry
+}
+
+var adminUsersCache = &adminUsersCacheStore{entries: make(map[string]adminUsersCacheEntry)}
+var adminUsersLoadGroup singleflight.Group
+
+func adminUsersCacheKey(page, limit int) string {
+	return strconv.Itoa(page) + ":" + strconv.Itoa(limit)
+}
+
+func (c *adminUsersCacheStore) get(key string) ([]byte, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	entry, ok := c.entries[key]
+	if !ok {
+		return nil, false
+	}
+	if time.Now().After(entry.expiresAt) {
+		delete(c.entries, key)
+		return nil, false
+	}
+	return entry.payload, true
+}
+
+func (c *adminUsersCacheStore) set(key string, payload []byte) {
+	c.mu.Lock()
+	c.entries[key] = adminUsersCacheEntry{payload: payload, expiresAt: time.Now().Add(adminUsersCacheTTL)}
+	c.mu.Unlock()
+}
+
+func invalidateAdminUsersCache() {
+	adminUsersCache.mu.Lock()
+	clear(adminUsersCache.entries)
+	adminUsersCache.mu.Unlock()
+}
 
 type loginPayload struct {
 	Phone    string `json:"phone"`
@@ -81,7 +129,6 @@ type userPayload struct {
 
 func Login(w http.ResponseWriter, r *http.Request) {
 	var req loginReq
-	fmt.Println("Login request received")
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
@@ -235,62 +282,65 @@ func GetAllUsers(w http.ResponseWriter, r *http.Request) {
 		limit = l
 	}
 	offset := (page - 1) * limit
+	cacheKey := adminUsersCacheKey(page, limit)
 
-	var users []models.User
-	if err := config.DB.
-		Preload("RoleModel").
-		Where("is_active = ?", true).
-		Limit(limit).
-		Offset(offset).
-		Find(&users).Error; err != nil {
+	if payload, ok := adminUsersCache.get(cacheKey); ok {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(payload)
+		return
+	}
+
+	loaded, err, _ := adminUsersLoadGroup.Do(cacheKey, func() (interface{}, error) {
+		if payload, ok := adminUsersCache.get(cacheKey); ok {
+			return payload, nil
+		}
+
+		var users []models.User
+		if err := config.DB.
+			Preload("RoleModel").
+			Preload("BusinessVertical").
+			Preload("UserBusinessRoles.BusinessRole.BusinessVertical").
+			Where("is_active = ?", true).
+			Limit(limit).
+			Offset(offset).
+			Find(&users).Error; err != nil {
+			return nil, err
+		}
+
+		var total int64
+		if err := config.DB.
+			Model(&models.User{}).
+			Where("is_active = ?", true).
+			Count(&total).Error; err != nil {
+			return nil, err
+		}
+
+		out := make([]adminUserOut, len(users))
+		for i, u := range users {
+			out[i] = buildAdminUserResponse(u)
+		}
+
+		response := map[string]interface{}{
+			"total": total,
+			"page":  page,
+			"limit": limit,
+			"data":  out,
+		}
+		payload, marshalErr := json.Marshal(response)
+		if marshalErr != nil {
+			return nil, marshalErr
+		}
+
+		adminUsersCache.set(cacheKey, payload)
+		return payload, nil
+	})
+	if err != nil {
 		http.Error(w, "DB error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	var total int64
-	if err := config.DB.
-		Model(&models.User{}).
-		Where("is_active = ?", true).
-		Count(&total).Error; err != nil {
-		http.Error(w, "DB count error: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	type userOut struct {
-		ID         uuid.UUID  `json:"id"`
-		Name       string     `json:"name"`
-		Email      string     `json:"email"`
-		Phone      string     `json:"phone"`
-		RoleID     *uuid.UUID `json:"role_id"`
-		GlobalRole string     `json:"global_role"`
-		IsActive   bool       `json:"is_active"`
-	}
-
-	out := make([]userOut, len(users))
-	for i, u := range users {
-		globalRoleName := ""
-		if u.RoleModel != nil {
-			globalRoleName = u.RoleModel.Name
-		}
-		out[i] = userOut{
-			ID:         u.ID,
-			Name:       u.Name,
-			Email:      u.Email,
-			Phone:      u.Phone,
-			RoleID:     u.RoleID,
-			GlobalRole: globalRoleName,
-			IsActive:   u.IsActive,
-		}
-	}
-
-	response := map[string]interface{}{
-		"total": total,
-		"page":  page,
-		"limit": limit,
-		"data":  out,
-	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	w.Write(loaded.([]byte))
 }
 
 // TestAuthEndpoint provides information about the current user's authentication status
