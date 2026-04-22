@@ -415,6 +415,24 @@ func Migrations(db *gorm.DB) error {
 				return nil
 			},
 		},
+		{
+			ID: "20260422_perf_indexes_admin_boot",
+			Migrate: func(tx *gorm.DB) error {
+				queries := []string{
+					"CREATE INDEX IF NOT EXISTS idx_roles_is_active_level ON roles (is_active, level ASC)",
+					"CREATE INDEX IF NOT EXISTS idx_business_roles_is_active_level ON business_roles (is_active, level ASC)",
+					"CREATE INDEX IF NOT EXISTS idx_app_forms_module_display_order ON app_forms (module_id, display_order ASC)",
+				}
+
+				for _, q := range queries {
+					if err := tx.Exec(q).Error; err != nil {
+						return err
+					}
+				}
+
+				return nil
+			},
+		},
 	})
 
 	return m.Migrate()

@@ -63,6 +63,18 @@ func writeJSONBytes(w http.ResponseWriter, payload []byte) {
 	_, _ = w.Write(payload)
 }
 
+// invalidateFormsCache clears all entries from the admin forms list cache and
+// any per-vertical list caches so mutating operations are immediately visible.
+func invalidateFormsCache() {
+	formsListCacheMu.Lock()
+	formsListCache = make(map[string]cachedJSONResponse)
+	formsListCacheMu.Unlock()
+
+	formByCodeCacheMu.Lock()
+	formByCodeCache = make(map[string]cachedJSONResponse)
+	formByCodeCacheMu.Unlock()
+}
+
 // GetFormsForVertical returns all forms accessible in a specific business vertical
 // GET /api/v1/business/{vertical}/forms
 func GetFormsForVertical(w http.ResponseWriter, r *http.Request) {
@@ -393,6 +405,7 @@ func UpdateFormVerticalAccess(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("✅ Updated form %s vertical access to: %v", formCode, requestBody.VerticalCodes)
+	invalidateFormsCache()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -507,6 +520,7 @@ func CreateForm(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("✅ Created new form: %s", form.Code)
+	invalidateFormsCache()
 
 	response := map[string]interface{}{
 		"message": "form created successfully",
@@ -621,6 +635,7 @@ func ToggleFormStatus(w http.ResponseWriter, r *http.Request) {
 		status = "active"
 	}
 	log.Printf("✅ Form %s marked %s by %s", formCode, status, claims.UserID)
+	invalidateFormsCache()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -752,6 +767,7 @@ func UpdateForm(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("✅ Updated form: %s", formCode)
+	invalidateFormsCache()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{

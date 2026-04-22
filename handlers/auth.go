@@ -133,8 +133,13 @@ func Login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
+
+	// Keep login lookup minimal and index-friendly: avoid implicit ORDER BY from First().
 	var u models.User
-	if err := config.DB.Preload("RoleModel").Where("phone = ?", req.Phone).First(&u).Error; err != nil {
+	if err := config.DB.
+		Select("id", "name", "email", "phone", "password_hash", "role_id").
+		Where("phone = ?", req.Phone).
+		Take(&u).Error; err != nil {
 		http.Error(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
@@ -145,8 +150,11 @@ func Login(w http.ResponseWriter, r *http.Request) {
 
 	// Determine role name for token
 	roleName := "user" // default
-	if u.RoleModel != nil {
-		roleName = u.RoleModel.Name
+	if u.RoleID != nil {
+		var role models.Role
+		if err := config.DB.Select("name").Where("id = ?", *u.RoleID).Take(&role).Error; err == nil {
+			roleName = role.Name
+		}
 	}
 
 	token, err := middleware.GenerateToken(u.ID.String(), roleName, u.Name, u.Phone)
@@ -281,6 +289,9 @@ func GetAllUsers(w http.ResponseWriter, r *http.Request) {
 	if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
 		limit = l
 	}
+	if limit > 100 {
+		limit = 100
+	}
 	offset := (page - 1) * limit
 	cacheKey := adminUsersCacheKey(page, limit)
 
@@ -299,6 +310,8 @@ func GetAllUsers(w http.ResponseWriter, r *http.Request) {
 		if err := config.DB.
 			Preload("RoleModel").
 			Preload("BusinessVertical").
+			Preload("UserBusinessRoles", "is_active = ?", true).
+			Preload("UserBusinessRoles.BusinessRole", "is_active = ?", true).
 			Preload("UserBusinessRoles.BusinessRole.BusinessVertical").
 			Where("is_active = ?", true).
 			Limit(limit).
