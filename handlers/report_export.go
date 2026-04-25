@@ -27,6 +27,11 @@ func ExportReportToExcel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !canViewReport(r, &report) {
+		reportAccessDenied(w)
+		return
+	}
+
 	// Execute report
 	engine := NewReportEngine()
 	result, err := engine.ExecuteReport(&report, nil, claims.UserID)
@@ -72,6 +77,11 @@ func ExportReportToCSV(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !canViewReport(r, &report) {
+		reportAccessDenied(w)
+		return
+	}
+
 	// Execute report
 	engine := NewReportEngine()
 	result, err := engine.ExecuteReport(&report, nil, claims.UserID)
@@ -107,6 +117,11 @@ func ExportReportToPDF(w http.ResponseWriter, r *http.Request) {
 	var report models.ReportDefinition
 	if err := config.DB.Where("id = ? AND deleted_at IS NULL", reportID).First(&report).Error; err != nil {
 		http.Error(w, "Report not found", http.StatusNotFound)
+		return
+	}
+
+	if !canViewReport(r, &report) {
+		reportAccessDenied(w)
 		return
 	}
 

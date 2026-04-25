@@ -56,17 +56,27 @@ func GenerateToken(userID, role, name, phone string) (string, error) {
 func JWTMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth := r.Header.Get("Authorization")
-		if auth == "" {
-			http.Error(w, "missing Authorization header", http.StatusUnauthorized)
-			return
-		}
-		parts := strings.SplitN(auth, " ", 2)
-		if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
-			http.Error(w, "invalid auth header", http.StatusUnauthorized)
-			return
+		tokenStr := ""
+		if auth != "" {
+			parts := strings.SplitN(auth, " ", 2)
+			if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
+				http.Error(w, "invalid auth header", http.StatusUnauthorized)
+				return
+			}
+			tokenStr = parts[1]
+		} else {
+			// EventSource cannot set custom Authorization headers.
+			// Allow token query fallback for SSE/auth-constrained clients.
+			tokenStr = strings.TrimSpace(r.URL.Query().Get("token"))
+			if tokenStr == "" {
+				tokenStr = strings.TrimSpace(r.URL.Query().Get("access_token"))
+			}
+			if tokenStr == "" {
+				http.Error(w, "missing Authorization header", http.StatusUnauthorized)
+				return
+			}
 		}
 
-		tokenStr := parts[1]
 		token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, func(t *jwt.Token) (interface{}, error) {
 			return jwtKey, nil
 		})

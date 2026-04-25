@@ -1,11 +1,14 @@
 package models
 
 import (
+	"context"
+	"database/sql/driver"
 	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // PolicyEffect defines whether policy allows or denies access
@@ -111,7 +114,19 @@ func (j JSONMap) Value() (interface{}, error) {
 	if j == nil {
 		return "{}", nil
 	}
-	return json.Marshal(j)
+	bytes, err := json.Marshal(j)
+	if err != nil {
+		return nil, err
+	}
+	return string(bytes), nil
+}
+
+func (j JSONMap) GormValue(_ context.Context, _ *gorm.DB) clause.Expr {
+	value, err := j.Value()
+	if err != nil {
+		return clause.Expr{SQL: "?", Vars: []interface{}{"{}"}}
+	}
+	return clause.Expr{SQL: "?", Vars: []interface{}{value.(driver.Value)}}
 }
 
 // JSONArray type for JSONB array fields
@@ -135,7 +150,19 @@ func (j JSONArray) Value() (interface{}, error) {
 	if j == nil {
 		return "[]", nil
 	}
-	return json.Marshal(j)
+	bytes, err := json.Marshal(j)
+	if err != nil {
+		return nil, err
+	}
+	return string(bytes), nil
+}
+
+func (j JSONArray) GormValue(_ context.Context, _ *gorm.DB) clause.Expr {
+	value, err := j.Value()
+	if err != nil {
+		return clause.Expr{SQL: "?", Vars: []interface{}{"[]"}}
+	}
+	return clause.Expr{SQL: "?", Vars: []interface{}{value.(driver.Value)}}
 }
 
 func (p *Policy) BeforeCreate(tx *gorm.DB) (err error) {

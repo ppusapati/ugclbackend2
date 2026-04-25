@@ -16,44 +16,60 @@ func RegisterReportRoutes(r *mux.Router) {
 	api := r.PathPrefix("/api/v1").Subrouter()
 	api.Use(middleware.JWTMiddleware)
 
-	// Report Definitions
-	api.HandleFunc("/reports/definitions", handlers.CreateReportDefinition).Methods("POST")
-	api.HandleFunc("/reports/definitions", handlers.GetReportDefinitions).Methods("GET")
-	api.HandleFunc("/reports/definitions/{id}", handlers.GetReportDefinition).Methods("GET")
-	api.HandleFunc("/reports/definitions/{id}", handlers.UpdateReportDefinition).Methods("PUT")
-	api.HandleFunc("/reports/definitions/{id}", handlers.DeleteReportDefinition).Methods("DELETE")
-	api.HandleFunc("/reports/definitions/{id}/clone", handlers.CloneReport).Methods("POST")
-	api.HandleFunc("/reports/definitions/{id}/favorite", handlers.ToggleFavoriteReport).Methods("POST")
+	// Report read/write subrouters with permission guards
+	reportRead := api.PathPrefix("").Subrouter()
+	reportRead.Use(middleware.RequirePermission("report:read"))
+
+	reportWrite := api.PathPrefix("").Subrouter()
+	reportWrite.Use(middleware.RequireAnyPermission([]string{"report:create", "report:read"}))
+
+	reportExport := api.PathPrefix("").Subrouter()
+	reportExport.Use(middleware.RequirePermission("report:export"))
+
+	dashboardRead := api.PathPrefix("").Subrouter()
+	dashboardRead.Use(middleware.RequirePermission("dashboard:view"))
+
+	// Report Definitions – writes require report:read (creator must also be able to read)
+	reportRead.HandleFunc("/reports/definitions", handlers.GetReportDefinitions).Methods("GET")
+	reportRead.HandleFunc("/reports/definitions/{id}", handlers.GetReportDefinition).Methods("GET")
+	reportRead.HandleFunc("/reports/definitions/{id}/clone", handlers.CloneReport).Methods("POST")
+	reportRead.HandleFunc("/reports/definitions/{id}/favorite", handlers.ToggleFavoriteReport).Methods("POST")
+	reportRead.HandleFunc("/reports/definitions/{id}", handlers.UpdateReportDefinition).Methods("PUT")
+	reportRead.HandleFunc("/reports/definitions/{id}", handlers.DeleteReportDefinition).Methods("DELETE")
+	reportRead.HandleFunc("/reports/definitions", handlers.CreateReportDefinition).Methods("POST")
 
 	// Report Execution
-	api.HandleFunc("/reports/definitions/{id}/execute", handlers.ExecuteReport).Methods("POST")
-	api.HandleFunc("/reports/definitions/{id}/history", handlers.GetReportExecutionHistory).Methods("GET")
+	reportRead.HandleFunc("/reports/definitions/{id}/execute", handlers.ExecuteReport).Methods("POST")
+	reportRead.HandleFunc("/reports/definitions/{id}/history", handlers.GetReportExecutionHistory).Methods("GET")
 
-	// Report Export
-	api.HandleFunc("/reports/definitions/{id}/export/excel", handlers.ExportReportToExcel).Methods("GET")
-	api.HandleFunc("/reports/definitions/{id}/export/csv", handlers.ExportReportToCSV).Methods("GET")
-	api.HandleFunc("/reports/definitions/{id}/export/pdf", handlers.ExportReportToPDF).Methods("GET")
+	// Report Export – requires report:export on top of JWT
+	reportExport.HandleFunc("/reports/definitions/{id}/export/excel", handlers.ExportReportToExcel).Methods("GET")
+	reportExport.HandleFunc("/reports/definitions/{id}/export/csv", handlers.ExportReportToCSV).Methods("GET")
+	reportExport.HandleFunc("/reports/definitions/{id}/export/pdf", handlers.ExportReportToPDF).Methods("GET")
 
-	// Form Table Schema Discovery
-	api.HandleFunc("/reports/forms/tables", handlers.GetAvailableFormTables).Methods("GET")
-	api.HandleFunc("/reports/forms/tables/{table_name}/fields", handlers.GetFormTableFields).Methods("GET")
+	// Form Table Schema Discovery – anyone with report:read can discover schemas
+	reportRead.HandleFunc("/reports/forms/tables", handlers.GetAvailableFormTables).Methods("GET")
+	reportRead.HandleFunc("/reports/forms/tables/{table_name}/fields", handlers.GetFormTableFields).Methods("GET")
+
+	// Roles available for report sharing (lightweight list, no manage_roles required)
+	reportRead.HandleFunc("/reports/available-roles", handlers.GetReportAvailableRoles).Methods("GET")
 
 	// Dashboards
-	api.HandleFunc("/dashboards", handlers.CreateDashboard).Methods("POST")
-	api.HandleFunc("/dashboards", handlers.GetDashboards).Methods("GET")
-	api.HandleFunc("/dashboards/{id}", handlers.GetDashboard).Methods("GET")
-	api.HandleFunc("/dashboards/{id}/widgets", handlers.AddWidgetToDashboard).Methods("POST")
-	api.HandleFunc("/dashboards/{id}/widgets/{widget_id}", handlers.RemoveWidgetFromDashboard).Methods("DELETE")
+	dashboardRead.HandleFunc("/dashboards", handlers.CreateDashboard).Methods("POST")
+	dashboardRead.HandleFunc("/dashboards", handlers.GetDashboards).Methods("GET")
+	dashboardRead.HandleFunc("/dashboards/{id}", handlers.GetDashboard).Methods("GET")
+	dashboardRead.HandleFunc("/dashboards/{id}/widgets", handlers.AddWidgetToDashboard).Methods("POST")
+	dashboardRead.HandleFunc("/dashboards/{id}/widgets/{widget_id}", handlers.RemoveWidgetFromDashboard).Methods("DELETE")
 
 	// Report Templates
-	api.HandleFunc("/report-templates", handlers.GetReportTemplates).Methods("GET")
-	api.HandleFunc("/report-templates/{template_id}/create", handlers.CreateReportFromTemplate).Methods("POST")
+	reportRead.HandleFunc("/report-templates", handlers.GetReportTemplates).Methods("GET")
+	reportRead.HandleFunc("/report-templates/{template_id}/create", handlers.CreateReportFromTemplate).Methods("POST")
 
-	// Scheduled Reports (Admin only - add permission middleware if needed)
-	api.HandleFunc("/scheduled-reports", getScheduledReportsHandler).Methods("GET")
-	api.HandleFunc("/scheduled-reports/{id}/schedule", scheduleReportHandler).Methods("POST")
-	api.HandleFunc("/scheduled-reports/{id}/unschedule", unscheduleReportHandler).Methods("POST")
-	api.HandleFunc("/scheduled-reports/{id}/execute-now", executeReportNowHandler).Methods("POST")
+	// Scheduled Reports – requires report:read; schedule-mutating actions additionally require report:export
+	reportRead.HandleFunc("/scheduled-reports", getScheduledReportsHandler).Methods("GET")
+	reportExport.HandleFunc("/scheduled-reports/{id}/schedule", scheduleReportHandler).Methods("POST")
+	reportExport.HandleFunc("/scheduled-reports/{id}/unschedule", unscheduleReportHandler).Methods("POST")
+	reportExport.HandleFunc("/scheduled-reports/{id}/execute-now", executeReportNowHandler).Methods("POST")
 }
 
 // Handler wrappers for scheduler

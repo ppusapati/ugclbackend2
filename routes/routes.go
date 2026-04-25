@@ -20,7 +20,7 @@ func RegisterRoutes() http.Handler {
 	// Public Routes (no authentication)
 	// =====================================================
 	r.HandleFunc("/register", handlers.Register).Methods("POST")
-	r.HandleFunc("/login", handlers.Login).Methods("POST")
+	r.HandleFunc("/api/v1/login", handlers.Login).Methods("POST")
 	r.HandleFunc("/token", handlers.GetCurrentUser).Methods("GET")
 	r.PathPrefix("/uploads/").Handler(
 		http.StripPrefix("/uploads/", http.FileServer(http.Dir("./uploads"))),

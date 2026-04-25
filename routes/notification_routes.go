@@ -48,33 +48,51 @@ func RegisterNotificationRoutes(api *mux.Router, admin *mux.Router) {
 	api.HandleFunc("/notifications/{id}", notifHandler.DeleteNotification).Methods("DELETE")
 
 	// Admin notification endpoints (require admin permissions)
-	// These routes are under /api/v1/admin/notifications
+	// These routes are available under both:
+	// - /api/v1/admin/notifications/* (legacy)
+	// - /api/v1/admin/notification-rules* (frontend/doc contract)
 
 	// Get all notification rules
 	admin.Handle("/notifications/rules", middleware.RequirePermission("manage_notifications")(
+		http.HandlerFunc(adminHandler.GetAllNotificationRules))).Methods("GET")
+	admin.Handle("/notification-rules", middleware.RequirePermission("manage_notifications")(
 		http.HandlerFunc(adminHandler.GetAllNotificationRules))).Methods("GET")
 
 	// Get single notification rule
 	admin.Handle("/notifications/rules/{id}", middleware.RequirePermission("manage_notifications")(
 		http.HandlerFunc(adminHandler.GetNotificationRule))).Methods("GET")
+	admin.Handle("/notification-rules/{id}", middleware.RequirePermission("manage_notifications")(
+		http.HandlerFunc(adminHandler.GetNotificationRule))).Methods("GET")
 
 	// Create notification rule
 	admin.Handle("/notifications/rules", middleware.RequirePermission("manage_notifications")(
+		http.HandlerFunc(adminHandler.CreateNotificationRule))).Methods("POST")
+	admin.Handle("/notification-rules", middleware.RequirePermission("manage_notifications")(
 		http.HandlerFunc(adminHandler.CreateNotificationRule))).Methods("POST")
 
 	// Update notification rule
 	admin.Handle("/notifications/rules/{id}", middleware.RequirePermission("manage_notifications")(
 		http.HandlerFunc(adminHandler.UpdateNotificationRule))).Methods("PUT")
+	admin.Handle("/notification-rules/{id}", middleware.RequirePermission("manage_notifications")(
+		http.HandlerFunc(adminHandler.UpdateNotificationRule))).Methods("PUT")
 
 	// Delete notification rule
 	admin.Handle("/notifications/rules/{id}", middleware.RequirePermission("manage_notifications")(
+		http.HandlerFunc(adminHandler.DeleteNotificationRule))).Methods("DELETE")
+	admin.Handle("/notification-rules/{id}", middleware.RequirePermission("manage_notifications")(
 		http.HandlerFunc(adminHandler.DeleteNotificationRule))).Methods("DELETE")
 
 	// Toggle notification rule active status
 	admin.Handle("/notifications/rules/{id}/toggle", middleware.RequirePermission("manage_notifications")(
 		http.HandlerFunc(adminHandler.ToggleNotificationRule))).Methods("PATCH")
+	admin.Handle("/notification-rules/{id}/toggle", middleware.RequirePermission("manage_notifications")(
+		http.HandlerFunc(adminHandler.ToggleNotificationRule))).Methods("PATCH")
+	admin.Handle("/notification-rules/{id}/status", middleware.RequirePermission("manage_notifications")(
+		http.HandlerFunc(adminHandler.ToggleNotificationRule))).Methods("PATCH")
 
 	// Get notification statistics
 	admin.Handle("/notifications/stats", middleware.RequirePermission("manage_notifications")(
+		http.HandlerFunc(adminHandler.GetNotificationStats))).Methods("GET")
+	admin.Handle("/notification-rules/stats", middleware.RequirePermission("manage_notifications")(
 		http.HandlerFunc(adminHandler.GetNotificationStats))).Methods("GET")
 }

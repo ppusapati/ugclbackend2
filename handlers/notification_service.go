@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"text/template"
 
 	"github.com/google/uuid"
@@ -165,8 +166,13 @@ func (ns *NotificationService) resolveRecipients(
 	for _, recipient := range recipients {
 		switch recipient.Type {
 		case "user":
-			if recipient.Value != "" {
-				userIDs[recipient.Value] = true
+			resolvedUsers, err := ns.resolveUserIdentifiers(recipient.Value, submission.BusinessVerticalID)
+			if err != nil {
+				log.Printf("⚠️  Failed to resolve user recipient %q: %v", recipient.Value, err)
+				continue
+			}
+			for _, userID := range resolvedUsers {
+				userIDs[userID] = true
 			}
 
 		case "submitter":
@@ -208,9 +214,13 @@ func (ns *NotificationService) resolveRecipients(
 			}
 
 		case "field_value":
-			// Get user ID from form data field
-			if formData, ok := context.FormData[recipient.Value].(string); ok {
-				userIDs[formData] = true
+			users, err := ns.resolveUsersFromFormField(recipient.Value, context.FormData, submission.BusinessVerticalID)
+			if err != nil {
+				log.Printf("⚠️  Failed to resolve users from field %s: %v", recipient.Value, err)
+				continue
+			}
+			for _, userID := range users {
+				userIDs[userID] = true
 			}
 
 		case "attribute":
@@ -313,30 +323,201 @@ func (ns *NotificationService) getUsersByPermission(permissionCode string) ([]st
 
 	// Get permission
 	var permission models.Permission
-	if err := ns.db.Where("code = ?", permissionCode).First(&permission).Error; err != nil {
+	if err := ns.db.Where("name = ?", permissionCode).First(&permission).Error; err != nil {
 		return nil, err
 	}
 
-	// Get all roles with this permission
+	userIDMap := make(map[string]bool)
+
+	// Get all global roles with this permission
 	var rolePermissions []models.RolePermission
 	if err := ns.db.Where("permission_id = ?", permission.ID).Find(&rolePermissions).Error; err != nil {
 		return nil, err
 	}
 
-	// Get all users with these roles
-	roleIDs := make([]uuid.UUID, len(rolePermissions))
-	for i, rp := range rolePermissions {
-		roleIDs[i] = rp.RoleID
+	if len(rolePermissions) > 0 {
+		roleIDs := make([]uuid.UUID, len(rolePermissions))
+		for i, rp := range rolePermissions {
+			roleIDs[i] = rp.RoleID
+		}
+
+		var users []models.User
+		if err := ns.db.Where("role_id IN ? AND is_active = ?", roleIDs, true).Find(&users).Error; err != nil {
+			return nil, err
+		}
+
+		for _, user := range users {
+			userIDMap[user.ID.String()] = true
+		}
 	}
 
-	var users []models.User
-	if err := ns.db.Where("role_id IN ?", roleIDs).Find(&users).Error; err != nil {
+	// Get all business roles with this permission
+	var businessRolePerms []models.BusinessRolePermission
+	if err := ns.db.Where("permission_id = ?", permission.ID).Find(&businessRolePerms).Error; err != nil {
 		return nil, err
 	}
 
-	userIDs := make([]string, len(users))
-	for i, user := range users {
-		userIDs[i] = user.ID.String()
+	if len(businessRolePerms) > 0 {
+		businessRoleIDs := make([]uuid.UUID, len(businessRolePerms))
+		for i, brp := range businessRolePerms {
+			businessRoleIDs[i] = brp.BusinessRoleID
+		}
+
+		var businessAssignments []models.UserBusinessRole
+		if err := ns.db.Where("business_role_id IN ? AND is_active = ?", businessRoleIDs, true).Find(&businessAssignments).Error; err != nil {
+			return nil, err
+		}
+
+		for _, assignment := range businessAssignments {
+			userIDMap[assignment.UserID.String()] = true
+		}
+	}
+
+	userIDs := make([]string, 0, len(userIDMap))
+	for userID := range userIDMap {
+		userIDs = append(userIDs, userID)
+	}
+
+	return userIDs, nil
+}
+
+func (ns *NotificationService) resolveUsersFromFormField(field string, formData map[string]interface{}, businessVerticalID uuid.UUID) ([]string, error) {
+	if field == "" || formData == nil {
+		return nil, nil
+	}
+
+	value, exists := formData[field]
+	if !exists {
+		return nil, nil
+	}
+
+	return ns.resolveUserIdentifiersFromAny(value, businessVerticalID)
+}
+
+func (ns *NotificationService) resolveUserIdentifiersFromAny(value interface{}, businessVerticalID uuid.UUID) ([]string, error) {
+	result := make(map[string]bool)
+
+	appendUsers := func(users []string) {
+		for _, userID := range users {
+			if userID != "" {
+				result[userID] = true
+			}
+		}
+	}
+
+	switch v := value.(type) {
+	case string:
+		users, err := ns.resolveUserIdentifiers(v, businessVerticalID)
+		if err != nil {
+			return nil, err
+		}
+		appendUsers(users)
+	case []interface{}:
+		for _, item := range v {
+			users, err := ns.resolveUserIdentifiersFromAny(item, businessVerticalID)
+			if err != nil {
+				return nil, err
+			}
+			appendUsers(users)
+		}
+	case map[string]interface{}:
+		for _, key := range []string{"user_id", "id", "email", "phone", "value"} {
+			if raw, ok := v[key]; ok {
+				users, err := ns.resolveUserIdentifiersFromAny(raw, businessVerticalID)
+				if err != nil {
+					return nil, err
+				}
+				appendUsers(users)
+			}
+		}
+	default:
+		users, err := ns.resolveUserIdentifiers(fmt.Sprint(v), businessVerticalID)
+		if err != nil {
+			return nil, err
+		}
+		appendUsers(users)
+	}
+
+	resolved := make([]string, 0, len(result))
+	for userID := range result {
+		resolved = append(resolved, userID)
+	}
+
+	return resolved, nil
+}
+
+func (ns *NotificationService) resolveUserIdentifiers(raw string, businessVerticalID uuid.UUID) ([]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ';'
+	})
+	if len(parts) == 0 {
+		parts = []string{raw}
+	}
+
+	result := make(map[string]bool)
+	for _, part := range parts {
+		identifier := strings.TrimSpace(part)
+		if identifier == "" {
+			continue
+		}
+
+		users, err := ns.findUsersByIdentifier(identifier, businessVerticalID)
+		if err != nil {
+			return nil, err
+		}
+
+		// For explicit identifiers, allow fallback across verticals if scoped lookup found none.
+		if len(users) == 0 {
+			users, err = ns.findUsersByIdentifier(identifier, uuid.Nil)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		for _, userID := range users {
+			result[userID] = true
+		}
+	}
+
+	resolved := make([]string, 0, len(result))
+	for userID := range result {
+		resolved = append(resolved, userID)
+	}
+
+	return resolved, nil
+}
+
+func (ns *NotificationService) findUsersByIdentifier(identifier string, businessVerticalID uuid.UUID) ([]string, error) {
+	query := ns.db.Model(&models.User{}).Where("users.is_active = ?", true)
+
+	if businessVerticalID != uuid.Nil {
+		query = query.
+			Joins("LEFT JOIN user_business_roles ubr ON ubr.user_id = users.id AND ubr.is_active = ?", true).
+			Joins("LEFT JOIN business_roles br ON br.id = ubr.business_role_id").
+			Where("(users.business_vertical_id = ? OR br.business_vertical_id = ?)", businessVerticalID, businessVerticalID)
+	}
+
+	if parsedID, err := uuid.Parse(identifier); err == nil {
+		query = query.Where("users.id = ?", parsedID)
+	} else if strings.Contains(identifier, "@") {
+		query = query.Where("LOWER(users.email) = LOWER(?)", identifier)
+	} else {
+		query = query.Where("users.phone = ?", identifier)
+	}
+
+	var ids []uuid.UUID
+	if err := query.Distinct("users.id").Pluck("users.id", &ids).Error; err != nil {
+		return nil, err
+	}
+
+	userIDs := make([]string, len(ids))
+	for i, id := range ids {
+		userIDs[i] = id.String()
 	}
 
 	return userIDs, nil

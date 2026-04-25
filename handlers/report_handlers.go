@@ -140,10 +140,18 @@ func GetReportDefinitions(w http.ResponseWriter, r *http.Request) {
 		query = query.Where("report_type = ?", reportType)
 	}
 
-	var reports []models.ReportDefinition
-	if err := query.Order("created_at DESC").Find(&reports).Error; err != nil {
+	var all []models.ReportDefinition
+	if err := query.Order("created_at DESC").Find(&all).Error; err != nil {
 		http.Error(w, "Failed to fetch reports", http.StatusInternalServerError)
 		return
+	}
+
+	// Filter to only reports the requesting user may view.
+	reports := make([]models.ReportDefinition, 0, len(all))
+	for i := range all {
+		if canViewReport(r, &all[i]) {
+			reports = append(reports, all[i])
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -164,6 +172,11 @@ func GetReportDefinition(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !canViewReport(r, &report) {
+		reportAccessDenied(w)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"report": report})
 }
@@ -177,6 +190,11 @@ func UpdateReportDefinition(w http.ResponseWriter, r *http.Request) {
 	var report models.ReportDefinition
 	if err := config.DB.Where("id = ? AND deleted_at IS NULL", reportID).First(&report).Error; err != nil {
 		http.Error(w, "Report not found", http.StatusNotFound)
+		return
+	}
+
+	if !canModifyReport(r, &report) {
+		reportAccessDenied(w)
 		return
 	}
 
@@ -237,6 +255,11 @@ func DeleteReportDefinition(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !canModifyReport(r, &report) {
+		reportAccessDenied(w)
+		return
+	}
+
 	now := time.Now()
 	if err := config.DB.Model(&report).Update("deleted_at", now).Error; err != nil {
 		http.Error(w, "Failed to delete report", http.StatusInternalServerError)
@@ -256,6 +279,11 @@ func ExecuteReport(w http.ResponseWriter, r *http.Request) {
 	var report models.ReportDefinition
 	if err := config.DB.Where("id = ? AND deleted_at IS NULL", reportID).First(&report).Error; err != nil {
 		http.Error(w, "Report not found", http.StatusNotFound)
+		return
+	}
+
+	if !canViewReport(r, &report) {
+		reportAccessDenied(w)
 		return
 	}
 
@@ -802,5 +830,39 @@ func CreateReportFromTemplate(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"message": "Report created from template successfully",
 		"report":  report,
+	})
+}
+
+// GetReportAvailableRoles returns global roles that can be used for report sharing.
+// Requires report:read permission (enforced at route level). Does NOT require manage_roles.
+func GetReportAvailableRoles(w http.ResponseWriter, r *http.Request) {
+	var roles []models.Role
+	if err := config.DB.
+		Where("is_active = ? AND is_global = ?", true, true).
+		Select("id", "name", "description").
+		Order("name ASC").
+		Find(&roles).Error; err != nil {
+		http.Error(w, "Failed to fetch roles", http.StatusInternalServerError)
+		return
+	}
+
+	type roleItem struct {
+		ID          string `json:"id"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+	items := make([]roleItem, len(roles))
+	for i, role := range roles {
+		items[i] = roleItem{
+			ID:          role.ID.String(),
+			Name:        role.Name,
+			Description: role.Description,
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"roles": items,
+		"count": len(items),
 	})
 }

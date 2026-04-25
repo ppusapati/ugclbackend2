@@ -499,6 +499,7 @@ func (we *WorkflowEngineDedicated) TransitionStateDedicated(
 		FormID:             form.ID,
 		BusinessVerticalID: record.BusinessVerticalID,
 		CurrentState:       targetTransition.To,
+		SubmittedBy:        record.CreatedBy,
 		Form:               &form,
 		Workflow:           &workflowDef,
 	}

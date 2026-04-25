@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -597,10 +598,14 @@ func SeedWorkflows() {
 			{"code": "rejected", "name": "Rejected", "description": "Rejected by reviewer", "color": "red", "is_final": true}
 		]`),
 		Transitions: []byte(`[
-			{"from": "draft", "to": "submitted", "action": "submit", "label": "Submit for Review", "required_permission": ""},
-			{"from": "submitted", "to": "approved", "action": "approve", "label": "Approve", "required_permission": "workflow:approve"},
-			{"from": "submitted", "to": "rejected", "action": "reject", "label": "Reject", "required_permission": "workflow:approve"},
-			{"from": "rejected", "to": "draft", "action": "revise", "label": "Revise", "required_permission": ""}
+			{"from": "draft", "to": "submitted", "action": "submit", "label": "Submit for Review", "required_permission": "",
+				"notifications": [{"title_template": "Form submitted: {{.FormCode}}", "body_template": "Your {{.FormCode}} submission ({{.SubmissionID}}) has been submitted for review.", "channels": ["in_app"], "recipients": [{"type": "submitter"}]}]},
+			{"from": "submitted", "to": "approved", "action": "approve", "label": "Approve", "required_permission": "workflow:approve",
+				"notifications": [{"title_template": "Form approved: {{.FormCode}}", "body_template": "Your {{.FormCode}} submission ({{.SubmissionID}}) has been approved by {{.ApproverName}}.", "channels": ["in_app"], "priority": "high", "recipients": [{"type": "submitter"}]}]},
+			{"from": "submitted", "to": "rejected", "action": "reject", "label": "Reject", "required_permission": "workflow:approve",
+				"notifications": [{"title_template": "Form rejected: {{.FormCode}}", "body_template": "Your {{.FormCode}} submission ({{.SubmissionID}}) was rejected by {{.ApproverName}}. Comment: {{.Comment}}", "channels": ["in_app"], "priority": "high", "recipients": [{"type": "submitter"}]}]},
+			{"from": "rejected", "to": "draft", "action": "revise", "label": "Revise", "required_permission": "",
+				"notifications": [{"title_template": "Revision requested: {{.FormCode}}", "body_template": "Your {{.FormCode}} submission ({{.SubmissionID}}) has been sent back for revision. Please update and resubmit.", "channels": ["in_app"], "priority": "high", "recipients": [{"type": "submitter"}]}]}
 		]`),
 		IsActive: true,
 	}
@@ -620,12 +625,18 @@ func SeedWorkflows() {
 			{"code": "rejected", "name": "Rejected", "description": "Rejected", "color": "red", "is_final": true}
 		]`),
 		Transitions: []byte(`[
-			{"from": "draft", "to": "submitted", "action": "submit", "label": "Submit", "required_permission": ""},
-			{"from": "submitted", "to": "l1_approved", "action": "l1_approve", "label": "L1 Approve", "required_permission": "workflow:l1_approve"},
-			{"from": "submitted", "to": "rejected", "action": "reject", "label": "Reject", "required_permission": "workflow:l1_approve"},
-			{"from": "l1_approved", "to": "l2_approved", "action": "l2_approve", "label": "L2 Approve", "required_permission": "workflow:l2_approve"},
-			{"from": "l1_approved", "to": "rejected", "action": "reject", "label": "Reject", "required_permission": "workflow:l2_approve"},
-			{"from": "rejected", "to": "draft", "action": "revise", "label": "Revise", "required_permission": ""}
+			{"from": "draft", "to": "submitted", "action": "submit", "label": "Submit", "required_permission": "",
+				"notifications": [{"title_template": "Form submitted: {{.FormCode}}", "body_template": "Your {{.FormCode}} submission ({{.SubmissionID}}) has been submitted for L1 review.", "channels": ["in_app"], "recipients": [{"type": "submitter"}]}]},
+			{"from": "submitted", "to": "l1_approved", "action": "l1_approve", "label": "L1 Approve", "required_permission": "workflow:l1_approve",
+				"notifications": [{"title_template": "L1 Approved: {{.FormCode}}", "body_template": "Your {{.FormCode}} submission ({{.SubmissionID}}) passed L1 review by {{.ApproverName}}. Pending L2 review.", "channels": ["in_app"], "priority": "normal", "recipients": [{"type": "submitter"}]}]},
+			{"from": "submitted", "to": "rejected", "action": "reject", "label": "Reject", "required_permission": "workflow:l1_approve",
+				"notifications": [{"title_template": "Form rejected: {{.FormCode}}", "body_template": "Your {{.FormCode}} submission ({{.SubmissionID}}) was rejected by {{.ApproverName}}. Comment: {{.Comment}}", "channels": ["in_app"], "priority": "high", "recipients": [{"type": "submitter"}]}]},
+			{"from": "l1_approved", "to": "l2_approved", "action": "l2_approve", "label": "L2 Approve", "required_permission": "workflow:l2_approve",
+				"notifications": [{"title_template": "Form fully approved: {{.FormCode}}", "body_template": "Your {{.FormCode}} submission ({{.SubmissionID}}) has been fully approved by {{.ApproverName}}.", "channels": ["in_app"], "priority": "high", "recipients": [{"type": "submitter"}]}]},
+			{"from": "l1_approved", "to": "rejected", "action": "reject", "label": "Reject", "required_permission": "workflow:l2_approve",
+				"notifications": [{"title_template": "Form rejected: {{.FormCode}}", "body_template": "Your {{.FormCode}} submission ({{.SubmissionID}}) was rejected at L2 by {{.ApproverName}}. Comment: {{.Comment}}", "channels": ["in_app"], "priority": "high", "recipients": [{"type": "submitter"}]}]},
+			{"from": "rejected", "to": "draft", "action": "revise", "label": "Revise", "required_permission": "",
+				"notifications": [{"title_template": "Revision requested: {{.FormCode}}", "body_template": "Your {{.FormCode}} submission ({{.SubmissionID}}) has been sent back for revision. Please update and resubmit.", "channels": ["in_app"], "priority": "high", "recipients": [{"type": "submitter"}]}]}
 		]`),
 		IsActive: true,
 	}
@@ -670,7 +681,27 @@ func SeedWorkflows() {
 				log.Printf("✅ Created workflow: %s (%s) - ID: %s", wf.Name, wf.Code, wf.ID)
 			}
 		} else {
-			log.Printf("⏭️ Workflow already exists: %s (ID: %s)", wf.Name, existing.ID)
+			// Update transitions if they are missing notification blocks (idempotent patch)
+			var existingTransitions []map[string]interface{}
+			hasNotifications := false
+			if jsonErr := json.Unmarshal(existing.Transitions, &existingTransitions); jsonErr == nil {
+				for _, t := range existingTransitions {
+					if notifs, ok := t["notifications"]; ok && notifs != nil {
+						hasNotifications = true
+						break
+					}
+				}
+			}
+			if !hasNotifications {
+				log.Printf("🔄 Patching transitions with notifications for workflow: %s", wf.Name)
+				if updateErr := DB.Model(&existing).Update("transitions", wf.Transitions).Error; updateErr != nil {
+					log.Printf("❌ Failed to patch workflow transitions for %s: %v", wf.Name, updateErr)
+				} else {
+					log.Printf("✅ Patched workflow transitions for %s", wf.Name)
+				}
+			} else {
+				log.Printf("⏭️ Workflow already exists with notifications: %s (ID: %s)", wf.Name, existing.ID)
+			}
 		}
 	}
 

@@ -1,0 +1,73 @@
+
+=== Logging in users ===
+Super Admin: 4f74d110-db88-4c7d-b5b5-ccf5ace1c0ea
+Water Admin: 6043e5f3-a707-4e64-a2e8-12c55fd5c8d3
+Water Engineer: 946c55c0-d582-4710-88b2-c196535be17e
+
+--- SCENARIO 1: Happy Path (submit->approve) ---
+[PASS] SC1_HAPPY :: HAPPY :: Super Admin -submit-> Super Admin -approve-> final :: sid=24626494-0051-4625-82b0-1bcfb2188fa9 submit_notif=approver: unread 58->59 matched=True approve_notif=submitter: unread 58->60 matched=True
+[PASS] SC1_HAPPY :: HAPPY :: Super Admin -submit-> Water Admin -approve-> final :: sid=79d5d46f-1fcf-4700-8d14-6e79552d0abf submit_notif=approver: unread 212->213 matched=True approve_notif=submitter: unread 60->61 matched=True
+[PASS] SC1_HAPPY :: HAPPY :: Water Admin -submit-> Super Admin -approve-> final :: sid=fcfd0595-79cc-424a-bb2b-ddb7fbd1f100 submit_notif=approver: unread 61->62 matched=True approve_notif=submitter: unread 213->214 matched=True
+[PASS] SC1_HAPPY :: HAPPY :: Water Admin -submit-> Water Admin -approve-> final :: sid=24cb3126-017c-460b-bf6f-192530699110 submit_notif=approver: unread 214->215 matched=True approve_notif=submitter: unread 214->216 matched=True
+[PASS] SC1_HAPPY :: HAPPY :: Water Engineer -submit-> Super Admin -approve-> final :: sid=0d38d034-8f15-448a-b804-380561f84478 submit_notif=approver: unread 62->63 matched=True approve_notif=submitter: unread 0->1 matched=True
+[PASS] SC1_HAPPY :: HAPPY :: Water Engineer -submit-> Water Admin -approve-> final :: sid=3439de9a-6a85-4567-a878-cec12bd8cb4f submit_notif=approver: unread 216->217 matched=True approve_notif=submitter: unread 1->2 matched=True
+
+--- SCENARIO 2: Rejection Path (submit->reject) ---
+[PASS] SC2_REJECT :: REJECT :: Super Admin -submit-> Super Admin -reject-> final :: sid=fb5d3e2d-19be-46a0-b804-5e23925833f5 submit_notif=rejector: unread 63->64 matched=True reject_notif=submitter: unread 63->65 matched=True
+[PASS] SC2_REJECT :: REJECT :: Super Admin -submit-> Water Admin -reject-> final :: sid=808d0c07-2fbb-4619-a728-8eb0cc0600bf submit_notif=rejector: unread 217->218 matched=True reject_notif=submitter: unread 65->66 matched=True
+[PASS] SC2_REJECT :: REJECT :: Water Admin -submit-> Super Admin -reject-> final :: sid=89f34524-60a9-4e9c-8f56-7be0ad2966ec submit_notif=rejector: unread 66->67 matched=True reject_notif=submitter: unread 218->219 matched=True
+[PASS] SC2_REJECT :: REJECT :: Water Admin -submit-> Water Admin -reject-> final :: sid=51791672-ab6a-43b8-9576-5e23eccb05ca submit_notif=rejector: unread 219->220 matched=True reject_notif=submitter: unread 219->221 matched=True
+[PASS] SC2_REJECT :: REJECT :: Water Engineer -submit-> Super Admin -reject-> final :: sid=a51aa102-4f27-406d-af51-ba9d7c6d917c submit_notif=rejector: unread 67->68 matched=True reject_notif=submitter: unread 2->3 matched=True
+[PASS] SC2_REJECT :: REJECT :: Water Engineer -submit-> Water Admin -reject-> final :: sid=13a711d1-a80e-47d3-8bfc-4578d73f50ba submit_notif=rejector: unread 221->222 matched=True reject_notif=submitter: unread 3->4 matched=True
+
+--- SCENARIO 3: Full Revise Cycle (submit->reject->revise->submit->approve) ---
+[PASS] SC3_CYCLE :: CYCLE :: Water Engineer <-> Water Admin (5 steps) :: sid=f81c1d9e-1404-4f1c-a630-8c18159cc836 states:submitted/rejected/draft/submitted/approved notifs:submit=True reject=True revise=True resubmit=True approve=True
+[PASS] SC3_CYCLE :: CYCLE :: Water Admin <-> Super Admin (5 steps) :: sid=9beac915-a4d7-465d-891c-d27242509906 states:submitted/rejected/draft/submitted/approved notifs:submit=True reject=True revise=True resubmit=True approve=True
+[PASS] SC3_CYCLE :: CYCLE :: Super Admin <-> Water Admin (5 steps) :: sid=834e567f-ad0b-4195-9c7b-9150065543af states:submitted/rejected/draft/submitted/approved notifs:submit=True reject=True revise=True resubmit=True approve=True
+
+--- SCENARIO 4: Mixed Recipient Types per Transition ---
+[PASS] SC4_MIXED :: MIXED_RECIP :: WaterEng submit, WaterAdmin approve, field_value+role+perm :: sid=643f3014-5223-47b5-a910-0b779e029de2 states:submitted/rejected/draft/submitted/approved notifs:fv=True perm=True role=True fv2=True submitter_notif=True
+
+--- SCENARIO 5: Invalid Transition Guard (double-approve) ---
+[PASS] SC5_GUARD :: double-approve guard :: sid=eaa28637-693e-42d0-b57e-58f4446cef39 state=approved second approve correctly rejected: The remote server returned an error: (403) Forbidden.
+[PASS] SC5_GUARD :: submit-after-approve guard :: sid=eaa28637-693e-42d0-b57e-58f4446cef39 submit after approve correctly rejected: The remote server returned an error: (403) Forbidden.
+[PASS] SC5_GUARD :: reject-after-approve guard :: sid=eaa28637-693e-42d0-b57e-58f4446cef39 reject after approve correctly rejected: The remote server returned an error: (403) Forbidden.
+
+--- SCENARIO 6: Invalid Transition (approve draft directly) ---
+[PASS] SC6_INVALID :: approve-draft-directly :: sid=ce265844-4ba0-4bef-a86c-9b639eb3af24 correctly rejected: The remote server returned an error: (403) Forbidden.
+[PASS] SC6_INVALID :: reject-draft-directly :: sid=ce265844-4ba0-4bef-a86c-9b639eb3af24 correctly rejected: The remote server returned an error: (403) Forbidden.
+[PASS] SC6_INVALID :: revise-draft-directly :: sid=ce265844-4ba0-4bef-a86c-9b639eb3af24 correctly rejected: The remote server returned an error: (403) Forbidden.
+Workflow restored.
+
+=========================================
+  Workflow Multi-Transition Test Summary  
+=========================================
+
+
+Category    Case                                                               
+--------    ----                                                               
+SC1_HAPPY   HAPPY :: Super Admin -submit-> Super Admin -approve-> final        
+SC1_HAPPY   HAPPY :: Super Admin -submit-> Water Admin -approve-> final        
+SC1_HAPPY   HAPPY :: Water Admin -submit-> Super Admin -approve-> final        
+SC1_HAPPY   HAPPY :: Water Admin -submit-> Water Admin -approve-> final        
+SC1_HAPPY   HAPPY :: Water Engineer -submit-> Super Admin -approve-> final     
+SC1_HAPPY   HAPPY :: Water Engineer -submit-> Water Admin -approve-> final     
+SC2_REJECT  REJECT :: Super Admin -submit-> Super Admin -reject-> final        
+SC2_REJECT  REJECT :: Super Admin -submit-> Water Admin -reject-> final        
+SC2_REJECT  REJECT :: Water Admin -submit-> Super Admin -reject-> final        
+SC2_REJECT  REJECT :: Water Admin -submit-> Water Admin -reject-> final        
+SC2_REJECT  REJECT :: Water Engineer -submit-> Super Admin -reject-> final     
+SC2_REJECT  REJECT :: Water Engineer -submit-> Water Admin -reject-> final     
+SC3_CYCLE   CYCLE :: Water Engineer <-> Water Admin (5 steps)                  
+SC3_CYCLE   CYCLE :: Water Admin <-> Super Admin (5 steps)                     
+SC3_CYCLE   CYCLE :: Super Admin <-> Water Admin (5 steps)                     
+SC4_MIXED   MIXED_RECIP :: WaterEng submit, WaterAdmin approve, field_value+...
+SC5_GUARD   double-approve guard                                               
+SC5_GUARD   submit-after-approve guard                                         
+SC5_GUARD   reject-after-approve guard                                         
+SC6_INVALID approve-draft-directly                                             
+SC6_INVALID reject-draft-directly                                              
+SC6_INVALID revise-draft-directly                                              
+
+
+PASS=22  FAIL=0  BLOCKED=0  SKIP=0

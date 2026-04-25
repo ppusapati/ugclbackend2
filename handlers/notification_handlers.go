@@ -383,7 +383,14 @@ func (h *NotificationHandler) StreamNotifications(w http.ResponseWriter, r *http
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+	origin := r.Header.Get("Origin")
+	if origin != "" {
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
+		w.Header().Set("Vary", "Origin")
+	} else {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+	}
 
 	// Create a channel for new notifications
 	// In production, this would use a pub/sub system like Redis

@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"p9e.in/ugcl/config"
+	"p9e.in/ugcl/middleware"
 	"p9e.in/ugcl/models"
 )
 
@@ -63,17 +64,20 @@ func (h *NotificationAdminHandler) GetNotificationRule(w http.ResponseWriter, r 
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(rule)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"rule": rule,
+	})
 }
 
 // CreateNotificationRule creates a new notification rule
 func (h *NotificationAdminHandler) CreateNotificationRule(w http.ResponseWriter, r *http.Request) {
-	// Get user ID from context
-	userID, ok := r.Context().Value("user_id").(string)
-	if !ok {
+	// Get user ID from JWT claims
+	claims := middleware.GetClaims(r)
+	if claims == nil {
 		http.Error(w, "User not found", http.StatusUnauthorized)
 		return
 	}
+	userID := claims.UserID
 
 	// Parse request body
 	var req struct {
@@ -176,7 +180,9 @@ func (h *NotificationAdminHandler) CreateNotificationRule(w http.ResponseWriter,
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(rule)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"rule": rule,
+	})
 }
 
 // UpdateNotificationRule updates an existing notification rule
@@ -280,7 +286,9 @@ func (h *NotificationAdminHandler) UpdateNotificationRule(w http.ResponseWriter,
 	config.DB.Preload("Recipients").First(&rule, rule.ID)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(rule)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"rule": rule,
+	})
 }
 
 // DeleteNotificationRule deletes a notification rule
@@ -390,5 +398,7 @@ func (h *NotificationAdminHandler) GetNotificationStats(w http.ResponseWriter, r
 	config.DB.Model(&models.Notification{}).Where("status = ?", models.NotificationStatusFailed).Count(&stats.FailedCount)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(stats)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"stats": stats,
+	})
 }

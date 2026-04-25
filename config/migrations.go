@@ -433,6 +433,106 @@ func Migrations(db *gorm.DB) error {
 				return nil
 			},
 		},
+
+		{
+			ID: "20260425_notifications_add_conversation_message_id",
+			Migrate: func(tx *gorm.DB) error {
+				queries := []string{
+					"ALTER TABLE notifications ADD COLUMN IF NOT EXISTS conversation_id UUID",
+					"ALTER TABLE notifications ADD COLUMN IF NOT EXISTS message_id UUID",
+					"CREATE INDEX IF NOT EXISTS idx_notifications_conversation_id ON notifications(conversation_id)",
+					"CREATE INDEX IF NOT EXISTS idx_notifications_message_id ON notifications(message_id)",
+				}
+				for _, q := range queries {
+					if err := tx.Exec(q).Error; err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+		},
+		{
+			ID: "20260425_backfill_attendance_permissions",
+			Migrate: func(tx *gorm.DB) error {
+				type permissionSeed struct {
+					Name        string
+					Description string
+					Resource    string
+					Action      string
+				}
+
+				permissionSeeds := []permissionSeed{
+					{Name: "attendance:checkin", Description: "Check in to a site attendance session", Resource: "attendance", Action: "checkin"},
+					{Name: "attendance:heartbeat", Description: "Send attendance heartbeat updates", Resource: "attendance", Action: "heartbeat"},
+					{Name: "attendance:checkout", Description: "Check out from a site attendance session", Resource: "attendance", Action: "checkout"},
+					{Name: "attendance:read", Description: "View attendance sessions, logs, and timelines", Resource: "attendance", Action: "read"},
+					{Name: "attendance:headcount", Description: "View live attendance headcount by site", Resource: "attendance", Action: "headcount"},
+				}
+
+				permissionIDs := make(map[string]uuid.UUID, len(permissionSeeds))
+				for _, seed := range permissionSeeds {
+					// Repair any legacy rows that were inserted with empty name for the same resource/action.
+					if err := tx.Exec(
+						"UPDATE permissions SET name = ?, description = ?, updated_at = NOW() WHERE (name = '' OR name IS NULL) AND resource = ? AND action = ?",
+						seed.Name, seed.Description, seed.Resource, seed.Action,
+					).Error; err != nil {
+						return err
+					}
+
+					// Upsert by permission name to keep migration idempotent across environments.
+					if err := tx.Exec(
+						"INSERT INTO permissions (id, name, description, resource, action, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NOW(), NOW()) ON CONFLICT (name) DO UPDATE SET description = EXCLUDED.description, resource = EXCLUDED.resource, action = EXCLUDED.action, updated_at = NOW()",
+						uuid.New(), seed.Name, seed.Description, seed.Resource, seed.Action,
+					).Error; err != nil {
+						return err
+					}
+
+					perm := models.Permission{}
+					if err := tx.Select("id").Where("name = ?", seed.Name).First(&perm).Error; err != nil {
+						return err
+					}
+					permissionIDs[seed.Name] = perm.ID
+				}
+
+				rolePermissions := map[string][]string{
+					"Water_Admin":          {"attendance:checkin", "attendance:heartbeat", "attendance:checkout", "attendance:read", "attendance:headcount"},
+					"Project_Coordinator":  {"attendance:read", "attendance:headcount"},
+					"Engineer":             {"attendance:checkin", "attendance:heartbeat", "attendance:checkout"},
+					"Supervisor":           {"attendance:checkin", "attendance:heartbeat", "attendance:checkout", "attendance:read", "attendance:headcount"},
+					"Operator":             {"attendance:checkin", "attendance:heartbeat", "attendance:checkout"},
+					"Solar_Admin":          {"attendance:checkin", "attendance:heartbeat", "attendance:checkout", "attendance:read", "attendance:headcount"},
+					"Area_Project_Manager": {"attendance:read", "attendance:headcount"},
+					"Sr_Engineer":          {"attendance:checkin", "attendance:heartbeat", "attendance:checkout", "attendance:read", "attendance:headcount"},
+					"HO_Manager":           {"attendance:read", "attendance:headcount"},
+					"HO_HR":                {"attendance:read", "attendance:headcount"},
+				}
+
+				for roleName, permNames := range rolePermissions {
+					var roles []models.BusinessRole
+					if err := tx.Where("name = ? AND is_active = ?", roleName, true).Find(&roles).Error; err != nil {
+						return err
+					}
+
+					for _, role := range roles {
+						for _, permName := range permNames {
+							permID, ok := permissionIDs[permName]
+							if !ok {
+								continue
+							}
+
+							if err := tx.Exec(
+								"INSERT INTO business_role_permissions (business_role_id, permission_id, created_at) SELECT ?, ?, NOW() WHERE NOT EXISTS (SELECT 1 FROM business_role_permissions WHERE business_role_id = ? AND permission_id = ?)",
+								role.ID, permID, role.ID, permID,
+							).Error; err != nil {
+								return err
+							}
+						}
+					}
+				}
+
+				return nil
+			},
+		},
 	})
 
 	return m.Migrate()
