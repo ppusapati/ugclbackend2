@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/crypto/bcrypt"
+	"gorm.io/gorm"
 	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/models"
 )
@@ -33,7 +35,15 @@ type ctxKey int
 
 const (
 	userClaimsKey ctxKey = iota
+	thirdPartyIntegrationKey
 )
+
+type thirdPartyRequestContext struct {
+	IntegrationID string
+	Name          string
+	Scopes        map[string]bool
+	AllowedURLs   map[string]bool
+}
 
 // GenerateToken creates a signed JWT valid for 24 h
 func GenerateToken(userID, role, name, phone string) (string, error) {
@@ -188,6 +198,7 @@ type APIClientConfig struct {
 	AllowedMethods map[string]bool // e.g., "GET": true, "POST": true
 	SkipIPCheck    bool
 	AllowedIPs     map[string]bool
+	Integration    *thirdPartyRequestContext
 }
 
 var apiKeyConfigs = loadAPIKeyConfigs()
@@ -310,11 +321,121 @@ func buildAllowedIPsFromEnv(envName string) map[string]bool {
 	return allowed
 }
 
+func lookupThirdPartyIntegrationConfig(apiKey string) (APIClientConfig, bool) {
+	var items []models.ThirdPartyIntegration
+	if err := config.DB.Where("status = ?", models.IntegrationStatusActive).Find(&items).Error; err != nil {
+		log.Printf("[SECURITY] failed to load third-party integrations: %v", err)
+		return APIClientConfig{}, false
+	}
+
+	for _, item := range items {
+		if bcrypt.CompareHashAndPassword([]byte(item.APIKeyHash), []byte(apiKey)) != nil {
+			continue
+		}
+
+		allowedIPs := make(map[string]bool, len(item.AllowedIPs))
+		for _, ip := range item.AllowedIPs {
+			allowedIPs[ip] = true
+		}
+
+		scopes := make(map[string]bool, len(item.DataScopes))
+		for _, scope := range item.DataScopes {
+			scopes[scope] = true
+		}
+
+		allowedURLs := make(map[string]bool, len(item.AllowedURLs))
+		for _, value := range item.AllowedURLs {
+			allowedURLs[value] = true
+		}
+
+		return APIClientConfig{
+			AppName:      item.Name,
+			AllowedPaths: []string{"/api/v1/partner/*", "/api/v1/integrations/*"},
+			AllowedMethods: map[string]bool{
+				http.MethodGet: true,
+			},
+			SkipIPCheck: len(allowedIPs) == 0,
+			AllowedIPs:  allowedIPs,
+			Integration: &thirdPartyRequestContext{
+				IntegrationID: item.ID.String(),
+				Name:          item.Name,
+				Scopes:        scopes,
+				AllowedURLs:   allowedURLs,
+			},
+		}, true
+	}
+
+	return APIClientConfig{}, false
+}
+
+func ipAllowed(clientIP string, allowedIPs map[string]bool) bool {
+	if allowedIPs[clientIP] {
+		return true
+	}
+
+	parsedIP := net.ParseIP(clientIP)
+	if parsedIP == nil {
+		return false
+	}
+
+	for candidate := range allowedIPs {
+		if !strings.Contains(candidate, "/") {
+			continue
+		}
+		_, network, err := net.ParseCIDR(candidate)
+		if err == nil && network.Contains(parsedIP) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func GetThirdPartyIntegration(r *http.Request) *thirdPartyRequestContext {
+	if r == nil {
+		return nil
+	}
+	if value, ok := r.Context().Value(thirdPartyIntegrationKey).(*thirdPartyRequestContext); ok {
+		return value
+	}
+	return nil
+}
+
+func RequireIntegrationScope(scope string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			integration := GetThirdPartyIntegration(r)
+			if integration == nil || integration.Scopes[scope] {
+				next.ServeHTTP(w, r)
+				return
+			}
+			http.Error(w, "integration is not allowed to access this dataset", http.StatusForbidden)
+		})
+	}
+}
+
+func recordThirdPartyIntegrationAccess(id string) {
+	if strings.TrimSpace(id) == "" {
+		return
+	}
+	if err := config.DB.Model(&models.ThirdPartyIntegration{}).
+		Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"last_access_at": time.Now().UTC(),
+			"access_count":   gorm.Expr("access_count + 1"),
+		}).Error; err != nil {
+		log.Printf("[SECURITY] failed to record integration access: %v", err)
+	}
+}
+
 // SecurityMiddleware enforces API key, IP filtering, and logging
 func SecurityMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		apiKey := r.Header.Get("x-api-key")
 		clientConfig, ok := apiKeyConfigs[apiKey]
+		if !ok && strings.TrimSpace(apiKey) != "" {
+			clientConfig, ok = lookupThirdPartyIntegrationConfig(apiKey)
+		}
 		if !ok {
 			http.Error(w, "Invalid or missing API key", http.StatusUnauthorized)
 			log.Printf("[SECURITY] 🔒 Blocked - Invalid API key. IP=%s Path=%s", getClientIP(r), r.URL.Path)
@@ -328,7 +449,7 @@ func SecurityMiddleware(next http.Handler) http.Handler {
 				allowedIPs = defaultWhitelistedIPs
 			}
 
-			if !allowedIPs[clientIP] {
+			if !ipAllowed(clientIP, allowedIPs) {
 				http.Error(w, "Access from this IP is not allowed", http.StatusForbidden)
 				log.Printf("[SECURITY] 🚫 Blocked - IP not whitelisted. App=%s IP=%s Path=%s", clientConfig.AppName, clientIP, r.URL.Path)
 				return
@@ -374,6 +495,12 @@ func SecurityMiddleware(next http.Handler) http.Handler {
 		log.Printf("[SECURITY] ✅ Allowed - App=%s UserID=%s Name=%s Role=%s IP=%s Path=%s Method=%s Time=%s",
 			clientConfig.AppName, userID, userName, userRole,
 			clientIP, r.URL.Path, r.Method, time.Now().Format(time.RFC3339))
+
+		if clientConfig.Integration != nil {
+			ctx := context.WithValue(r.Context(), thirdPartyIntegrationKey, clientConfig.Integration)
+			r = r.WithContext(ctx)
+			go recordThirdPartyIntegrationAccess(clientConfig.Integration.IntegrationID)
+		}
 
 		next.ServeHTTP(w, r)
 	})

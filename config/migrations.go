@@ -600,6 +600,106 @@ func Migrations(db *gorm.DB) error {
 				return nil
 			},
 		},
+		{
+			ID: "20260426_create_third_party_integrations",
+			Migrate: func(tx *gorm.DB) error {
+				if err := tx.AutoMigrate(&models.ThirdPartyIntegration{}); err != nil {
+					return err
+				}
+
+				queries := []string{
+					"CREATE INDEX IF NOT EXISTS idx_third_party_integrations_status ON third_party_integrations(status)",
+					"CREATE INDEX IF NOT EXISTS idx_third_party_integrations_created_at ON third_party_integrations(created_at DESC)",
+					// Seed the manage_integrations permission so it can be assigned to admin roles.
+					`INSERT INTO permissions (id, name, description, resource, action, created_at, updated_at)
+					 VALUES (gen_random_uuid(), 'manage_integrations', 'Create, update and delete third-party integrations', 'integrations', 'manage', NOW(), NOW())
+					 ON CONFLICT (name) DO NOTHING`,
+				}
+
+				for _, q := range queries {
+					if err := tx.Exec(q).Error; err != nil {
+						return err
+					}
+				}
+
+				return nil
+			},
+		},
+		{
+			ID: "20260426_extend_third_party_integrations_for_document_ai",
+			Migrate: func(tx *gorm.DB) error {
+				if err := tx.AutoMigrate(&models.ThirdPartyIntegration{}); err != nil {
+					return err
+				}
+				return nil
+			},
+		},
+		{
+			ID: "20260426_project_phase1_execution_controls",
+			Migrate: func(tx *gorm.DB) error {
+				if err := tx.AutoMigrate(
+					&models.WBSNode{},
+					&models.TaskDependency{},
+					&models.BOQItem{},
+					&models.MBEntry{},
+					&models.RABill{},
+					&models.RABillLine{},
+				); err != nil {
+					return err
+				}
+
+				queries := []string{
+					"CREATE UNIQUE INDEX IF NOT EXISTS idx_wbs_nodes_project_code ON wbs_nodes(project_id, code)",
+					"CREATE UNIQUE INDEX IF NOT EXISTS idx_task_dependencies_unique_pair ON task_dependencies(project_id, predecessor_task_id, successor_task_id)",
+					"CREATE UNIQUE INDEX IF NOT EXISTS idx_boq_items_project_code ON boq_items(project_id, code)",
+					"CREATE UNIQUE INDEX IF NOT EXISTS idx_mb_entries_project_entry_number ON mb_entries(project_id, entry_number)",
+					"CREATE UNIQUE INDEX IF NOT EXISTS idx_ra_bills_project_bill_number ON ra_bills(project_id, bill_number)",
+					"CREATE INDEX IF NOT EXISTS idx_ra_bill_lines_bill_id ON ra_bill_lines(ra_bill_id)",
+					"ALTER TABLE wbs_nodes ADD CONSTRAINT chk_wbs_node_type_phase1 CHECK (node_type IN ('package', 'activity', 'milestone'))",
+					"ALTER TABLE task_dependencies ADD CONSTRAINT chk_task_dep_type_phase1 CHECK (dependency_type IN ('FS','SS','FF','SF'))",
+					"ALTER TABLE boq_items ADD CONSTRAINT chk_boq_status_phase1 CHECK (status IN ('planned', 'in-progress', 'completed', 'cancelled'))",
+					"ALTER TABLE ra_bills ADD CONSTRAINT chk_ra_bill_status_phase1 CHECK (status IN ('draft', 'submitted', 'approved', 'rejected', 'paid'))",
+				}
+
+				for _, q := range queries {
+					_ = tx.Exec(q).Error
+				}
+
+				type permissionSeed struct {
+					Name        string
+					Description string
+					Resource    string
+					Action      string
+				}
+
+				permissionSeeds := []permissionSeed{
+					{Name: "project:wbs_read", Description: "View project WBS nodes", Resource: "project", Action: "wbs_read"},
+					{Name: "project:wbs_manage", Description: "Create and update project WBS nodes", Resource: "project", Action: "wbs_manage"},
+					{Name: "task:dependency_read", Description: "View task dependencies", Resource: "task", Action: "dependency_read"},
+					{Name: "task:dependency_manage", Description: "Manage task dependencies", Resource: "task", Action: "dependency_manage"},
+					{Name: "project:boq_read", Description: "View bill of quantities", Resource: "project", Action: "boq_read"},
+					{Name: "project:boq_manage", Description: "Manage bill of quantities", Resource: "project", Action: "boq_manage"},
+					{Name: "project:mb_read", Description: "View measurement book entries", Resource: "project", Action: "mb_read"},
+					{Name: "project:mb_manage", Description: "Manage measurement book entries", Resource: "project", Action: "mb_manage"},
+					{Name: "project:billing_read", Description: "View RA bills", Resource: "project", Action: "billing_read"},
+					{Name: "project:billing_manage", Description: "Create and edit RA bills", Resource: "project", Action: "billing_manage"},
+					{Name: "project:billing_submit", Description: "Submit RA bills for approval", Resource: "project", Action: "billing_submit"},
+					{Name: "project:billing_approve", Description: "Approve or reject RA bills", Resource: "project", Action: "billing_approve"},
+					{Name: "project:billing_pay", Description: "Mark approved RA bills as paid", Resource: "project", Action: "billing_pay"},
+				}
+
+				for _, seed := range permissionSeeds {
+					if err := tx.Exec(
+						"INSERT INTO permissions (id, name, description, resource, action, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NOW(), NOW()) ON CONFLICT (name) DO UPDATE SET description = EXCLUDED.description, resource = EXCLUDED.resource, action = EXCLUDED.action, updated_at = NOW()",
+						uuid.New(), seed.Name, seed.Description, seed.Resource, seed.Action,
+					).Error; err != nil {
+						return err
+					}
+				}
+
+				return nil
+			},
+		},
 	})
 
 	return m.Migrate()

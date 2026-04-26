@@ -17,6 +17,7 @@ func RegisterProjectRoutes(r *mux.Router) {
 	budgetHandler := handlers.NewBudgetHandler()
 	roleHandler := handlers.NewProjectRoleHandler()
 	workflowHandler := handlers.NewProjectWorkflowHandler()
+	phase1Handler := handlers.NewProjectPhase1Handler()
 
 	// =====================================================
 	// Project Management Routes
@@ -49,6 +50,46 @@ func RegisterProjectRoutes(r *mux.Router) {
 	// Project Statistics
 	r.Handle("/projects/{id}/stats", middleware.RequirePermission("project:read")(
 		http.HandlerFunc(projectHandler.GetProjectStats))).Methods("GET")
+
+	// Phase 1 - WBS and planning controls
+	r.Handle("/projects/{id}/wbs-nodes", middleware.RequirePermission("project:wbs_manage")(
+		http.HandlerFunc(phase1Handler.CreateWBSNode))).Methods("POST")
+	r.Handle("/projects/{id}/wbs-nodes", middleware.RequirePermission("project:wbs_read")(
+		http.HandlerFunc(phase1Handler.ListWBSNodes))).Methods("GET")
+
+	r.Handle("/projects/{id}/task-dependencies", middleware.RequirePermission("task:dependency_manage")(
+		http.HandlerFunc(phase1Handler.CreateTaskDependency))).Methods("POST")
+	r.Handle("/projects/{id}/task-dependencies", middleware.RequirePermission("task:dependency_read")(
+		http.HandlerFunc(phase1Handler.ListTaskDependencies))).Methods("GET")
+
+	// Phase 1 - BOQ and measurement book
+	r.Handle("/projects/{id}/boq-items", middleware.RequirePermission("project:boq_manage")(
+		http.HandlerFunc(phase1Handler.CreateBOQItem))).Methods("POST")
+	r.Handle("/projects/{id}/boq-items", middleware.RequirePermission("project:boq_read")(
+		http.HandlerFunc(phase1Handler.ListBOQItems))).Methods("GET")
+
+	r.Handle("/projects/{id}/mb-entries", middleware.RequirePermission("project:mb_manage")(
+		http.HandlerFunc(phase1Handler.CreateMBEntry))).Methods("POST")
+	r.Handle("/projects/{id}/mb-entries", middleware.RequirePermission("project:mb_read")(
+		http.HandlerFunc(phase1Handler.ListMBEntries))).Methods("GET")
+
+	// Phase 1 - Running account billing
+	r.Handle("/projects/{id}/ra-bills", middleware.RequirePermission("project:billing_manage")(
+		http.HandlerFunc(phase1Handler.CreateRABill))).Methods("POST")
+	r.Handle("/projects/{id}/ra-bills", middleware.RequirePermission("project:billing_read")(
+		http.HandlerFunc(phase1Handler.ListRABills))).Methods("GET")
+	r.Handle("/projects/{id}/ra-bills/{billId}", middleware.RequirePermission("project:billing_read")(
+		http.HandlerFunc(phase1Handler.GetRABill))).Methods("GET")
+	r.Handle("/projects/{id}/ra-bills/{billId}/lines", middleware.RequirePermission("project:billing_manage")(
+		http.HandlerFunc(phase1Handler.AddRABillLine))).Methods("POST")
+	r.Handle("/projects/{id}/ra-bills/{billId}/submit", middleware.RequirePermission("project:billing_submit")(
+		http.HandlerFunc(phase1Handler.SubmitRABill))).Methods("POST")
+	r.Handle("/projects/{id}/ra-bills/{billId}/approve", middleware.RequirePermission("project:billing_approve")(
+		http.HandlerFunc(phase1Handler.ApproveRABill))).Methods("POST")
+	r.Handle("/projects/{id}/ra-bills/{billId}/reject", middleware.RequirePermission("project:billing_approve")(
+		http.HandlerFunc(phase1Handler.RejectRABill))).Methods("POST")
+	r.Handle("/projects/{id}/ra-bills/{billId}/pay", middleware.RequirePermission("project:billing_pay")(
+		http.HandlerFunc(phase1Handler.MarkRABillPaid))).Methods("POST")
 
 	// =====================================================
 	// Task Management Routes

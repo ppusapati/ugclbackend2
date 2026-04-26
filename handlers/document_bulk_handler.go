@@ -3,6 +3,7 @@ package handlers
 import (
 	"archive/zip"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,7 +18,11 @@ import (
 
 // BulkDeleteDocumentsHandler deletes multiple documents
 func BulkDeleteDocumentsHandler(w http.ResponseWriter, r *http.Request) {
-	userID := r.Context().Value("userID").(uuid.UUID)
+	userID, err := getDocumentUserID(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
 
 	var req struct {
 		DocumentIDs []string `json:"document_ids"`
@@ -82,7 +87,11 @@ func BulkDeleteDocumentsHandler(w http.ResponseWriter, r *http.Request) {
 
 // BulkUpdateDocumentsHandler updates multiple documents
 func BulkUpdateDocumentsHandler(w http.ResponseWriter, r *http.Request) {
-	userID := r.Context().Value("userID").(uuid.UUID)
+	userID, err := getDocumentUserID(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
 
 	var req struct {
 		DocumentIDs []string               `json:"document_ids"`
@@ -158,7 +167,11 @@ func BulkUpdateDocumentsHandler(w http.ResponseWriter, r *http.Request) {
 
 // BulkDownloadDocumentsHandler creates a zip file of multiple documents
 func BulkDownloadDocumentsHandler(w http.ResponseWriter, r *http.Request) {
-	userID := r.Context().Value("userID").(uuid.UUID)
+	userID, err := getDocumentUserID(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
 
 	var req struct {
 		DocumentIDs []string `json:"document_ids"`
@@ -206,13 +219,10 @@ func BulkDownloadDocumentsHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Add documents to zip
 	for _, doc := range documents {
-		// Check if file exists
-		if _, err := os.Stat(doc.FilePath); os.IsNotExist(err) {
+		srcFile, _, err := openStoredFileReader(r.Context(), doc.FilePath)
+		if errors.Is(err, errStoredFileNotFound) {
 			continue
 		}
-
-		// Open source file
-		srcFile, err := os.Open(doc.FilePath)
 		if err != nil {
 			continue
 		}
@@ -220,16 +230,16 @@ func BulkDownloadDocumentsHandler(w http.ResponseWriter, r *http.Request) {
 		// Create file in zip
 		zipFileWriter, err := zipWriter.Create(doc.FileName)
 		if err != nil {
-			srcFile.Close()
+			_ = srcFile.Close()
 			continue
 		}
 
 		// Copy file content
 		if _, err := io.Copy(zipFileWriter, srcFile); err != nil {
-			srcFile.Close()
+			_ = srcFile.Close()
 			continue
 		}
-		srcFile.Close()
+		_ = srcFile.Close()
 
 		// Log download
 		auditLog := models.DocumentAuditLog{
@@ -268,19 +278,22 @@ func GetDocumentStatisticsHandler(w http.ResponseWriter, r *http.Request) {
 		TotalViews        int64                    `json:"total_views"`
 	}
 
-	query := config.DB.Model(&models.Document{})
-	if businessVerticalID != "" {
-		query = query.Where("business_vertical_id = ?", businessVerticalID)
+	scopedDocuments := func() *gorm.DB {
+		query := config.DB.Model(&models.Document{})
+		if businessVerticalID != "" {
+			query = query.Where("business_vertical_id = ?", businessVerticalID)
+		}
+		return query
 	}
 
 	// Total documents
-	query.Count(&stats.TotalDocuments)
+	scopedDocuments().Count(&stats.TotalDocuments)
 
 	// Total size
 	var result struct {
 		TotalSize int64
 	}
-	config.DB.Model(&models.Document{}).Select("COALESCE(SUM(file_size), 0) as total_size").Scan(&result)
+	scopedDocuments().Select("COALESCE(SUM(file_size), 0) as total_size").Scan(&result)
 	stats.TotalSize = result.TotalSize
 
 	// Documents by status
@@ -289,7 +302,7 @@ func GetDocumentStatisticsHandler(w http.ResponseWriter, r *http.Request) {
 		Status string
 		Count  int64
 	}
-	config.DB.Model(&models.Document{}).Select("status, COUNT(*) as count").Group("status").Scan(&statusCounts)
+	scopedDocuments().Select("status, COUNT(*) as count").Group("status").Scan(&statusCounts)
 	for _, sc := range statusCounts {
 		stats.DocumentsByStatus[sc.Status] = sc.Count
 	}
@@ -300,17 +313,21 @@ func GetDocumentStatisticsHandler(w http.ResponseWriter, r *http.Request) {
 		FileExtension string
 		Count         int64
 	}
-	config.DB.Model(&models.Document{}).Select("file_extension, COUNT(*) as count").Group("file_extension").Limit(10).Scan(&typeCounts)
+	scopedDocuments().Select("file_extension, COUNT(*) as count").Group("file_extension").Limit(10).Scan(&typeCounts)
 	for _, tc := range typeCounts {
 		stats.DocumentsByType[tc.FileExtension] = tc.Count
 	}
 
 	// Recent uploads
-	config.DB.Preload("UploadedBy").Preload("Category").Order("created_at DESC").Limit(10).Find(&stats.RecentUploads)
+	recentUploadsQuery := config.DB.Preload("UploadedBy").Preload("Category").Model(&models.Document{})
+	if businessVerticalID != "" {
+		recentUploadsQuery = recentUploadsQuery.Where("business_vertical_id = ?", businessVerticalID)
+	}
+	recentUploadsQuery.Order("created_at DESC").Limit(10).Find(&stats.RecentUploads)
 
 	// Total downloads and views
-	config.DB.Model(&models.Document{}).Select("COALESCE(SUM(download_count), 0)").Scan(&stats.TotalDownloads)
-	config.DB.Model(&models.Document{}).Select("COALESCE(SUM(view_count), 0)").Scan(&stats.TotalViews)
+	scopedDocuments().Select("COALESCE(SUM(download_count), 0)").Scan(&stats.TotalDownloads)
+	scopedDocuments().Select("COALESCE(SUM(view_count), 0)").Scan(&stats.TotalViews)
 
 	// Top categories
 	var categoryStats []struct {
@@ -318,11 +335,14 @@ func GetDocumentStatisticsHandler(w http.ResponseWriter, r *http.Request) {
 		CategoryName string
 		DocCount     int64
 	}
-	config.DB.Table("documents").
+	categoryQuery := config.DB.Table("documents").
 		Select("category_id, document_categories.name as category_name, COUNT(*) as doc_count").
 		Joins("LEFT JOIN document_categories ON documents.category_id = document_categories.id").
-		Where("documents.deleted_at IS NULL AND category_id IS NOT NULL").
-		Group("category_id, document_categories.name").
+		Where("documents.deleted_at IS NULL AND category_id IS NOT NULL")
+	if businessVerticalID != "" {
+		categoryQuery = categoryQuery.Where("documents.business_vertical_id = ?", businessVerticalID)
+	}
+	categoryQuery.Group("category_id, document_categories.name").
 		Order("doc_count DESC").
 		Limit(5).
 		Scan(&categoryStats)
@@ -343,7 +363,11 @@ func GetDocumentStatisticsHandler(w http.ResponseWriter, r *http.Request) {
 
 // BulkAddTagsHandler adds tags to multiple documents
 func BulkAddTagsHandler(w http.ResponseWriter, r *http.Request) {
-	userID := r.Context().Value("userID").(uuid.UUID)
+	userID, err := getDocumentUserID(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
 
 	var req struct {
 		DocumentIDs []string `json:"document_ids"`

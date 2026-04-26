@@ -74,6 +74,7 @@ func RegisterRoutes() http.Handler {
 	RegisterChatRoutes(api)
 	RegisterWebhookMuxRoutes(r)
 	RegisterIntegrationRoutes(r)
+	RegisterAdminIntegrationRoutes(admin)
 
 	return r
 }
@@ -531,28 +532,29 @@ func registerPartnerRoutes(partner *mux.Router) {
 	// Read-only endpoints for partners
 	partnerResources := []struct {
 		path   string
+		scope  string
 		getAll func(http.ResponseWriter, *http.Request)
 		getOne func(http.ResponseWriter, *http.Request)
 	}{
-		{"/dprsite", handlers.GetAllSiteEngineerReports, handlers.GetSiteEngineerReport},
-		{"/wrapping", handlers.GetAllWrappingReports, handlers.GetWrappingReport},
-		{"/eway", handlers.GetAllEways, handlers.GetEway},
-		{"/water", handlers.GetAllWaterTankerReports, handlers.GetWaterTankerReport},
-		{"/stock", handlers.GetAllStockReports, handlers.GetStockReport},
-		{"/dairysite", handlers.GetAllDairySiteReports, handlers.GetDairySiteReport},
-		{"/payment", handlers.GetAllPayments, handlers.GetPayment},
-		{"/material", handlers.GetAllMaterials, handlers.GetMaterial},
-		{"/mnr", handlers.GetAllMNRReports, handlers.GetMNRReport},
-		{"/nmr_vehicle", handlers.GetAllNmrVehicle, handlers.GetNmrVehicle},
-		{"/contractor", handlers.GetAllContractorReports, handlers.GetContractorReport},
-		{"/painting", handlers.GetAllPaintingReports, handlers.GetPaintingReport},
-		{"/diesel", handlers.GetAllDieselReports, handlers.GetDieselReport},
-		{"/tasks", handlers.GetAllTasks, handlers.GetTask},
-		{"/vehiclelog", handlers.GetAllVehicleLogs, handlers.GetVehicleLog},
+		{"/dprsite", models.IntegrationScopePartnerDPRSiteRead, handlers.GetAllSiteEngineerReports, handlers.GetSiteEngineerReport},
+		{"/wrapping", models.IntegrationScopePartnerWrappingRead, handlers.GetAllWrappingReports, handlers.GetWrappingReport},
+		{"/eway", models.IntegrationScopePartnerEWayRead, handlers.GetAllEways, handlers.GetEway},
+		{"/water", models.IntegrationScopePartnerWaterRead, handlers.GetAllWaterTankerReports, handlers.GetWaterTankerReport},
+		{"/stock", models.IntegrationScopePartnerStockRead, handlers.GetAllStockReports, handlers.GetStockReport},
+		{"/dairysite", models.IntegrationScopePartnerDairySiteRead, handlers.GetAllDairySiteReports, handlers.GetDairySiteReport},
+		{"/payment", models.IntegrationScopePartnerPaymentRead, handlers.GetAllPayments, handlers.GetPayment},
+		{"/material", models.IntegrationScopePartnerMaterialRead, handlers.GetAllMaterials, handlers.GetMaterial},
+		{"/mnr", models.IntegrationScopePartnerMNRRead, handlers.GetAllMNRReports, handlers.GetMNRReport},
+		{"/nmr_vehicle", models.IntegrationScopePartnerNMRVehicleRead, handlers.GetAllNmrVehicle, handlers.GetNmrVehicle},
+		{"/contractor", models.IntegrationScopePartnerContractorRead, handlers.GetAllContractorReports, handlers.GetContractorReport},
+		{"/painting", models.IntegrationScopePartnerPaintingRead, handlers.GetAllPaintingReports, handlers.GetPaintingReport},
+		{"/diesel", models.IntegrationScopePartnerDieselRead, handlers.GetAllDieselReports, handlers.GetDieselReport},
+		{"/tasks", models.IntegrationScopePartnerTasksRead, handlers.GetAllTasks, handlers.GetTask},
+		{"/vehiclelog", models.IntegrationScopePartnerVehicleLogRead, handlers.GetAllVehicleLogs, handlers.GetVehicleLog},
 	}
 
 	for _, res := range partnerResources {
-		partner.HandleFunc(res.path, res.getAll).Methods("GET")
-		partner.HandleFunc(res.path+"/{id}", res.getOne).Methods("GET")
+		partner.Handle(res.path, middleware.RequireIntegrationScope(res.scope)(http.HandlerFunc(res.getAll))).Methods("GET")
+		partner.Handle(res.path+"/{id}", middleware.RequireIntegrationScope(res.scope)(http.HandlerFunc(res.getOne))).Methods("GET")
 	}
 }

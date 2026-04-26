@@ -4,12 +4,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"io"
 	"net/http"
-	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
@@ -38,7 +36,11 @@ func GetDocumentVersionsHandler(w http.ResponseWriter, r *http.Request) {
 func CreateDocumentVersionHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	documentID := vars["id"]
-	userID := r.Context().Value("userID").(uuid.UUID)
+	userID, err := getDocumentUserID(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
 
 	// Get existing document
 	var document models.Document
@@ -58,7 +60,7 @@ func CreateDocumentVersionHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get the uploaded file
-	file, header, err := r.FormFile("file")
+	file, _, err := r.FormFile("file")
 	if err != nil {
 		http.Error(w, "missing file field: "+err.Error(), http.StatusBadRequest)
 		return
@@ -80,32 +82,15 @@ func CreateDocumentVersionHandler(w http.ResponseWriter, r *http.Request) {
 	fileHash := hex.EncodeToString(hasher.Sum(nil))
 	file.Seek(0, 0)
 
-	// Save new file
-	uploadDir := "./uploads/documents"
-	if err := os.MkdirAll(uploadDir, 0755); err != nil {
-		http.Error(w, "failed to create upload directory: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	timestamp := time.Now().Format("20060102-150405")
-	ext := filepath.Ext(header.Filename)
-	fileName := fmt.Sprintf("%s-%s%s", timestamp, uuid.New().String()[:8], ext)
-	filePath := filepath.Join(uploadDir, fileName)
-
-	dst, err := os.Create(filePath)
+	upload, err := storeUploadedFile(r, "file", "./uploads/documents")
 	if err != nil {
-		http.Error(w, "failed to create file: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer dst.Close()
-
-	if _, err := io.Copy(dst, file); err != nil {
-		http.Error(w, "failed to save file: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "failed to store file: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	fileInfo, _ := os.Stat(filePath)
-	fileSize := fileInfo.Size()
+	ext := filepath.Ext(upload.OriginalFilename)
+	filePath := upload.Path
+	fileSize := upload.Size
 
 	// Start transaction
 	tx := config.DB.Begin()
@@ -133,9 +118,9 @@ func CreateDocumentVersionHandler(w http.ResponseWriter, r *http.Request) {
 	version := models.DocumentVersion{
 		DocumentID:       document.ID,
 		VersionNumber:    nextVersion,
-		FileName:         header.Filename,
+		FileName:         upload.OriginalFilename,
 		FileSize:         fileSize,
-		FileType:         header.Header.Get("Content-Type"),
+		FileType:         upload.MimeType,
 		FilePath:         filePath,
 		FileHash:         fileHash,
 		ChangeLog:        changeLog,
@@ -153,9 +138,9 @@ func CreateDocumentVersionHandler(w http.ResponseWriter, r *http.Request) {
 	document.Version = nextVersion
 	document.FilePath = filePath
 	document.FileSize = fileSize
-	document.FileType = header.Header.Get("Content-Type")
+	document.FileType = upload.MimeType
 	document.FileHash = fileHash
-	document.FileName = header.Filename
+	document.FileName = upload.OriginalFilename
 	document.FileExtension = ext
 
 	if err := tx.Save(&document).Error; err != nil {
@@ -196,7 +181,11 @@ func RollbackDocumentVersionHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	documentID := vars["id"]
 	versionID := vars["version_id"]
-	userID := r.Context().Value("userID").(uuid.UUID)
+	userID, err := getDocumentUserID(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
 
 	// Get document
 	var document models.Document
@@ -280,7 +269,11 @@ func DownloadDocumentVersionHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	documentID := vars["id"]
 	versionID := vars["version_id"]
-	userID := r.Context().Value("userID").(uuid.UUID)
+	userID, err := getDocumentUserID(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
 
 	var version models.DocumentVersion
 	if err := config.DB.First(&version, "id = ? AND document_id = ?", versionID, documentID).Error; err != nil {
@@ -289,12 +282,6 @@ func DownloadDocumentVersionHandler(w http.ResponseWriter, r *http.Request) {
 		} else {
 			http.Error(w, "failed to fetch version: "+err.Error(), http.StatusInternalServerError)
 		}
-		return
-	}
-
-	// Check if file exists
-	if _, err := os.Stat(version.FilePath); os.IsNotExist(err) {
-		http.Error(w, "file not found", http.StatusNotFound)
 		return
 	}
 
@@ -309,13 +296,13 @@ func DownloadDocumentVersionHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	config.DB.Create(&auditLog)
 
-	// Set headers for download
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", version.FileName))
-	w.Header().Set("Content-Type", version.FileType)
-	w.Header().Set("Content-Length", fmt.Sprintf("%d", version.FileSize))
-
-	// Serve file
-	http.ServeFile(w, r, version.FilePath)
+	if err := serveStoredFile(w, r, version.FilePath, version.FileName, version.FileType, version.FileSize); err != nil {
+		if errors.Is(err, errStoredFileNotFound) {
+			http.Error(w, "file not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "failed to serve file: "+err.Error(), http.StatusInternalServerError)
+	}
 }
 
 // CompareDocumentVersionsHandler compares two versions of a document

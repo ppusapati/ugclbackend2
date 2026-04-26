@@ -1071,6 +1071,50 @@ func GetDashboard(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{"dashboard": dashboard})
 }
 
+// DeleteDashboard soft deletes a dashboard and removes related widgets
+func DeleteDashboard(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	dashboardID := vars["id"]
+
+	var dashboard models.Dashboard
+	if err := config.DB.Where("id = ? AND deleted_at IS NULL", dashboardID).First(&dashboard).Error; err != nil {
+		http.Error(w, "Dashboard not found", http.StatusNotFound)
+		return
+	}
+
+	if dashboard.IsDefault {
+		http.Error(w, "Default dashboard cannot be deleted", http.StatusBadRequest)
+		return
+	}
+
+	now := time.Now()
+	tx := config.DB.Begin()
+	if tx.Error != nil {
+		http.Error(w, "Failed to delete dashboard", http.StatusInternalServerError)
+		return
+	}
+
+	if err := tx.Model(&models.ReportWidget{}).Where("dashboard_id = ?", dashboard.ID).Delete(&models.ReportWidget{}).Error; err != nil {
+		tx.Rollback()
+		http.Error(w, "Failed to delete dashboard widgets", http.StatusInternalServerError)
+		return
+	}
+
+	if err := tx.Model(&dashboard).Update("deleted_at", now).Error; err != nil {
+		tx.Rollback()
+		http.Error(w, "Failed to delete dashboard", http.StatusInternalServerError)
+		return
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		http.Error(w, "Failed to delete dashboard", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"message": "Dashboard deleted successfully"})
+}
+
 // AddWidgetToDashboard adds a report widget to a dashboard
 func AddWidgetToDashboard(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)

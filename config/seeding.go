@@ -108,6 +108,10 @@ func SeedPermissions() {
 		{ID: uuid.New(), Name: "document:read", Resource: "document", Action: "read", Description: "View document"},
 		{ID: uuid.New(), Name: "document:update", Resource: "document", Action: "update", Description: "Edit document metadata"},
 		{ID: uuid.New(), Name: "document:delete", Resource: "document", Action: "delete", Description: "Delete document"},
+		{ID: uuid.New(), Name: "document:manage_categories", Resource: "document", Action: "manage_categories", Description: "Manage document categories"},
+		{ID: uuid.New(), Name: "document:manage_tags", Resource: "document", Action: "manage_tags", Description: "Manage document tags"},
+		{ID: uuid.New(), Name: "document:share", Resource: "document", Action: "share", Description: "Share documents"},
+		{ID: uuid.New(), Name: "document:manage_permissions", Resource: "document", Action: "manage_permissions", Description: "Manage document permissions"},
 
 		// Reports & Analytics
 		{ID: uuid.New(), Name: "report:read", Resource: "report", Action: "read", Description: "View reports"},
@@ -238,6 +242,7 @@ func SeedPermissions() {
 				{Name: "payroll:generate"}, {Name: "payroll:approve"},
 				{Name: "report:read"}, {Name: "report:export"},
 				{Name: "document:upload"}, {Name: "document:read"}, {Name: "document:update"}, {Name: "document:delete"},
+				{Name: "document:manage_categories"}, {Name: "document:manage_tags"}, {Name: "document:share"}, {Name: "document:manage_permissions"},
 			},
 		},
 		{
@@ -475,6 +480,7 @@ func getWaterRoles(businessID uuid.UUID) []models.BusinessRole {
 				{Name: "water:read_consumption"}, {Name: "water:manage_supply"}, {Name: "water:quality_control"},
 				{Name: "report:read"}, {Name: "report:export"},
 				{Name: "document:upload"}, {Name: "document:read"}, {Name: "document:update"}, {Name: "document:delete"},
+				{Name: "document:manage_categories"}, {Name: "document:manage_tags"}, {Name: "document:share"}, {Name: "document:manage_permissions"},
 				{Name: "site:manage_access"}, {Name: "site:view"},
 				{Name: "attendance:checkin"}, {Name: "attendance:heartbeat"}, {Name: "attendance:checkout"},
 				{Name: "attendance:read"}, {Name: "attendance:headcount"},
@@ -537,6 +543,7 @@ func getSolarRoles(businessID uuid.UUID) []models.BusinessRole {
 				{Name: "solar:read_generation"}, {Name: "solar:manage_panels"}, {Name: "solar:maintenance"},
 				{Name: "report:read"}, {Name: "report:export"},
 				{Name: "document:upload"}, {Name: "document:read"}, {Name: "document:update"}, {Name: "document:delete"},
+				{Name: "document:manage_categories"}, {Name: "document:manage_tags"}, {Name: "document:share"}, {Name: "document:manage_permissions"},
 				{Name: "site:manage_access"}, {Name: "site:view"},
 				{Name: "attendance:checkin"}, {Name: "attendance:heartbeat"}, {Name: "attendance:checkout"},
 				{Name: "attendance:read"}, {Name: "attendance:headcount"},

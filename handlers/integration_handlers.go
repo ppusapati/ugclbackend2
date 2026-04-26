@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
+	"gorm.io/datatypes"
 	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/middleware"
 	"p9e.in/ugcl/models"
@@ -261,7 +262,7 @@ func IntegrationExternalDropdownProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	proxyCfg := getExternalDropdownProxyConfig()
-	if !isAllowedDropdownHost(targetURL.Hostname(), proxyCfg.AllowedHosts) {
+	if !isAllowedDropdownTarget(r, targetURL) {
 		http.Error(w, "target host is not allowed", http.StatusForbidden)
 		return
 	}
@@ -327,6 +328,34 @@ func IntegrationExternalDropdownProxy(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func isAllowedDropdownTarget(r *http.Request, targetURL *url.URL) bool {
+	integration := middleware.GetThirdPartyIntegration(r)
+	if integration != nil {
+		if !integration.Scopes[models.IntegrationScopeDropdownProxyUse] {
+			return false
+		}
+		normalized, err := normalizeIntegrationURL(targetURL.String())
+		if err != nil {
+			return false
+		}
+		return integration.AllowedURLs[normalized]
+	}
+
+	normalized, err := normalizeIntegrationURL(targetURL.String())
+	if err == nil {
+		needle := strings.ReplaceAll(normalized, "\"", "\\\"")
+		var count int64
+		if dbErr := config.DB.Model(&models.ThirdPartyIntegration{}).
+			Where("status = ?", models.IntegrationStatusActive).
+			Where("allowed_urls @> ?", datatypes.JSON([]byte("[\""+needle+"\"]"))).
+			Count(&count).Error; dbErr == nil && count > 0 {
+			return true
+		}
+	}
+
+	return false
+}
+
 func getVendorSitesProxyConfig() (vendorSitesProxyConfig, error) {
 	cfg := vendorSitesProxyConfig{
 		URL: envFirst(
@@ -382,24 +411,15 @@ func getVendorSitesProxyConfig() (vendorSitesProxyConfig, error) {
 }
 
 type externalDropdownProxyConfig struct {
-	AllowedHosts map[string]bool
-	APIKey       string
-	AuthHeader   string
-	AuthScheme   string
-	Timeout      time.Duration
-	ValueField   string
-	LabelField   string
+	APIKey     string
+	AuthHeader string
+	AuthScheme string
+	Timeout    time.Duration
+	ValueField string
+	LabelField string
 }
 
 func getExternalDropdownProxyConfig() externalDropdownProxyConfig {
-	allowedHosts := make(map[string]bool)
-	for _, part := range strings.Split(envFirst("THIRD_PARTY_DROPDOWN_ALLOWED_HOSTS", "THIRD_PARTY_ALLOWED_HOSTS"), ",") {
-		host := strings.ToLower(strings.TrimSpace(part))
-		if host != "" {
-			allowedHosts[host] = true
-		}
-	}
-
 	authHeader := envFirst("THIRD_PARTY_DROPDOWN_PROXY_AUTH_HEADER", "THIRD_PARTY_AUTH_HEADER")
 	if authHeader == "" {
 		authHeader = "Authorization"
@@ -421,10 +441,9 @@ func getExternalDropdownProxyConfig() externalDropdownProxyConfig {
 	}
 
 	return externalDropdownProxyConfig{
-		AllowedHosts: allowedHosts,
-		APIKey:       envFirst("THIRD_PARTY_DROPDOWN_PROXY_API_KEY", "THIRD_PARTY_PROXY_API_KEY"),
-		AuthHeader:   authHeader,
-		AuthScheme:   authScheme,
+		APIKey:     envFirst("THIRD_PARTY_DROPDOWN_PROXY_API_KEY", "THIRD_PARTY_PROXY_API_KEY"),
+		AuthHeader: authHeader,
+		AuthScheme: authScheme,
 		Timeout: parseSecondsEnv(10,
 			"THIRD_PARTY_DROPDOWN_PROXY_TIMEOUT_SECONDS",
 			"THIRD_PARTY_TIMEOUT_SECONDS",

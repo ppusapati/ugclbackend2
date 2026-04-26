@@ -4,14 +4,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"io"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
@@ -100,47 +98,15 @@ func UploadDocumentHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Determine storage path
-	uploadDir := "./uploads/documents"
-	useGCS := os.Getenv("USE_GCS") == "true"
-
-	if !useGCS {
-		// Ensure upload directory exists
-		if err := os.MkdirAll(uploadDir, 0755); err != nil {
-			http.Error(w, "failed to create upload directory: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-	}
-
-	// Create unique filename
-	timestamp := time.Now().Format("20060102-150405")
-	ext := filepath.Ext(header.Filename)
-	fileName := fmt.Sprintf("%s-%s%s", timestamp, uuid.New().String()[:8], ext)
-	filePath := filepath.Join(uploadDir, fileName)
-
-	// Save file
-	if useGCS {
-		// TODO: Implement GCS upload
-		http.Error(w, "GCS upload not implemented yet", http.StatusNotImplemented)
+	upload, err := storeUploadedFile(r, "file", "./uploads/documents")
+	if err != nil {
+		http.Error(w, "failed to store file: "+err.Error(), http.StatusInternalServerError)
 		return
-	} else {
-		// Save to local filesystem
-		dst, err := os.Create(filePath)
-		if err != nil {
-			http.Error(w, "failed to create file: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		defer dst.Close()
-
-		if _, err := io.Copy(dst, file); err != nil {
-			http.Error(w, "failed to save file: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
 	}
 
-	// Get file info
-	fileInfo, _ := os.Stat(filePath)
-	fileSize := fileInfo.Size()
+	ext := filepath.Ext(upload.OriginalFilename)
+	filePath := upload.Path
+	fileSize := upload.Size
 
 	// Parse UUIDs
 	var categoryID *uuid.UUID
@@ -172,6 +138,23 @@ func UploadDocumentHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	var workflowDef *models.WorkflowDefinition
+	if workflowID != nil {
+		var selectedWorkflow models.WorkflowDefinition
+		if err := config.DB.Where("id = ? AND is_active = ?", *workflowID, true).First(&selectedWorkflow).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				http.Error(w, "invalid or inactive workflow selected", http.StatusBadRequest)
+			} else {
+				http.Error(w, "failed to load workflow: "+err.Error(), http.StatusInternalServerError)
+			}
+			return
+		}
+		workflowDef = &selectedWorkflow
+	}
+
+	initialState := resolveInitialDocumentState(workflowDef)
+	initialStatus := mapDocumentStateToStatus(initialState)
+
 	// Use user ID from loaded user context
 	userID := user.ID
 
@@ -179,19 +162,20 @@ func UploadDocumentHandler(w http.ResponseWriter, r *http.Request) {
 	document := models.Document{
 		Title:              req.Title,
 		Description:        req.Description,
-		FileName:           header.Filename,
+		FileName:           upload.OriginalFilename,
 		FileSize:           fileSize,
-		FileType:           header.Header.Get("Content-Type"),
+		FileType:           upload.MimeType,
 		FileExtension:      ext,
 		FilePath:           filePath,
 		FileHash:           fileHash,
-		Status:             models.DocumentStatusDraft,
+		Status:             initialStatus,
 		Version:            1,
 		CategoryID:         categoryID,
 		Metadata:           req.Metadata,
 		BusinessVerticalID: businessVerticalID,
 		UploadedByID:       userID,
 		WorkflowID:         workflowID,
+		CurrentState:       initialState,
 		IsPublic:           req.IsPublic,
 	}
 
@@ -214,9 +198,9 @@ func UploadDocumentHandler(w http.ResponseWriter, r *http.Request) {
 	version := models.DocumentVersion{
 		DocumentID:       document.ID,
 		VersionNumber:    1,
-		FileName:         header.Filename,
+		FileName:         upload.OriginalFilename,
 		FileSize:         fileSize,
-		FileType:         header.Header.Get("Content-Type"),
+		FileType:         upload.MimeType,
 		FilePath:         filePath,
 		FileHash:         fileHash,
 		ChangeLog:        "Initial upload",
@@ -259,7 +243,7 @@ func UploadDocumentHandler(w http.ResponseWriter, r *http.Request) {
 		DocumentID: document.ID,
 		UserID:     &userID,
 		Action:     models.DocumentAuditActionCreate,
-		Details:    models.DocumentMetadata{"file_name": header.Filename, "file_size": fileSize},
+		Details:    models.DocumentMetadata{"file_name": upload.OriginalFilename, "file_size": fileSize},
 		IPAddress:  r.RemoteAddr,
 		UserAgent:  r.UserAgent(),
 	}
@@ -324,9 +308,9 @@ func GetDocumentsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if tag != "" {
-		query = query.Joins("JOIN document_tags ON document_tags.document_id = documents.id").
-			Joins("JOIN tags ON tags.id = document_tags.tag_id").
-			Where("tags.name = ?", tag)
+		query = query.Joins("JOIN document_tag_links ON document_tag_links.document_id = documents.id").
+			Joins("JOIN document_tags ON document_tags.id = document_tag_links.document_tag_id").
+			Where("document_tags.name = ?", tag)
 	}
 
 	// Get total count
@@ -467,6 +451,10 @@ func UpdateDocumentHandler(w http.ResponseWriter, r *http.Request) {
 		document.Metadata = req.Metadata
 	}
 	if req.Status != "" {
+		if strings.TrimSpace(document.CurrentState) != "" {
+			http.Error(w, "status is managed by workflow for this document; use workflow transition endpoint", http.StatusBadRequest)
+			return
+		}
 		document.Status = models.DocumentStatus(req.Status)
 	}
 
@@ -593,12 +581,6 @@ func DownloadDocumentHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if file exists
-	if _, err := os.Stat(document.FilePath); os.IsNotExist(err) {
-		http.Error(w, "file not found", http.StatusNotFound)
-		return
-	}
-
 	// Increment download count
 	config.DB.Model(&document).Update("download_count", gorm.Expr("download_count + 1"))
 
@@ -612,13 +594,13 @@ func DownloadDocumentHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	config.DB.Create(&auditLog)
 
-	// Set headers for download
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", document.FileName))
-	w.Header().Set("Content-Type", document.FileType)
-	w.Header().Set("Content-Length", fmt.Sprintf("%d", document.FileSize))
-
-	// Serve file
-	http.ServeFile(w, r, document.FilePath)
+	if err := serveStoredFile(w, r, document.FilePath, document.FileName, document.FileType, document.FileSize); err != nil {
+		if errors.Is(err, errStoredFileNotFound) {
+			http.Error(w, "file not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "failed to serve file: "+err.Error(), http.StatusInternalServerError)
+	}
 }
 
 // GetDocumentAuditLogsHandler returns audit logs for a document

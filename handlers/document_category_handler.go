@@ -471,7 +471,7 @@ func DeleteDocumentTagHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Remove tag associations
-	config.DB.Exec("DELETE FROM document_tags WHERE tag_id = ?", tagID)
+	config.DB.Exec("DELETE FROM document_tag_links WHERE document_tag_id = ?", tagID)
 
 	if err := config.DB.Delete(&tag).Error; err != nil {
 		http.Error(w, "failed to delete tag: "+err.Error(), http.StatusInternalServerError)

@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -19,7 +20,11 @@ import (
 func CreateDocumentShareHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	documentID := vars["id"]
-	userID := r.Context().Value("userID").(uuid.UUID)
+	userID, err := getDocumentUserID(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
 
 	var req struct {
 		AccessLevel string `json:"access_level"`
@@ -254,17 +259,24 @@ func DownloadSharedDocumentHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	config.DB.Create(&auditLog)
 
-	// Serve file
-	w.Header().Set("Content-Disposition", "attachment; filename="+share.Document.FileName)
-	w.Header().Set("Content-Type", share.Document.FileType)
-	http.ServeFile(w, r, share.Document.FilePath)
+	if err := serveStoredFile(w, r, share.Document.FilePath, share.Document.FileName, share.Document.FileType, share.Document.FileSize); err != nil {
+		if errors.Is(err, errStoredFileNotFound) {
+			http.Error(w, "file not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "failed to serve file: "+err.Error(), http.StatusInternalServerError)
+	}
 }
 
 // RevokeDocumentShareHandler revokes a share link
 func RevokeDocumentShareHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	shareID := vars["share_id"]
-	userID := r.Context().Value("userID").(uuid.UUID)
+	userID, err := getDocumentUserID(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
 
 	var share models.DocumentShare
 	if err := config.DB.First(&share, "id = ?", shareID).Error; err != nil {
@@ -304,7 +316,11 @@ func RevokeDocumentShareHandler(w http.ResponseWriter, r *http.Request) {
 func GrantDocumentPermissionHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	documentID := vars["id"]
-	userID := r.Context().Value("userID").(uuid.UUID)
+	userID, err := getDocumentUserID(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
 
 	var req struct {
 		UserID         string `json:"user_id"`
@@ -413,7 +429,11 @@ func GetDocumentPermissionsHandler(w http.ResponseWriter, r *http.Request) {
 func RevokeDocumentPermissionHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	permissionID := vars["permission_id"]
-	userID := r.Context().Value("userID").(uuid.UUID)
+	userID, err := getDocumentUserID(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
 
 	var permission models.DocumentPermission
 	if err := config.DB.First(&permission, "id = ?", permissionID).Error; err != nil {
