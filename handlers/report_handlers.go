@@ -313,6 +313,53 @@ func ExecuteReport(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// GetSubmissionWorkflowHistory returns the full workflow lifecycle for a single form submission.
+// This is used by the report viewer's timeline drill-down feature.
+// GET /api/v1/reports/submissions/{submissionId}/workflow-history
+func GetSubmissionWorkflowHistory(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	submissionIDStr := vars["submissionId"]
+
+	submissionID, err := uuid.Parse(submissionIDStr)
+	if err != nil {
+		http.Error(w, "invalid submission ID", http.StatusBadRequest)
+		return
+	}
+
+	// Fetch full transition history ordered chronologically.
+	var transitions []models.WorkflowTransition
+	if err := config.DB.
+		Where("submission_id = ?", submissionID).
+		Order("transitioned_at ASC").
+		Find(&transitions).Error; err != nil {
+		http.Error(w, "failed to fetch workflow history", http.StatusInternalServerError)
+		return
+	}
+
+	// Also fetch the current submission state for the header.
+	var submission models.FormSubmission
+	submissionFound := config.DB.
+		Select("id", "form_code", "current_state", "submitted_by", "submitted_at").
+		First(&submission, "id = ? AND deleted_at IS NULL", submissionID).Error == nil
+
+	resp := map[string]interface{}{
+		"history": transitions,
+		"count":   len(transitions),
+	}
+	if submissionFound {
+		resp["submission"] = map[string]interface{}{
+			"id":            submission.ID,
+			"form_code":     submission.FormCode,
+			"current_state": submission.CurrentState,
+			"submitted_by":  submission.SubmittedBy,
+			"submitted_at":  submission.SubmittedAt,
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
 // sanitizeColumnName converts a raw string to a safe SQL column name
 // using the same rules as getColumnDefinition in form_table_manager.go.
 // GetFormTableFields retrieves field definitions for a form identified by its code or db_table_name.
@@ -321,6 +368,32 @@ func ExecuteReport(w http.ResponseWriter, r *http.Request) {
 func GetFormTableFields(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	tableName := vars["table_name"]
+
+	// Special system tables: return their columns directly without form schema lookup.
+	if strings.ToLower(tableName) == "workflow_transitions" {
+		wtFields := []map[string]interface{}{
+			{"id": "id", "label": "Transition ID", "type": "text", "dataType": "text", "source": "system", "column_name": "id"},
+			{"id": "submission_id", "label": "Submission ID", "type": "text", "dataType": "text", "source": "system", "column_name": "submission_id"},
+			{"id": "from_state", "label": "From State", "type": "text", "dataType": "text", "source": "system", "column_name": "from_state"},
+			{"id": "to_state", "label": "To State", "type": "text", "dataType": "text", "source": "system", "column_name": "to_state"},
+			{"id": "action", "label": "Action", "type": "text", "dataType": "text", "source": "system", "column_name": "action"},
+			{"id": "actor_id", "label": "Actor ID", "type": "text", "dataType": "text", "source": "system", "column_name": "actor_id"},
+			{"id": "actor_name", "label": "Actor Name", "type": "text", "dataType": "text", "source": "system", "column_name": "actor_name"},
+			{"id": "actor_role", "label": "Actor Role", "type": "text", "dataType": "text", "source": "system", "column_name": "actor_role"},
+			{"id": "comment", "label": "Comment", "type": "text", "dataType": "text", "source": "system", "column_name": "comment"},
+			{"id": "transitioned_at", "label": "Transitioned At", "type": "datetime", "dataType": "datetime", "source": "system", "column_name": "transitioned_at"},
+			{"id": "created_at", "label": "Created At", "type": "datetime", "dataType": "datetime", "source": "system", "column_name": "created_at"},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"table_name":  "workflow_transitions",
+			"form_title":  "Workflow Audit Trail",
+			"form_fields": wtFields,
+			"db_fields":   []map[string]interface{}{},
+			"all_fields":  wtFields,
+		})
+		return
+	}
 
 	// Find the form by db_table_name OR code (table_name may be a form code for forms without a dedicated table).
 	var form models.AppForm
@@ -335,9 +408,15 @@ func GetFormTableFields(w http.ResponseWriter, r *http.Request) {
 	if dbErr == nil && form.ID != uuid.Nil {
 		for _, field := range buildFormFieldList(form) {
 			id, _ := field["id"].(string)
-			// column_name = field.id because form_submissions.form_data is a JSONB column
-			// and the field ID is the key used when the submission was stored.
-			field["column_name"] = id
+			name, _ := field["name"].(string)
+			columnName := strings.TrimSpace(id)
+			if normalizedName := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(strings.TrimSpace(name), " ", "_"), "-", "_")); normalizedName != "" && sqlIdentifierPattern.MatchString(normalizedName) {
+				// Prefer semantic schema names like end_time when available so reports match the generated view.
+				columnName = normalizedName
+			} else if strings.TrimSpace(id) != "" && sqlIdentifierPattern.MatchString(strings.TrimSpace(id)) {
+				columnName = strings.TrimSpace(id)
+			}
+			field["column_name"] = columnName
 			formFields = append(formFields, field)
 		}
 		formFields = append(formFields, inferMissingFormFieldsFromSubmissions(form.ID, formFields)...)
@@ -347,12 +426,19 @@ func GetFormTableFields(w http.ResponseWriter, r *http.Request) {
 
 	// Metadata fields are direct columns on form_submissions (or resolved via JOIN in the engine).
 	metadataFields := []map[string]interface{}{
+		// _submission_id is a hidden field used by the frontend to identify rows for workflow timeline drill-down.
+		{"id": "submission_id", "type": "text", "label": "Submission ID", "dataType": "text", "source": "metadata", "column_name": "submission_id", "hidden": true},
 		{"id": "submitted_at", "type": "datetime", "label": "Submitted At", "dataType": "datetime", "source": "metadata", "column_name": "submitted_at"},
 		{"id": "submitted_by_name", "type": "text", "label": "Submitted By", "dataType": "text", "source": "metadata", "column_name": "submitted_by_name"},
 		{"id": "current_state", "type": "text", "label": "Status", "dataType": "text", "source": "metadata", "column_name": "current_state"},
 		{"id": "site_name", "type": "text", "label": "Site Name", "dataType": "text", "source": "metadata", "column_name": "site_name"},
 		{"id": "business_vertical_name", "type": "text", "label": "Business Vertical", "dataType": "text", "source": "metadata", "column_name": "business_vertical_name"},
 		{"id": "form_code", "type": "text", "label": "Form Code", "dataType": "text", "source": "metadata", "column_name": "form_code"},
+		// Workflow fields — resolved via LATERAL join on workflow_transitions in the report engine.
+		{"id": "wf_last_action", "type": "text", "label": "Last Action", "dataType": "text", "source": "workflow", "column_name": "wf_last_action"},
+		{"id": "wf_last_action_by", "type": "text", "label": "Action By", "dataType": "text", "source": "workflow", "column_name": "wf_last_action_by"},
+		{"id": "wf_last_action_at", "type": "datetime", "label": "Action At", "dataType": "datetime", "source": "workflow", "column_name": "wf_last_action_at"},
+		{"id": "wf_last_comment", "type": "text", "label": "Action Comment", "dataType": "text", "source": "workflow", "column_name": "wf_last_comment"},
 	}
 	combinedFields := append([]map[string]interface{}{}, formFields...)
 	combinedFields = append(combinedFields, metadataFields...)
@@ -681,6 +767,18 @@ func GetAvailableFormTables(w http.ResponseWriter, r *http.Request) {
 			"accessible_verticals": form.AccessibleVerticals,
 		})
 	}
+
+	// Always append the workflow audit trail as a system data source.
+	tables = append(tables, map[string]interface{}{
+		"form_id":              nil,
+		"form_code":            "",
+		"form_title":           "Workflow Audit Trail",
+		"table_name":           "workflow_transitions",
+		"schema_name":          "public",
+		"module_id":            nil,
+		"accessible_verticals": []string{},
+		"system":               true,
+	})
 	fmt.Printf("[REPORT BUILDER] available forms=%d (module_id=%s, vertical=%s)\n", len(tables), moduleID, verticalToken)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{

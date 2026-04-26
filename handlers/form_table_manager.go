@@ -398,7 +398,7 @@ func (ftm *FormTableManager) getColumnDefinition(field map[string]interface{}) s
 		sqlType = "VARCHAR(255)"
 	case "multiselect", "checkbox_group":
 		sqlType = "JSONB"
-	case "file", "image":
+	case "file", "image", "camera":
 		sqlType = "VARCHAR(500)" // Store file path
 	case "json", "object":
 		sqlType = "JSONB"

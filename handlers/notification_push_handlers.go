@@ -56,6 +56,12 @@ type mobilePushTokenDTO struct {
 	UserID       string  `json:"user_id,omitempty"`
 }
 
+func writeJSON(w http.ResponseWriter, status int, payload interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(payload)
+}
+
 func parseBoolQuery(value string) bool {
 	parsed, err := strconv.ParseBool(strings.TrimSpace(value))
 	return err == nil && parsed
@@ -329,6 +335,30 @@ func (h *NotificationHandler) SendTestWebPush(w http.ResponseWriter, r *http.Req
 		url = "/chat"
 	}
 
+	configured, reason := getNotificationService().GetWebPushConfigurationStatus()
+	if !configured {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]interface{}{
+			"message":    "web push is not configured",
+			"configured": false,
+			"reason":     reason,
+		})
+		return
+	}
+
+	subscriptionCount, err := getNotificationService().CountWebPushSubscriptions(claims.UserID)
+	if err != nil {
+		http.Error(w, "failed to load web push subscriptions", http.StatusInternalServerError)
+		return
+	}
+	if subscriptionCount == 0 {
+		writeJSON(w, http.StatusNotFound, map[string]interface{}{
+			"message":             "no web push subscriptions registered for current user",
+			"configured":          true,
+			"registered_targets": 0,
+		})
+		return
+	}
+
 	getNotificationService().SendWebPushToUser(
 		claims.UserID,
 		title,
@@ -337,8 +367,11 @@ func (h *NotificationHandler) SendTestWebPush(w http.ResponseWriter, r *http.Req
 		"push-test-"+claims.UserID,
 	)
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"message": "test push dispatched"})
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"message":            "test push dispatched",
+		"configured":         true,
+		"registered_targets": subscriptionCount,
+	})
 }
 
 // SendTestMobilePush sends a test mobile push notification to the current user's registered devices.
@@ -370,17 +403,27 @@ func (h *NotificationHandler) SendTestMobilePush(w http.ResponseWriter, r *http.
 
 	dispatched, err := getNotificationService().SendTestMobilePushToUser(claims.UserID, title, body, url)
 	if err != nil {
-		http.Error(w, "failed to dispatch mobile push test", http.StatusInternalServerError)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]interface{}{
+			"message":    "mobile push is not configured",
+			"configured": false,
+			"reason":     err.Error(),
+		})
 		return
 	}
 	if dispatched == 0 {
-		http.Error(w, "no active mobile push tokens registered for current user", http.StatusNotFound)
+		configured, reason := getNotificationService().GetMobilePushConfigurationStatus()
+		writeJSON(w, http.StatusNotFound, map[string]interface{}{
+			"message":             "no active mobile push tokens registered for current user",
+			"configured":          configured,
+			"reason":              reason,
+			"registered_targets":  0,
+		})
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"message":           "test mobile push dispatched",
+		"configured":        true,
 		"dispatched_tokens": dispatched,
 	})
 }

@@ -103,6 +103,58 @@ func setCachedFormSchema(key string, schema []map[string]interface{}) {
 	reportFormSchemaCache.mu.Unlock()
 }
 
+// viewColumnsCache caches the set of actual columns present in each resolved table/view.
+// Used by resolveFieldExpression to emit NULL for stale/removed field references.
+var viewColumnsCache = struct {
+	mu      sync.Mutex
+	entries map[string]struct {
+		cols      map[string]bool
+		expiresAt time.Time
+	}
+}{entries: make(map[string]struct {
+	cols      map[string]bool
+	expiresAt time.Time
+})}
+
+// getViewColumns returns the set of column names for the given qualified table/view name.
+// Results are cached for reportEngineMetadataCacheTTL.
+func (re *ReportEngine) getViewColumns(qualifiedTable string) map[string]bool {
+	key := strings.ToLower(qualifiedTable)
+
+	viewColumnsCache.mu.Lock()
+	if entry, ok := viewColumnsCache.entries[key]; ok && time.Now().Before(entry.expiresAt) {
+		viewColumnsCache.mu.Unlock()
+		return entry.cols
+	}
+	viewColumnsCache.mu.Unlock()
+
+	// Strip schema prefix and quotes for information_schema lookup.
+	parts := strings.SplitN(qualifiedTable, ".", 2)
+	tablePart := strings.Trim(parts[len(parts)-1], `"`)
+
+	var colRows []struct {
+		ColumnName string `gorm:"column:column_name"`
+	}
+	re.db.Raw(
+		`SELECT column_name FROM information_schema.columns WHERE lower(table_name) = lower(?) AND table_schema NOT IN ('pg_catalog','information_schema')`,
+		tablePart,
+	).Scan(&colRows)
+
+	cols := make(map[string]bool, len(colRows))
+	for _, r := range colRows {
+		cols[strings.ToLower(r.ColumnName)] = true
+	}
+
+	viewColumnsCache.mu.Lock()
+	viewColumnsCache.entries[key] = struct {
+		cols      map[string]bool
+		expiresAt time.Time
+	}{cols: cols, expiresAt: time.Now().Add(reportEngineMetadataCacheTTL)}
+	viewColumnsCache.mu.Unlock()
+
+	return cols
+}
+
 // ReportEngine handles dynamic report generation from form submission tables
 type ReportEngine struct {
 	db *gorm.DB
@@ -493,8 +545,19 @@ func (re *ReportEngine) resolveFieldExpression(field models.ReportField) (string
 		return re.safeFieldRef("sites", "name")
 	case "business_vertical_name":
 		return re.safeFieldRef("business_verticals", "name")
+	case "submission_id":
+		// submission_id is an alias for the primary key 'id' of the form submissions view/table.
+		return re.safeFieldRef(field.DataSource, "id")
 	case "submitted_at", "current_state", "form_code":
 		return re.safeFieldRef(field.DataSource, field.FieldName)
+	case "wf_last_action":
+		return re.safeFieldRef("wf_latest", "action")
+	case "wf_last_action_by":
+		return re.safeFieldRef("wf_latest", "actor_name")
+	case "wf_last_action_at":
+		return re.safeFieldRef("wf_latest", "transitioned_at")
+	case "wf_last_comment":
+		return re.safeFieldRef("wf_latest", "comment")
 	default:
 		// Form field IDs (e.g. "field_1775802520595") are stored as JSONB keys in
 		// form_submissions.form_data. Extract them with the ->> operator.
@@ -512,6 +575,27 @@ func (re *ReportEngine) resolveFieldExpression(field models.ReportField) (string
 	WHEN jsonb_typeof(%s.form_data->'%s') = 'object' THEN COALESCE(%s.form_data->'%s'->>'name', %s.form_data->>'%s')
 	ELSE COALESCE((SELECT s.name FROM sites AS s WHERE s.id::text = %s.form_data->>'%s' AND s.deleted_at IS NULL LIMIT 1), %s.form_data->>'%s')
 END`, aliasRef, field.FieldName, aliasRef, field.FieldName, aliasRef, field.FieldName, aliasRef, field.FieldName, aliasRef, field.FieldName), nil
+		}
+		// For raw column references, validate the column actually exists in the view.
+		// If it has been removed from the form schema, the view no longer has the column and
+		// the query would fail with SQLSTATE 42703. Emit NULL::text instead so stale reports
+		// degrade gracefully rather than error out.
+		safeFieldAlias, aliasErr := re.safeIdentifier(field.DataSource)
+		if aliasErr != nil {
+			return "", aliasErr
+		}
+		// Look up the resolved qualified table for this data source from the cache.
+		// Fall back to a best-effort lookup via the datasource alias as the table name.
+		qualifiedTable := ""
+		if cached, ok := getCachedResolvedTable(strings.ToLower(field.DataSource)); ok {
+			qualifiedTable = cached
+		}
+		if qualifiedTable != "" {
+			viewCols := re.getViewColumns(qualifiedTable)
+			if len(viewCols) > 0 && !viewCols[strings.ToLower(field.FieldName)] {
+				log.Printf("[REPORT ENGINE] column %q not found in view %s — substituting NULL", field.FieldName, qualifiedTable)
+				return fmt.Sprintf("NULL::text /* stale field: %s.%s */", safeFieldAlias, field.FieldName), nil
+			}
 		}
 		return re.safeFieldRef(field.DataSource, field.FieldName)
 	}
@@ -533,6 +617,14 @@ func (re *ReportEngine) collectRequiredJoins(
 			joins["sites"] = fmt.Sprintf("LEFT JOIN sites AS sites ON sites.id = %s.site_id", dataSource)
 		case "business_vertical_name":
 			joins["business_verticals"] = fmt.Sprintf("LEFT JOIN business_verticals AS business_verticals ON business_verticals.id = %s.business_vertical_id", dataSource)
+		case "wf_last_action", "wf_last_action_by", "wf_last_action_at", "wf_last_comment":
+			// LATERAL subquery: most-recent workflow_transition for each submission row.
+			if _, exists := joins["wf_latest"]; !exists {
+				joins["wf_latest"] = fmt.Sprintf(
+					"LEFT JOIN LATERAL (SELECT action, actor_name, transitioned_at, comment FROM workflow_transitions WHERE submission_id = %s.id ORDER BY transitioned_at DESC LIMIT 1) AS wf_latest ON true",
+					dataSource,
+				)
+			}
 		}
 	}
 	for _, field := range fields {

@@ -51,6 +51,9 @@ func RegisterReportRoutes(r *mux.Router) {
 	reportRead.HandleFunc("/reports/forms/tables", handlers.GetAvailableFormTables).Methods("GET")
 	reportRead.HandleFunc("/reports/forms/tables/{table_name}/fields", handlers.GetFormTableFields).Methods("GET")
 
+	// Workflow lifecycle drill-down from report viewer (no extra permission beyond report:read)
+	reportRead.HandleFunc("/reports/submissions/{submissionId}/workflow-history", handlers.GetSubmissionWorkflowHistory).Methods("GET")
+
 	// Roles available for report sharing (lightweight list, no manage_roles required)
 	reportRead.HandleFunc("/reports/available-roles", handlers.GetReportAvailableRoles).Methods("GET")
 

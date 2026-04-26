@@ -32,6 +32,24 @@ func (ns *NotificationService) GetWebPushPublicKey() string {
 	return publicKey
 }
 
+func (ns *NotificationService) GetWebPushConfigurationStatus() (bool, string) {
+	_, _, _, ok := ns.getWebPushConfig()
+	if !ok {
+		return false, "web push disabled: VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY must be configured"
+	}
+	return true, "configured"
+}
+
+func (ns *NotificationService) CountWebPushSubscriptions(userID string) (int64, error) {
+	var count int64
+	if err := ns.db.Model(&models.WebPushSubscription{}).
+		Where("user_id = ?", userID).
+		Count(&count).Error; err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
 func (ns *NotificationService) UpsertWebPushSubscription(
 	userID string,
 	endpoint string,

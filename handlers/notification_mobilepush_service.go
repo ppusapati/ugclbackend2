@@ -24,6 +24,14 @@ var (
 	mobilePushUnavailableLog sync.Once
 )
 
+func (ns *NotificationService) GetMobilePushConfigurationStatus() (bool, string) {
+	_, err := ns.getFirebaseMessagingClient()
+	if err != nil {
+		return false, err.Error()
+	}
+	return true, "configured"
+}
+
 func (ns *NotificationService) getFirebaseMessagingClient() (*messaging.Client, error) {
 	firebaseMessagingOnce.Do(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
@@ -293,6 +301,10 @@ func (ns *NotificationService) SendMobilePushToUser(
 }
 
 func (ns *NotificationService) SendTestMobilePushToUser(userID, title, body, actionURL string) (int64, error) {
+	if _, err := ns.getFirebaseMessagingClient(); err != nil {
+		return 0, err
+	}
+
 	count, err := ns.CountActiveMobilePushTokens(userID)
 	if err != nil {
 		return 0, err

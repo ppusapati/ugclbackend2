@@ -131,21 +131,68 @@ func buildReportFormViewSQL(form models.AppForm, viewName string) (string, error
 		`fs.form_data`,
 	}
 
+	normalizeColumnName := func(value string) string {
+		name := strings.TrimSpace(value)
+		if name == "" {
+			return ""
+		}
+		name = strings.ToLower(name)
+		name = strings.ReplaceAll(name, " ", "_")
+		name = strings.ReplaceAll(name, "-", "_")
+		return name
+	}
+
 	seen := make(map[string]struct{})
+	appendProjectedColumn := func(alias string, candidateKeys ...string) {
+		alias = normalizeColumnName(alias)
+		if alias == "" || !sqlIdentifierPattern.MatchString(alias) {
+			return
+		}
+		if _, exists := seen[alias]; exists {
+			return
+		}
+
+		exprs := make([]string, 0, len(candidateKeys))
+		seenKeys := make(map[string]struct{})
+		for _, key := range candidateKeys {
+			key = strings.TrimSpace(key)
+			if key == "" {
+				continue
+			}
+			if _, exists := seenKeys[key]; exists {
+				continue
+			}
+			seenKeys[key] = struct{}{}
+			exprs = append(exprs, fmt.Sprintf(`fs.form_data->>'%s'`, escapeSQLLiteral(key)))
+		}
+		if len(exprs) == 0 {
+			return
+		}
+
+		seen[alias] = struct{}{}
+		if len(exprs) == 1 {
+			selectedColumns = append(selectedColumns,
+				fmt.Sprintf(`%s AS %s`, exprs[0], quoteSQLIdentifier(alias)),
+			)
+			return
+		}
+
+		selectedColumns = append(selectedColumns,
+			fmt.Sprintf(`COALESCE(%s) AS %s`, strings.Join(exprs, ", "), quoteSQLIdentifier(alias)),
+		)
+	}
+
 	for _, field := range buildFormFieldList(form) {
 		fieldID, _ := field["id"].(string)
 		fieldID = strings.TrimSpace(fieldID)
-		if !formFieldIDPattern.MatchString(fieldID) {
-			continue
-		}
-		if _, exists := seen[fieldID]; exists {
-			continue
-		}
-		seen[fieldID] = struct{}{}
+		fieldName, _ := field["name"].(string)
+		fieldName = normalizeColumnName(fieldName)
 
-		selectedColumns = append(selectedColumns,
-			fmt.Sprintf(`fs.form_data->>'%s' AS "%s"`, fieldID, fieldID),
-		)
+		// Support both naming schemes:
+		// 1) legacy auto-generated field ids like field_1775802520595
+		// 2) semantic schema names like end_time used by dedicated form tables and existing reports
+		appendProjectedColumn(fieldID, fieldID, fieldName)
+		appendProjectedColumn(fieldName, fieldName, fieldID)
 	}
 
 	return fmt.Sprintf(`CREATE OR REPLACE VIEW public.%s AS
