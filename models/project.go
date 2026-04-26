@@ -147,6 +147,7 @@ func (Node) TableName() string {
 type Tasks struct {
 	ID          uuid.UUID `gorm:"type:uuid;primary_key;default:gen_random_uuid()" json:"id"`
 	Code        string    `gorm:"size:50;uniqueIndex;not null" json:"code"`
+	Label       string    `gorm:"size:255;not null;default:''" json:"label"`
 	Title       string    `gorm:"size:255;not null" json:"title"`
 	Description string    `gorm:"type:text" json:"description,omitempty"`
 

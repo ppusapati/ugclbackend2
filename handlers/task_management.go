@@ -123,9 +123,15 @@ func (h *TaskHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
 	// Prepare metadata
 	metadataJSON, _ := json.Marshal(req.Metadata)
 
+	taskLabel := strings.TrimSpace(req.Title)
+	if taskLabel == "" {
+		taskLabel = strings.TrimSpace(req.Code)
+	}
+
 	// Create task
 	task := models.Tasks{
 		Code:             req.Code,
+		Label:            taskLabel,
 		Title:            req.Title,
 		Description:      req.Description,
 		ProjectID:        req.ProjectID,

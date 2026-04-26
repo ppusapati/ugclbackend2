@@ -74,6 +74,7 @@ type Folder struct {
 	Name       string      `xml:"name"`
 	Placemarks []Placemark `xml:"Placemark"`
 	Folders    []Folder    `xml:"Folder"`
+	Documents  []Document  `xml:"Document"`
 }
 
 type Document struct {
@@ -81,11 +82,13 @@ type Document struct {
 	Name       string      `xml:"name"`
 	Placemarks []Placemark `xml:"Placemark"`
 	Folders    []Folder    `xml:"Folder"`
+	Documents  []Document  `xml:"Document"`
 }
 
 type KML struct {
-	XMLName  xml.Name `xml:"kml"`
-	Document Document `xml:"Document"`
+	XMLName   xml.Name   `xml:"kml"`
+	Documents []Document `xml:"Document"`
+	Folders   []Folder   `xml:"Folder"`
 }
 
 // KMZParser handles KMZ file parsing
@@ -308,6 +311,34 @@ func (p *KMZParser) ProcessFolder(folder *Folder) []*geojson.Feature {
 		features = append(features, subFeatures...)
 	}
 
+	// Process documents nested inside this folder
+	for _, doc := range folder.Documents {
+		docFeatures := p.ProcessDocument(&doc)
+		features = append(features, docFeatures...)
+	}
+
+	return features
+}
+
+// ProcessDocument recursively processes a KML document.
+func (p *KMZParser) ProcessDocument(doc *Document) []*geojson.Feature {
+	features := []*geojson.Feature{}
+
+	for _, pm := range doc.Placemarks {
+		pmFeatures := p.ConvertPlacemarkToGeoJSON(&pm)
+		features = append(features, pmFeatures...)
+	}
+
+	for _, folder := range doc.Folders {
+		folderFeatures := p.ProcessFolder(&folder)
+		features = append(features, folderFeatures...)
+	}
+
+	for _, nestedDoc := range doc.Documents {
+		nestedFeatures := p.ProcessDocument(&nestedDoc)
+		features = append(features, nestedFeatures...)
+	}
+
 	return features
 }
 
@@ -328,16 +359,14 @@ func (p *KMZParser) ParseKMZToGeoJSON(kmzData []byte) (*geojson.FeatureCollectio
 	// Convert to GeoJSON
 	fc := geojson.NewFeatureCollection()
 
-	// Process document-level placemarks
-	for _, pm := range kml.Document.Placemarks {
-		features := p.ConvertPlacemarkToGeoJSON(&pm)
-		fc.Features = append(fc.Features, features...)
+	// Process top-level documents
+	for _, doc := range kml.Documents {
+		fc.Features = append(fc.Features, p.ProcessDocument(&doc)...)
 	}
 
-	// Process folders
-	for _, folder := range kml.Document.Folders {
-		features := p.ProcessFolder(&folder)
-		fc.Features = append(fc.Features, features...)
+	// Process top-level folders (common in Google Earth exports)
+	for _, folder := range kml.Folders {
+		fc.Features = append(fc.Features, p.ProcessFolder(&folder)...)
 	}
 
 	return fc, nil

@@ -95,52 +95,52 @@ func RegisterProjectRoutes(r *mux.Router) {
 	// Task Management Routes
 	// =====================================================
 
-	// Tasks
-	r.Handle("/api/v1/tasks", middleware.RequirePermission("task:create")(
+	// Tasks (project management domain)
+	r.Handle("/project-tasks", middleware.RequirePermission("task:create")(
 		http.HandlerFunc(taskHandler.CreateTask))).Methods("POST")
-	r.Handle("/api/v1/tasks", middleware.RequirePermission("task:read")(
+	r.Handle("/project-tasks", middleware.RequirePermission("task:read")(
 		http.HandlerFunc(taskHandler.ListTasks))).Methods("GET")
-	r.Handle("/api/v1/tasks/{id}", middleware.RequirePermission("task:read")(
+	r.Handle("/project-tasks/{id}", middleware.RequirePermission("task:read")(
 		http.HandlerFunc(taskHandler.GetTask))).Methods("GET")
-	r.Handle("/api/v1/tasks/{id}", middleware.RequirePermission("task:update")(
+	r.Handle("/project-tasks/{id}", middleware.RequirePermission("task:update")(
 		http.HandlerFunc(taskHandler.UpdateTask))).Methods("PUT")
 
 	// Task Assignment
-	r.Handle("/api/v1/tasks/{id}/assign", middleware.RequirePermission("task:assign")(
+	r.Handle("/project-tasks/{id}/assign", middleware.RequirePermission("task:assign")(
 		http.HandlerFunc(taskHandler.AssignTask))).Methods("POST")
 
 	// Task Status
-	r.Handle("/api/v1/tasks/{id}/status", middleware.RequirePermission("task:update")(
+	r.Handle("/project-tasks/{id}/status", middleware.RequirePermission("task:update")(
 		http.HandlerFunc(taskHandler.UpdateTaskStatus))).Methods("PUT")
 
 	// Task Comments
-	r.Handle("/api/v1/tasks/{id}/comments", middleware.RequirePermission("task:comment")(
+	r.Handle("/project-tasks/{id}/comments", middleware.RequirePermission("task:comment")(
 		http.HandlerFunc(taskHandler.AddTaskComment))).Methods("POST")
-	r.Handle("/api/v1/tasks/{id}/comments", middleware.RequirePermission("task:read")(
+	r.Handle("/project-tasks/{id}/comments", middleware.RequirePermission("task:read")(
 		http.HandlerFunc(taskHandler.GetTaskComments))).Methods("GET")
-	r.Handle("/api/v1/tasks/{id}/attachments", middleware.RequirePermission("task:update")(
+	r.Handle("/project-tasks/{id}/attachments", middleware.RequirePermission("task:update")(
 		http.HandlerFunc(taskHandler.AddTaskAttachment))).Methods("POST")
-	r.Handle("/api/v1/tasks/{id}/attachments", middleware.RequirePermission("task:read")(
+	r.Handle("/project-tasks/{id}/attachments", middleware.RequirePermission("task:read")(
 		http.HandlerFunc(taskHandler.GetTaskAttachments))).Methods("GET")
 
 	// Task Audit Log
-	r.Handle("/api/v1/tasks/{id}/audit", middleware.RequirePermission("task:read")(
+	r.Handle("/project-tasks/{id}/audit", middleware.RequirePermission("task:read")(
 		http.HandlerFunc(taskHandler.GetTaskAuditLog))).Methods("GET")
 
 	// Workflow Actions
-	r.Handle("/api/v1/tasks/{id}/submit", middleware.RequirePermission("task:submit")(
+	r.Handle("/project-tasks/{id}/submit", middleware.RequirePermission("task:submit")(
 		http.HandlerFunc(workflowHandler.SubmitTaskForApproval))).Methods("POST")
-	r.Handle("/api/v1/tasks/{id}/approve", middleware.RequirePermission("task:approve")(
+	r.Handle("/project-tasks/{id}/approve", middleware.RequirePermission("task:approve")(
 		http.HandlerFunc(workflowHandler.ApproveTask))).Methods("POST")
-	r.Handle("/api/v1/tasks/{id}/reject", middleware.RequirePermission("task:approve")(
+	r.Handle("/project-tasks/{id}/reject", middleware.RequirePermission("task:approve")(
 		http.HandlerFunc(workflowHandler.RejectTask))).Methods("POST")
-	r.Handle("/api/v1/tasks/{id}/complete", middleware.RequirePermission("task:execute")(
+	r.Handle("/project-tasks/{id}/complete", middleware.RequirePermission("task:execute")(
 		http.HandlerFunc(workflowHandler.CompleteTask))).Methods("POST")
-	r.Handle("/api/v1/tasks/{id}/workflow/history", middleware.RequirePermission("task:read")(
+	r.Handle("/project-tasks/{id}/workflow/history", middleware.RequirePermission("task:read")(
 		http.HandlerFunc(workflowHandler.GetTaskWorkflowHistory))).Methods("GET")
-	r.Handle("/api/v1/tasks/{id}/workflow/actions", middleware.RequirePermission("task:read")(
+	r.Handle("/project-tasks/{id}/workflow/actions", middleware.RequirePermission("task:read")(
 		http.HandlerFunc(workflowHandler.GetAvailableTaskActions))).Methods("GET")
-	r.Handle("/api/v1/tasks/{id}/workflow", middleware.RequirePermission("task:update")(
+	r.Handle("/project-tasks/{id}/workflow", middleware.RequirePermission("task:update")(
 		http.HandlerFunc(workflowHandler.AssignWorkflowToTask))).Methods("POST")
 
 	// =====================================================

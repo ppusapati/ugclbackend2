@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"p9e.in/ugcl/config"
@@ -16,6 +17,19 @@ import (
 	"github.com/gorilla/mux"
 	"gorm.io/gorm"
 )
+
+func sanitizeText(input string, maxLen int, fallback string) string {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		trimmed = fallback
+	}
+
+	if len(trimmed) > maxLen {
+		return trimmed[:maxLen]
+	}
+
+	return trimmed
+}
 
 // ProjectHandler handles project management operations
 type ProjectHandler struct {
@@ -170,29 +184,57 @@ func (h *ProjectHandler) UploadKMZ(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Re-upload safety: clear existing extracted map data for this project.
+	if err := tx.Where("project_id = ?", project.ID).Delete(&models.Node{}).Error; err != nil {
+		tx.Rollback()
+		log.Printf("❌ Failed to clear existing nodes: %v", err)
+		http.Error(w, "Failed to replace existing map nodes", http.StatusInternalServerError)
+		return
+	}
+
+	if err := tx.Where("project_id = ?", project.ID).Delete(&models.Zone{}).Error; err != nil {
+		tx.Rollback()
+		log.Printf("❌ Failed to clear existing zones: %v", err)
+		http.Error(w, "Failed to replace existing map zones", http.StatusInternalServerError)
+		return
+	}
+
 	// Create zones
 	zoneMap := make(map[string]uuid.UUID) // name -> zone ID
+	seenZoneNames := make(map[string]bool)
 	for _, zoneData := range parsedData.Zones {
 		zoneGeoJSON, _ := json.Marshal(zoneData.GeoJSON)
 		zoneProps, _ := json.Marshal(zoneData.Properties)
 
+		zoneName := sanitizeText(zoneData.Name, 255, "Unnamed Zone")
+		zoneKey := strings.ToLower(zoneName)
+		if seenZoneNames[zoneKey] {
+			continue
+		}
+		seenZoneNames[zoneKey] = true
+
+		zoneCode := sanitizeText(zoneData.Code, 50, "")
+		zoneLabel := sanitizeText(zoneData.Label, 255, "")
+
 		zone := models.Zone{
 			ProjectID:  project.ID,
-			Name:       zoneData.Name,
-			Code:       zoneData.Code,
-			Label:      zoneData.Label,
+			Name:       zoneName,
+			Code:       zoneCode,
+			Label:      zoneLabel,
 			GeoJSON:    json.RawMessage(zoneGeoJSON),
 			Properties: json.RawMessage(zoneProps),
 		}
 
-		if err := tx.Create(&zone).Error; err != nil {
+		// Geometry/Centroid columns are PostGIS-typed; omit them here because this pipeline stores raw GeoJSON.
+		if err := tx.Omit("Geometry", "Centroid", "Area").Create(&zone).Error; err != nil {
 			tx.Rollback()
 			log.Printf("❌ Failed to create zone: %v", err)
-			http.Error(w, "Failed to create zones", http.StatusInternalServerError)
+			http.Error(w, fmt.Sprintf("Failed to create zones: %v", err), http.StatusInternalServerError)
 			return
 		}
 
 		zoneMap[zoneData.Name] = zone.ID
+		zoneMap[zoneName] = zone.ID
 	}
 
 	// Create nodes
