@@ -340,6 +340,7 @@ func GetFormTableFields(w http.ResponseWriter, r *http.Request) {
 			field["column_name"] = id
 			formFields = append(formFields, field)
 		}
+		formFields = append(formFields, inferMissingFormFieldsFromSubmissions(form.ID, formFields)...)
 		fmt.Printf("[REPORT BUILDER] Loaded %d form fields for %s\n", len(formFields), form.Code)
 		formTitle = form.Title
 	}
@@ -366,15 +367,145 @@ func GetFormTableFields(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func inferMissingFormFieldsFromSubmissions(formID uuid.UUID, existingFields []map[string]interface{}) []map[string]interface{} {
+	seen := make(map[string]struct{}, len(existingFields))
+	for _, field := range existingFields {
+		id, _ := field["id"].(string)
+		if id != "" {
+			seen[id] = struct{}{}
+		}
+	}
+
+	var submissions []models.FormSubmission
+	if err := config.DB.
+		Where("form_id = ?", formID).
+		Order("submitted_at DESC").
+		Limit(100).
+		Find(&submissions).Error; err != nil {
+		return nil
+	}
+
+	baseFields := map[string]struct{}{
+		"id": {}, "created_by": {}, "created_at": {}, "updated_by": {}, "updated_at": {}, "deleted_by": {}, "deleted_at": {},
+		"business_vertical_id": {}, "site_id": {}, "workflow_id": {}, "current_state": {}, "form_id": {}, "form_code": {},
+	}
+
+	missingFields := make([]map[string]interface{}, 0)
+	for _, submission := range submissions {
+		var formData map[string]interface{}
+		if err := json.Unmarshal(submission.FormData, &formData); err != nil {
+			continue
+		}
+
+		for key, value := range formData {
+			if key == "" {
+				continue
+			}
+			if _, skip := baseFields[key]; skip {
+				continue
+			}
+			if _, exists := seen[key]; exists {
+				continue
+			}
+
+			fieldType := inferReportFieldTypeFromValue(value)
+			missingFields = append(missingFields, map[string]interface{}{
+				"id":          key,
+				"column_name": key,
+				"label":       humanizeReportFieldLabel(key),
+				"source":      "submission_inferred",
+				"type":        fieldType,
+				"dataType":    fieldType,
+			})
+			seen[key] = struct{}{}
+		}
+	}
+
+	return missingFields
+}
+
+func inferReportFieldTypeFromValue(value interface{}) string {
+	switch v := value.(type) {
+	case bool:
+		return "checkbox"
+	case int, int8, int16, int32, int64, float32, float64:
+		return "number"
+	case string:
+		trimmed := strings.TrimSpace(v)
+		if trimmed == "" {
+			return "text"
+		}
+		if len(trimmed) == 10 && trimmed[4] == '-' && trimmed[7] == '-' {
+			return "date"
+		}
+		if strings.Contains(trimmed, "T") && strings.Contains(trimmed, ":") {
+			return "datetime"
+		}
+		return "text"
+	case []interface{}, map[string]interface{}:
+		return "json"
+	default:
+		return "text"
+	}
+}
+
+func humanizeReportFieldLabel(value string) string {
+	parts := strings.Fields(strings.ReplaceAll(strings.ReplaceAll(strings.TrimSpace(value), "_", " "), "-", " "))
+	for index, part := range parts {
+		if part == "" {
+			continue
+		}
+		parts[index] = strings.ToUpper(part[:1]) + strings.ToLower(part[1:])
+	}
+	return strings.Join(parts, " ")
+}
+
 func buildFormFieldList(form models.AppForm) []map[string]interface{} {
 	fieldList := []map[string]interface{}{}
 	seen := make(map[string]struct{})
+	appendNestedFields := func(field map[string]interface{}, source string, visit func(map[string]interface{}, string)) {
+		for _, key := range []string{"fields", "children", "sections", "components"} {
+			rawItems, ok := field[key].([]interface{})
+			if !ok {
+				continue
+			}
+			for _, rawItem := range rawItems {
+				child, ok := rawItem.(map[string]interface{})
+				if ok {
+					visit(child, source)
+				}
+			}
+		}
+
+		rawColumns, ok := field["columns"].([]interface{})
+		if !ok {
+			return
+		}
+		for _, rawColumn := range rawColumns {
+			column, ok := rawColumn.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if childFields, ok := column["fields"].([]interface{}); ok {
+				for _, rawChildField := range childFields {
+					childField, ok := rawChildField.(map[string]interface{})
+					if ok {
+						visit(childField, source)
+					}
+				}
+			}
+		}
+	}
+
+	var visitField func(map[string]interface{}, string)
 	appendField := func(field map[string]interface{}, source string) {
 		id, _ := field["id"].(string)
 		if id == "" {
+			appendNestedFields(field, source, visitField)
 			return
 		}
 		if _, exists := seen[id]; exists {
+			appendNestedFields(field, source, visitField)
 			return
 		}
 		seen[id] = struct{}{}
@@ -391,7 +522,9 @@ func buildFormFieldList(form models.AppForm) []map[string]interface{} {
 			entry["name"] = name
 		}
 		fieldList = append(fieldList, entry)
+		appendNestedFields(field, source, visitField)
 	}
+	visitField = appendField
 
 	var formSchema map[string]interface{}
 	if len(form.FormSchema) > 0 && string(form.FormSchema) != "{}" {
@@ -459,11 +592,71 @@ func buildFormFieldMap(form models.AppForm) map[string]map[string]interface{} {
 	return fieldMap
 }
 
-// GetAvailableFormTables retrieves all form tables available for reporting
+// GetAvailableFormTables retrieves all form tables available for reporting.
+// Optional query params:
+//   - module_id: restrict to a single module UUID
+//   - business_vertical_id / vertical_id: restrict by form accessible_verticals tokens (UUID/code)
 func GetAvailableFormTables(w http.ResponseWriter, r *http.Request) {
+	moduleID := strings.TrimSpace(r.URL.Query().Get("module_id"))
+	verticalToken := strings.TrimSpace(r.URL.Query().Get("business_vertical_id"))
+	if verticalToken == "" {
+		verticalToken = strings.TrimSpace(r.URL.Query().Get("vertical_id"))
+	}
+
+	query := config.DB.Model(&models.AppForm{}).Where("is_active = ?", true)
+
+	if moduleID != "" {
+		moduleUUID, err := uuid.Parse(moduleID)
+		if err != nil {
+			http.Error(w, "invalid module_id", http.StatusBadRequest)
+			return
+		}
+		query = query.Where("module_id = ?", moduleUUID)
+	}
+
+	if verticalToken != "" {
+		candidateTokens := map[string]struct{}{
+			verticalToken:                  {},
+			strings.ToUpper(verticalToken): {},
+		}
+
+		if verticalUUID, err := uuid.Parse(verticalToken); err == nil {
+			var matched models.BusinessVertical
+			if err := config.DB.Select("id", "code").Where("id = ?", verticalUUID).First(&matched).Error; err == nil {
+				candidateTokens[matched.ID.String()] = struct{}{}
+				if strings.TrimSpace(matched.Code) != "" {
+					candidateTokens[matched.Code] = struct{}{}
+					candidateTokens[strings.ToUpper(matched.Code)] = struct{}{}
+				}
+			}
+		} else {
+			var matched []models.BusinessVertical
+			if err := config.DB.Select("id", "code").Where("LOWER(code) = LOWER(?)", verticalToken).Find(&matched).Error; err == nil {
+				for _, v := range matched {
+					candidateTokens[v.ID.String()] = struct{}{}
+					if strings.TrimSpace(v.Code) != "" {
+						candidateTokens[v.Code] = struct{}{}
+						candidateTokens[strings.ToUpper(v.Code)] = struct{}{}
+					}
+				}
+			}
+		}
+
+		filterConditions := []string{"accessible_verticals = '[]'::jsonb"}
+		filterArgs := make([]interface{}, 0, len(candidateTokens))
+		for token := range candidateTokens {
+			if strings.TrimSpace(token) == "" {
+				continue
+			}
+			filterConditions = append(filterConditions, "accessible_verticals @> ?")
+			filterArgs = append(filterArgs, `["`+token+`"]`)
+		}
+		query = query.Where(strings.Join(filterConditions, " OR "), filterArgs...)
+	}
+
 	var forms []models.AppForm
-	if err := config.DB.Where("is_active = ?", true).
-		Select("id", "code", "title", "db_table_name", "module_id", "form_schema", "steps", "core_fields").
+	if err := query.
+		Select("id", "code", "title", "db_table_name", "module_id", "accessible_verticals", "form_schema", "steps", "core_fields").
 		Find(&forms).Error; err != nil {
 		http.Error(w, "Failed to fetch forms", http.StatusInternalServerError)
 		return
@@ -482,12 +675,13 @@ func GetAvailableFormTables(w http.ResponseWriter, r *http.Request) {
 			"form_title": form.Title,
 			// table_name is the identifier used to call GetFormTableFields.
 			// We use form.Code so the fields API can always find the form regardless of db_table_name.
-			"table_name":  form.Code,
-			"schema_name": "",
-			"module_id":   form.ModuleID,
+			"table_name":           form.Code,
+			"schema_name":          "",
+			"module_id":            form.ModuleID,
+			"accessible_verticals": form.AccessibleVerticals,
 		})
 	}
-	fmt.Printf("[REPORT BUILDER] available forms=%d\n", len(tables))
+	fmt.Printf("[REPORT BUILDER] available forms=%d (module_id=%s, vertical=%s)\n", len(tables), moduleID, verticalToken)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"tables": tables,

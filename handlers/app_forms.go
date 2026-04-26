@@ -104,7 +104,10 @@ func GetFormsForVertical(w http.ResponseWriter, r *http.Request) {
 
 	// Get the user to check permissions
 	var user models.User
-	if err := config.DB.Preload("RoleModel.Permissions").
+	if err := config.DB.
+		Preload("RoleModel.Permissions").
+		Preload("UserBusinessRoles.BusinessRole.Permissions").
+		Preload("UserBusinessRoles.BusinessRole.BusinessVertical").
 		First(&user, "id = ?", claims.UserID).Error; err != nil {
 		http.Error(w, "user not found", http.StatusUnauthorized)
 		return
@@ -125,6 +128,8 @@ func GetFormsForVertical(w http.ResponseWriter, r *http.Request) {
 		candidateTokens[v.Code] = struct{}{}
 		candidateTokens[v.ID.String()] = struct{}{}
 	}
+
+	requestedVertical := strings.ToLower(strings.TrimSpace(verticalCode))
 
 	// Mobile clients (Dart/Flutter) must never see inactive forms — users cannot
 	// activate forms from mobile and inactive forms break the mobile UX.
@@ -168,9 +173,53 @@ func GetFormsForVertical(w http.ResponseWriter, r *http.Request) {
 	formDTOs := make([]models.AppFormDTO, 0, len(forms))
 	moduleMap := make(map[string][]models.AppFormDTO)
 
+	// Build a set of vertical UUIDs matched for this request (used for business-role permission check).
+	matchedVerticalIDSet := make(map[uuid.UUID]struct{}, len(matchedVerticals)+len(user.UserBusinessRoles))
+	for _, v := range matchedVerticals {
+		matchedVerticalIDSet[v.ID] = struct{}{}
+	}
+
+	// Fallback: derive vertical mapping from user's business roles when DB code lookup misses.
+	for _, ubr := range user.UserBusinessRoles {
+		if !ubr.IsActive || ubr.BusinessRole.ID == uuid.Nil {
+			continue
+		}
+
+		roleVerticalID := strings.ToLower(strings.TrimSpace(ubr.BusinessRole.BusinessVerticalID.String()))
+		roleVerticalCode := strings.ToLower(strings.TrimSpace(ubr.BusinessRole.BusinessVertical.Code))
+
+		if requestedVertical == roleVerticalID || requestedVertical == roleVerticalCode {
+			matchedVerticalIDSet[ubr.BusinessRole.BusinessVerticalID] = struct{}{}
+			candidateTokens[ubr.BusinessRole.BusinessVerticalID.String()] = struct{}{}
+			if strings.TrimSpace(ubr.BusinessRole.BusinessVertical.Code) != "" {
+				candidateTokens[ubr.BusinessRole.BusinessVertical.Code] = struct{}{}
+				candidateTokens[strings.ToUpper(ubr.BusinessRole.BusinessVertical.Code)] = struct{}{}
+			}
+		}
+	}
+
+	matchedVerticalIDs := make([]uuid.UUID, 0, len(matchedVerticalIDSet))
+	for vid := range matchedVerticalIDSet {
+		matchedVerticalIDs = append(matchedVerticalIDs, vid)
+	}
+
+	// userCanAccess returns true if the user holds the required permission via
+	// their global role OR via any business role in one of the matched verticals.
+	userCanAccess := func(permission string) bool {
+		if user.HasPermission(permission) {
+			return true
+		}
+		for _, vid := range matchedVerticalIDs {
+			if user.HasPermissionInVertical(permission, vid) {
+				return true
+			}
+		}
+		return false
+	}
+
 	for _, form := range forms {
-		// Check if user has required permission
-		if form.RequiredPermission != "" && !user.HasPermission(form.RequiredPermission) {
+		// Check if user has required permission (global role OR business role in this vertical)
+		if form.RequiredPermission != "" && !userCanAccess(form.RequiredPermission) {
 			log.Printf("   ⊘ Skipping form %s - user lacks permission %s", form.Code, form.RequiredPermission)
 			continue
 		}
@@ -230,7 +279,10 @@ func GetFormByCode(w http.ResponseWriter, r *http.Request) {
 
 	// Get the user to check permissions
 	var user models.User
-	if err := config.DB.Preload("RoleModel.Permissions").
+	if err := config.DB.
+		Preload("RoleModel.Permissions").
+		Preload("UserBusinessRoles.BusinessRole.Permissions").
+		Preload("UserBusinessRoles.BusinessRole.BusinessVertical").
 		First(&user, "id = ?", claims.UserID).Error; err != nil {
 		http.Error(w, "user not found", http.StatusUnauthorized)
 		return
@@ -248,11 +300,40 @@ func GetFormByCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check permission
-	if form.RequiredPermission != "" && !user.HasPermission(form.RequiredPermission) {
-		log.Printf("❌ User lacks permission %s for form %s", form.RequiredPermission, formCode)
-		http.Error(w, "forbidden - insufficient permissions", http.StatusForbidden)
-		return
+	// Check permission — allow via global role OR any business role in this vertical
+	if form.RequiredPermission != "" {
+		var verticalForForm []models.BusinessVertical
+		_ = config.DB.Where("LOWER(code) = LOWER(?)", verticalCode).Find(&verticalForForm)
+		requestedVertical := strings.ToLower(strings.TrimSpace(verticalCode))
+		verticalIDSet := make(map[uuid.UUID]struct{}, len(verticalForForm)+len(user.UserBusinessRoles))
+		for _, v := range verticalForForm {
+			verticalIDSet[v.ID] = struct{}{}
+		}
+		for _, ubr := range user.UserBusinessRoles {
+			if !ubr.IsActive || ubr.BusinessRole.ID == uuid.Nil {
+				continue
+			}
+			roleVerticalID := strings.ToLower(strings.TrimSpace(ubr.BusinessRole.BusinessVerticalID.String()))
+			roleVerticalCode := strings.ToLower(strings.TrimSpace(ubr.BusinessRole.BusinessVertical.Code))
+			if requestedVertical == roleVerticalID || requestedVertical == roleVerticalCode {
+				verticalIDSet[ubr.BusinessRole.BusinessVerticalID] = struct{}{}
+			}
+		}
+
+		hasAccess := user.HasPermission(form.RequiredPermission)
+		if !hasAccess {
+			for vid := range verticalIDSet {
+				if user.HasPermissionInVertical(form.RequiredPermission, vid) {
+					hasAccess = true
+					break
+				}
+			}
+		}
+		if !hasAccess {
+			log.Printf("❌ User lacks permission %s for form %s", form.RequiredPermission, formCode)
+			http.Error(w, "forbidden - insufficient permissions", http.StatusForbidden)
+			return
+		}
 	}
 
 	// Return full form with schema
@@ -773,5 +854,39 @@ func UpdateForm(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"message": "form updated successfully",
 		"form":    existingForm.ToDTO(),
+	})
+}
+
+// DeleteForm permanently deletes a form (admin only)
+// DELETE /api/v1/admin/app-forms/{formCode}
+func DeleteForm(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetClaims(r)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	vars := mux.Vars(r)
+	formCode := vars["formCode"]
+
+	var form models.AppForm
+	if err := config.DB.Where("code = ?", formCode).First(&form).Error; err != nil {
+		http.Error(w, "form not found", http.StatusNotFound)
+		return
+	}
+
+	if err := config.DB.Delete(&form).Error; err != nil {
+		log.Printf("❌ Error deleting form %s: %v", formCode, err)
+		http.Error(w, "failed to delete form", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("✅ Deleted form: %s by %s", formCode, claims.UserID)
+	invalidateFormsCache()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"message":   "form deleted successfully",
+		"form_code": formCode,
 	})
 }

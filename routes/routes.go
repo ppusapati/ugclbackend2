@@ -3,13 +3,17 @@ package routes
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/mux"
+	"p9e.in/ugcl/config"
 	_ "p9e.in/ugcl/docs"
 	"p9e.in/ugcl/handlers"
 	kpi_handlers "p9e.in/ugcl/handlers/kpis"
 	"p9e.in/ugcl/handlers/masters"
 	"p9e.in/ugcl/middleware"
+	"p9e.in/ugcl/models"
 )
 
 // RegisterRoutes sets up all application routes
@@ -35,6 +39,7 @@ func RegisterRoutes() http.Handler {
 
 	// User profile endpoint
 	api.HandleFunc("/profile", handleProfile).Methods("GET")
+	api.HandleFunc("/profile", handleUpdateProfile).Methods("PUT")
 	api.HandleFunc("/context/business", handlers.GetActiveBusinessContext).Methods("GET")
 	api.HandleFunc("/context/business", handlers.SetActiveBusinessContext).Methods("PUT")
 
@@ -76,22 +81,178 @@ func RegisterRoutes() http.Handler {
 // handleProfile returns user profile information
 func handleProfile(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetClaims(r)
-	user := middleware.GetUser(r)
-	permissions := middleware.GetUserPermissions(r)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	authService := middleware.NewAuthService()
+	userCtx, err := authService.LoadUserContext(r)
+	if err != nil {
+		http.Error(w, "failed to load profile", http.StatusUnauthorized)
+		return
+	}
+
+	user := userCtx.User
+	permissions := middleware.GetEffectivePermissions(r)
 
 	var globalRoleName string
 	if user.RoleModel != nil {
 		globalRoleName = user.RoleModel.Name
 	}
 
-	response := map[string]interface{}{
-		"userID":      claims.UserID,
-		"name":        user.Name,
-		"phone":       user.Phone,
-		"role_id":     user.RoleID,
-		"global_role": globalRoleName,
-		"permissions": permissions,
+	businessRoles := make([]map[string]interface{}, 0)
+	for _, ubr := range user.UserBusinessRoles {
+		if !ubr.IsActive || ubr.BusinessRole.ID == uuid.Nil {
+			continue
+		}
+
+		rolePermissions := make([]string, 0, len(ubr.BusinessRole.Permissions))
+		isBusinessAdmin := false
+		for _, perm := range ubr.BusinessRole.Permissions {
+			rolePermissions = append(rolePermissions, perm.Name)
+			if perm.Name == "business_admin" || perm.Name == "*:*:*" {
+				isBusinessAdmin = true
+			}
+		}
+
+		businessRoles = append(businessRoles, map[string]interface{}{
+			"business_vertical_id":   ubr.BusinessRole.BusinessVerticalID,
+			"business_vertical_name": ubr.BusinessRole.BusinessVertical.Name,
+			"business_vertical_code": ubr.BusinessRole.BusinessVertical.Code,
+			"business_role_id":       ubr.BusinessRole.ID,
+			"business_role_name":     ubr.BusinessRole.Name,
+			"display_name":           ubr.BusinessRole.DisplayName,
+			"is_admin":               isBusinessAdmin,
+			"permissions":            rolePermissions,
+		})
 	}
+
+	accessScope := "global/basic"
+	if userCtx.IsSuperAdmin {
+		accessScope = "all_business_verticals"
+	} else if len(businessRoles) > 0 {
+		accessScope = "business_roles"
+	}
+
+	userID, parseErr := uuid.Parse(claims.UserID)
+	if parseErr != nil {
+		http.Error(w, "invalid user id", http.StatusBadRequest)
+		return
+	}
+
+	var loginEvents []models.UserLoginEvent
+	if err := config.DB.
+		Where("user_id = ?", userID).
+		Order("login_at DESC").
+		Limit(5).
+		Find(&loginEvents).Error; err != nil {
+		http.Error(w, "failed to load login history", http.StatusInternalServerError)
+		return
+	}
+
+	recentLogins := make([]map[string]interface{}, 0, len(loginEvents))
+	for _, evt := range loginEvents {
+		recentLogins = append(recentLogins, map[string]interface{}{
+			"id":         evt.ID,
+			"timestamp":  evt.LoginAt,
+			"ip_address": evt.IPAddress,
+			"user_agent": evt.UserAgent,
+			"status":     "success",
+		})
+	}
+
+	response := map[string]interface{}{
+		"userID":           claims.UserID,
+		"name":             user.Name,
+		"email":            user.Email,
+		"phone":            user.Phone,
+		"role_id":          user.RoleID,
+		"global_role":      globalRoleName,
+		"is_super_admin":   userCtx.IsSuperAdmin,
+		"is_active":        user.IsActive,
+		"created_at":       user.CreatedAt,
+		"updated_at":       user.UpdatedAt,
+		"permissions":      permissions,
+		"business_roles":   businessRoles,
+		"access_scope":     accessScope,
+		"permission_count": len(permissions),
+		"recent_logins":    recentLogins,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+type updateProfileRequest struct {
+	Name  string `json:"name"`
+	Email string `json:"email"`
+	Phone string `json:"phone"`
+}
+
+func handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetClaims(r)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	userID, err := uuid.Parse(claims.UserID)
+	if err != nil {
+		http.Error(w, "invalid user id", http.StatusBadRequest)
+		return
+	}
+
+	var req updateProfileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	req.Name = strings.TrimSpace(req.Name)
+	req.Email = strings.TrimSpace(req.Email)
+	req.Phone = strings.TrimSpace(req.Phone)
+
+	if req.Name == "" {
+		http.Error(w, "name is required", http.StatusBadRequest)
+		return
+	}
+	if req.Email == "" {
+		http.Error(w, "email is required", http.StatusBadRequest)
+		return
+	}
+	if req.Phone == "" {
+		http.Error(w, "phone is required", http.StatusBadRequest)
+		return
+	}
+
+	var user models.User
+	if err := config.DB.First(&user, "id = ?", userID).Error; err != nil {
+		http.Error(w, "user not found", http.StatusNotFound)
+		return
+	}
+
+	user.Name = req.Name
+	user.Email = req.Email
+	user.Phone = req.Phone
+
+	if err := config.DB.Save(&user).Error; err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "duplicate") {
+			http.Error(w, "email or phone already in use", http.StatusConflict)
+			return
+		}
+		http.Error(w, "failed to update profile", http.StatusInternalServerError)
+		return
+	}
+
+	middleware.InvalidateUserCache(userID.String())
+
+	response := map[string]interface{}{
+		"id":    user.ID,
+		"name":  user.Name,
+		"email": user.Email,
+		"phone": user.Phone,
+	}
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
 
@@ -327,6 +488,10 @@ func registerAdminRoutes(admin *mux.Router) {
 	// Module management
 	admin.Handle("/masters/modules", middleware.RequirePermission("masters:module:create")(
 		http.HandlerFunc(masters.CreateModule))).Methods("POST")
+	admin.Handle("/masters/modules/{id}", middleware.RequirePermission("masters:module:update")(
+		http.HandlerFunc(masters.UpdateModule))).Methods("PUT")
+	admin.Handle("/masters/modules/{id}", middleware.RequirePermission("masters:module:delete")(
+		http.HandlerFunc(masters.DeleteModule))).Methods("DELETE")
 
 	// User management
 	admin.Handle("/users", middleware.RequirePermission("read_users")(

@@ -29,10 +29,11 @@ const (
 type NotificationChannel string
 
 const (
-	NotificationChannelInApp   NotificationChannel = "in_app"
-	NotificationChannelEmail   NotificationChannel = "email"
-	NotificationChannelSMS     NotificationChannel = "sms"
-	NotificationChannelWebPush NotificationChannel = "web_push"
+	NotificationChannelInApp      NotificationChannel = "in_app"
+	NotificationChannelEmail      NotificationChannel = "email"
+	NotificationChannelSMS        NotificationChannel = "sms"
+	NotificationChannelWebPush    NotificationChannel = "web_push"
+	NotificationChannelMobilePush NotificationChannel = "mobile_push"
 )
 
 // NotificationStatus defines the status of a notification
@@ -58,22 +59,22 @@ const (
 
 // NotificationRecipient represents who should receive the notification
 type NotificationRecipient struct {
-	ID                 uuid.UUID  `gorm:"type:uuid;primary_key;default:gen_random_uuid()" json:"id"`
-	NotificationRuleID uuid.UUID  `gorm:"type:uuid;not null;index" json:"notification_rule_id"`
+	ID                 uuid.UUID `gorm:"type:uuid;primary_key;default:gen_random_uuid()" json:"id"`
+	NotificationRuleID uuid.UUID `gorm:"type:uuid;not null;index" json:"notification_rule_id"`
 
 	// Multi-level targeting
-	UserID             *string    `gorm:"size:255;index" json:"user_id,omitempty"`                    // Specific user
-	RoleID             *uuid.UUID `gorm:"type:uuid;index" json:"role_id,omitempty"`                   // Global role
-	BusinessRoleID     *uuid.UUID `gorm:"type:uuid;index" json:"business_role_id,omitempty"`          // Business-specific role
-	PermissionCode     *string    `gorm:"size:100;index" json:"permission_code,omitempty"`            // Users with permission
-	AttributeCondition JSONMap    `gorm:"type:jsonb" json:"attribute_condition,omitempty"`            // ABAC condition
-	PolicyID           *uuid.UUID `gorm:"type:uuid;index" json:"policy_id,omitempty"`                 // PBAC policy
+	UserID             *string    `gorm:"size:255;index" json:"user_id,omitempty"`           // Specific user
+	RoleID             *uuid.UUID `gorm:"type:uuid;index" json:"role_id,omitempty"`          // Global role
+	BusinessRoleID     *uuid.UUID `gorm:"type:uuid;index" json:"business_role_id,omitempty"` // Business-specific role
+	PermissionCode     *string    `gorm:"size:100;index" json:"permission_code,omitempty"`   // Users with permission
+	AttributeCondition JSONMap    `gorm:"type:jsonb" json:"attribute_condition,omitempty"`   // ABAC condition
+	PolicyID           *uuid.UUID `gorm:"type:uuid;index" json:"policy_id,omitempty"`        // PBAC policy
 
 	// Dynamic recipient resolution
-	RecipientType      string     `gorm:"size:50;not null" json:"recipient_type"`                      // user, role, business_role, permission, attribute, policy, submitter, approver
+	RecipientType string `gorm:"size:50;not null" json:"recipient_type"` // user, role, business_role, permission, attribute, policy, submitter, approver
 
-	CreatedAt          time.Time  `json:"created_at"`
-	UpdatedAt          time.Time  `json:"updated_at"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 
 	// Relationships
 	NotificationRule *NotificationRule `gorm:"foreignKey:NotificationRuleID" json:"notification_rule,omitempty"`
@@ -86,42 +87,42 @@ func (NotificationRecipient) TableName() string {
 
 // NotificationRule defines when and how to send notifications
 type NotificationRule struct {
-	ID          uuid.UUID  `gorm:"type:uuid;primary_key;default:gen_random_uuid()" json:"id"`
-	Code        string     `gorm:"size:100;uniqueIndex;not null" json:"code"`
-	Name        string     `gorm:"size:200;not null" json:"name"`
-	Description string     `gorm:"type:text" json:"description,omitempty"`
+	ID          uuid.UUID `gorm:"type:uuid;primary_key;default:gen_random_uuid()" json:"id"`
+	Code        string    `gorm:"size:100;uniqueIndex;not null" json:"code"`
+	Name        string    `gorm:"size:200;not null" json:"name"`
+	Description string    `gorm:"type:text" json:"description,omitempty"`
 
 	// Workflow integration
-	WorkflowID      *uuid.UUID       `gorm:"type:uuid;index" json:"workflow_id,omitempty"`              // null = global rule
-	TriggerOnStates StringArray      `gorm:"type:jsonb;default:'[]'" json:"trigger_on_states"`          // States that trigger notification
-	TriggerOnActions StringArray     `gorm:"type:jsonb;default:'[]'" json:"trigger_on_actions"`         // Actions that trigger notification
+	WorkflowID       *uuid.UUID  `gorm:"type:uuid;index" json:"workflow_id,omitempty"`      // null = global rule
+	TriggerOnStates  StringArray `gorm:"type:jsonb;default:'[]'" json:"trigger_on_states"`  // States that trigger notification
+	TriggerOnActions StringArray `gorm:"type:jsonb;default:'[]'" json:"trigger_on_actions"` // Actions that trigger notification
 
 	// Notification content
-	Priority        NotificationPriority `gorm:"size:20;default:'normal'" json:"priority"`
-	Channels        ChannelArray         `gorm:"type:jsonb;default:'[\"in_app\"]'" json:"channels"`        // Delivery channels
-	TitleTemplate   string               `gorm:"size:500;not null" json:"title_template"`                  // Template with variables
-	BodyTemplate    string               `gorm:"type:text;not null" json:"body_template"`                  // Template with variables
-	ActionURL       string               `gorm:"size:500" json:"action_url,omitempty"`                     // Deep link URL
+	Priority      NotificationPriority `gorm:"size:20;default:'normal'" json:"priority"`
+	Channels      ChannelArray         `gorm:"type:jsonb;default:'[\"in_app\"]'" json:"channels"` // Delivery channels
+	TitleTemplate string               `gorm:"size:500;not null" json:"title_template"`           // Template with variables
+	BodyTemplate  string               `gorm:"type:text;not null" json:"body_template"`           // Template with variables
+	ActionURL     string               `gorm:"size:500" json:"action_url,omitempty"`              // Deep link URL
 
 	// Email specific (if email channel enabled)
-	EmailSubject    string     `gorm:"size:500" json:"email_subject,omitempty"`
-	EmailTemplate   string     `gorm:"type:text" json:"email_template,omitempty"`
+	EmailSubject  string `gorm:"size:500" json:"email_subject,omitempty"`
+	EmailTemplate string `gorm:"type:text" json:"email_template,omitempty"`
 
 	// SMS specific (if SMS channel enabled)
-	SMSTemplate     string     `gorm:"size:500" json:"sms_template,omitempty"`
+	SMSTemplate string `gorm:"size:500" json:"sms_template,omitempty"`
 
 	// Conditions
-	Conditions      JSONMap    `gorm:"type:jsonb" json:"conditions,omitempty"`                          // Additional conditions to evaluate
+	Conditions JSONMap `gorm:"type:jsonb" json:"conditions,omitempty"` // Additional conditions to evaluate
 
 	// Settings
-	IsActive        bool       `gorm:"default:true" json:"is_active"`
-	BatchInterval   int        `gorm:"default:0" json:"batch_interval_minutes"`                         // 0 = immediate, >0 = batch notifications
-	DeduplicateKey  string     `gorm:"size:200" json:"deduplicate_key,omitempty"`                       // Prevent duplicate notifications
+	IsActive       bool   `gorm:"default:true" json:"is_active"`
+	BatchInterval  int    `gorm:"default:0" json:"batch_interval_minutes"`   // 0 = immediate, >0 = batch notifications
+	DeduplicateKey string `gorm:"size:200" json:"deduplicate_key,omitempty"` // Prevent duplicate notifications
 
 	// Metadata
-	CreatedBy       string     `gorm:"size:255" json:"created_by,omitempty"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
+	CreatedBy string    `gorm:"size:255" json:"created_by,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 
 	// Relationships
 	Workflow   *WorkflowDefinition     `gorm:"foreignKey:WorkflowID" json:"workflow,omitempty"`
@@ -135,57 +136,57 @@ func (NotificationRule) TableName() string {
 
 // Notification represents an actual notification instance sent to a user
 type Notification struct {
-	ID               uuid.UUID            `gorm:"type:uuid;primary_key;default:gen_random_uuid()" json:"id"`
+	ID uuid.UUID `gorm:"type:uuid;primary_key;default:gen_random_uuid()" json:"id"`
 
 	// Rule reference
-	NotificationRuleID *uuid.UUID         `gorm:"type:uuid;index" json:"notification_rule_id,omitempty"`
-	NotificationRule   *NotificationRule  `gorm:"foreignKey:NotificationRuleID" json:"notification_rule,omitempty"`
+	NotificationRuleID *uuid.UUID        `gorm:"type:uuid;index" json:"notification_rule_id,omitempty"`
+	NotificationRule   *NotificationRule `gorm:"foreignKey:NotificationRuleID" json:"notification_rule,omitempty"`
 
 	// Recipient
-	UserID           string               `gorm:"size:255;not null;index" json:"user_id"`
-	User             *User                `gorm:"foreignKey:UserID" json:"user,omitempty"`
+	UserID string `gorm:"size:255;not null;index" json:"user_id"`
+	User   *User  `gorm:"foreignKey:UserID" json:"user,omitempty"`
 
 	// Content
-	Type             NotificationType     `gorm:"size:50;not null;index" json:"type"`
-	Priority         NotificationPriority `gorm:"size:20;default:'normal'" json:"priority"`
-	Title            string               `gorm:"size:500;not null" json:"title"`
-	Body             string               `gorm:"type:text;not null" json:"body"`
-	ActionURL        string               `gorm:"size:500" json:"action_url,omitempty"`
+	Type      NotificationType     `gorm:"size:50;not null;index" json:"type"`
+	Priority  NotificationPriority `gorm:"size:20;default:'normal'" json:"priority"`
+	Title     string               `gorm:"size:500;not null" json:"title"`
+	Body      string               `gorm:"type:text;not null" json:"body"`
+	ActionURL string               `gorm:"size:500" json:"action_url,omitempty"`
 
 	// Context (what triggered this notification)
-	SubmissionID     *uuid.UUID           `gorm:"type:uuid;index" json:"submission_id,omitempty"`
-	WorkflowID       *uuid.UUID           `gorm:"type:uuid;index" json:"workflow_id,omitempty"`
-	TransitionID     *uuid.UUID           `gorm:"type:uuid;index" json:"transition_id,omitempty"`
-	FormCode         string               `gorm:"size:50;index" json:"form_code,omitempty"`
-	BusinessVerticalID *uuid.UUID         `gorm:"type:uuid;index" json:"business_vertical_id,omitempty"`
+	SubmissionID       *uuid.UUID `gorm:"type:uuid;index" json:"submission_id,omitempty"`
+	WorkflowID         *uuid.UUID `gorm:"type:uuid;index" json:"workflow_id,omitempty"`
+	TransitionID       *uuid.UUID `gorm:"type:uuid;index" json:"transition_id,omitempty"`
+	FormCode           string     `gorm:"size:50;index" json:"form_code,omitempty"`
+	BusinessVerticalID *uuid.UUID `gorm:"type:uuid;index" json:"business_vertical_id,omitempty"`
 
 	// Chat context (for chat notifications)
-	ConversationID   *uuid.UUID           `gorm:"type:uuid;index" json:"conversation_id,omitempty"`
-	MessageID        *uuid.UUID           `gorm:"type:uuid;index" json:"message_id,omitempty"`
+	ConversationID *uuid.UUID `gorm:"type:uuid;index" json:"conversation_id,omitempty"`
+	MessageID      *uuid.UUID `gorm:"type:uuid;index" json:"message_id,omitempty"`
 
 	// Additional context data
-	Metadata         JSONMap              `gorm:"type:jsonb" json:"metadata,omitempty"`
+	Metadata JSONMap `gorm:"type:jsonb" json:"metadata,omitempty"`
 
 	// Delivery status
-	Status           NotificationStatus   `gorm:"size:20;default:'pending';index" json:"status"`
-	Channel          NotificationChannel  `gorm:"size:20;default:'in_app'" json:"channel"`
-	SentAt           *time.Time           `json:"sent_at,omitempty"`
-	ReadAt           *time.Time           `json:"read_at,omitempty"`
-	ArchivedAt       *time.Time           `json:"archived_at,omitempty"`
-	FailedReason     string               `gorm:"type:text" json:"failed_reason,omitempty"`
+	Status       NotificationStatus  `gorm:"size:20;default:'pending';index" json:"status"`
+	Channel      NotificationChannel `gorm:"size:20;default:'in_app'" json:"channel"`
+	SentAt       *time.Time          `json:"sent_at,omitempty"`
+	ReadAt       *time.Time          `json:"read_at,omitempty"`
+	ArchivedAt   *time.Time          `json:"archived_at,omitempty"`
+	FailedReason string              `gorm:"type:text" json:"failed_reason,omitempty"`
 
 	// Grouping (for batching similar notifications)
-	GroupKey         string               `gorm:"size:200;index" json:"group_key,omitempty"`
+	GroupKey string `gorm:"size:200;index" json:"group_key,omitempty"`
 
 	// Timestamps
-	CreatedAt        time.Time            `json:"created_at"`
-	UpdatedAt        time.Time            `json:"updated_at"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 
 	// Relationships
-	Submission       *FormSubmission      `gorm:"foreignKey:SubmissionID" json:"submission,omitempty"`
-	Workflow         *WorkflowDefinition  `gorm:"foreignKey:WorkflowID" json:"workflow,omitempty"`
-	Transition       *WorkflowTransition  `gorm:"foreignKey:TransitionID" json:"transition,omitempty"`
-	BusinessVertical *BusinessVertical    `gorm:"foreignKey:BusinessVerticalID" json:"business_vertical,omitempty"`
+	Submission       *FormSubmission     `gorm:"foreignKey:SubmissionID" json:"submission,omitempty"`
+	Workflow         *WorkflowDefinition `gorm:"foreignKey:WorkflowID" json:"workflow,omitempty"`
+	Transition       *WorkflowTransition `gorm:"foreignKey:TransitionID" json:"transition,omitempty"`
+	BusinessVertical *BusinessVertical   `gorm:"foreignKey:BusinessVerticalID" json:"business_vertical,omitempty"`
 }
 
 // TableName specifies the table name
@@ -262,29 +263,30 @@ func (ChannelArray) GormDataType() string {
 
 // NotificationPreference stores user notification preferences
 type NotificationPreference struct {
-	ID                  uuid.UUID `gorm:"type:uuid;primary_key;default:gen_random_uuid()" json:"id"`
-	UserID              string    `gorm:"size:255;not null;uniqueIndex" json:"user_id"`
+	ID     uuid.UUID `gorm:"type:uuid;primary_key;default:gen_random_uuid()" json:"id"`
+	UserID string    `gorm:"size:255;not null;uniqueIndex" json:"user_id"`
 
 	// Channel preferences
-	EnableInApp         bool      `gorm:"default:true" json:"enable_in_app"`
-	EnableEmail         bool      `gorm:"default:true" json:"enable_email"`
-	EnableSMS           bool      `gorm:"default:false" json:"enable_sms"`
-	EnableWebPush       bool      `gorm:"default:true" json:"enable_web_push"`
+	EnableInApp      bool `gorm:"default:true" json:"enable_in_app"`
+	EnableEmail      bool `gorm:"default:true" json:"enable_email"`
+	EnableSMS        bool `gorm:"default:false" json:"enable_sms"`
+	EnableWebPush    bool `gorm:"default:true" json:"enable_web_push"`
+	EnableMobilePush bool `gorm:"default:true" json:"enable_mobile_push"`
 
 	// Type preferences (can disable specific types)
-	DisabledTypes       StringArray `gorm:"type:jsonb;default:'[]'" json:"disabled_types"`
+	DisabledTypes StringArray `gorm:"type:jsonb;default:'[]'" json:"disabled_types"`
 
 	// Quiet hours
-	QuietHoursEnabled   bool        `gorm:"default:false" json:"quiet_hours_enabled"`
-	QuietHoursStart     string      `gorm:"size:5" json:"quiet_hours_start,omitempty"` // HH:MM format
-	QuietHoursEnd       string      `gorm:"size:5" json:"quiet_hours_end,omitempty"`   // HH:MM format
+	QuietHoursEnabled bool   `gorm:"default:false" json:"quiet_hours_enabled"`
+	QuietHoursStart   string `gorm:"size:5" json:"quiet_hours_start,omitempty"` // HH:MM format
+	QuietHoursEnd     string `gorm:"size:5" json:"quiet_hours_end,omitempty"`   // HH:MM format
 
 	// Digest settings
-	DigestEnabled       bool        `gorm:"default:false" json:"digest_enabled"`
-	DigestFrequency     string      `gorm:"size:20" json:"digest_frequency,omitempty"` // daily, weekly
+	DigestEnabled   bool   `gorm:"default:false" json:"digest_enabled"`
+	DigestFrequency string `gorm:"size:20" json:"digest_frequency,omitempty"` // daily, weekly
 
-	CreatedAt           time.Time   `json:"created_at"`
-	UpdatedAt           time.Time   `json:"updated_at"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 
 	// Relationships
 	User *User `gorm:"foreignKey:UserID" json:"user,omitempty"`

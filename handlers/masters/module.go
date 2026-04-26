@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/google/uuid"
+	"github.com/gorilla/mux"
 	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/handlers"
 	"p9e.in/ugcl/middleware"
@@ -201,5 +202,89 @@ func CreateModule(w http.ResponseWriter, r *http.Request) {
 		"module":      module,
 		"schema_name": schemaName,
 		"message":     fmt.Sprintf("Module created with dedicated database schema: %s", schemaName),
+	})
+}
+
+// UpdateModule updates an existing module by ID
+// PUT /api/v1/admin/masters/modules/{id}
+func UpdateModule(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetClaims(r)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	vars := mux.Vars(r)
+	idStr := vars["id"]
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		http.Error(w, "invalid module id", http.StatusBadRequest)
+		return
+	}
+
+	var existing models.Module
+	if err := config.DB.First(&existing, "id = ?", id).Error; err != nil {
+		http.Error(w, "module not found", http.StatusNotFound)
+		return
+	}
+
+	var input models.Module
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Only update allowed fields; preserve schema_name and id
+	existing.Name = input.Name
+	existing.Description = input.Description
+	existing.Icon = input.Icon
+	existing.DisplayOrder = input.DisplayOrder
+	existing.IsActive = input.IsActive
+
+	if err := config.DB.Save(&existing).Error; err != nil {
+		log.Printf("Failed to update module %s: %v", id, err)
+		http.Error(w, "failed to update module", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"module":  existing,
+		"message": "Module updated successfully",
+	})
+}
+
+// DeleteModule deletes a module by ID
+// DELETE /api/v1/admin/masters/modules/{id}
+func DeleteModule(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetClaims(r)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	vars := mux.Vars(r)
+	idStr := vars["id"]
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		http.Error(w, "invalid module id", http.StatusBadRequest)
+		return
+	}
+
+	var existing models.Module
+	if err := config.DB.First(&existing, "id = ?", id).Error; err != nil {
+		http.Error(w, "module not found", http.StatusNotFound)
+		return
+	}
+
+	if err := config.DB.Delete(&existing).Error; err != nil {
+		log.Printf("Failed to delete module %s: %v", id, err)
+		http.Error(w, "failed to delete module", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message": "Module deleted successfully",
 	})
 }

@@ -65,6 +65,12 @@ type createBusinessReq struct {
 	Description string `json:"description"`
 }
 
+type updateBusinessReq struct {
+	Name        *string `json:"name"`
+	Description *string `json:"description"`
+	IsActive    *bool   `json:"is_active"`
+}
+
 type businessResponse struct {
 	ID          uuid.UUID `json:"id"`
 	Name        string    `json:"name"`
@@ -265,6 +271,102 @@ func CreateBusinessVertical(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(response)
+}
+
+// UpdateBusinessVertical updates an existing business vertical by ID
+func UpdateBusinessVertical(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	businessID, err := uuid.Parse(vars["id"])
+	if err != nil {
+		http.Error(w, "invalid business id", http.StatusBadRequest)
+		return
+	}
+
+	var req updateBusinessReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	var business models.BusinessVertical
+	if err := config.DB.Where("id = ?", businessID).First(&business).Error; err != nil {
+		http.Error(w, "business vertical not found", http.StatusNotFound)
+		return
+	}
+
+	if req.Name != nil {
+		business.Name = strings.TrimSpace(*req.Name)
+	}
+	if req.Description != nil {
+		business.Description = strings.TrimSpace(*req.Description)
+	}
+	if req.IsActive != nil {
+		business.IsActive = *req.IsActive
+	}
+
+	if business.Name == "" {
+		http.Error(w, "business name is required", http.StatusBadRequest)
+		return
+	}
+
+	if err := config.DB.Save(&business).Error; err != nil {
+		http.Error(w, "failed to update business vertical: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	middleware.InvalidateAccessibleBusinessVerticalsCache()
+	middleware.InvalidateBusinessIdentifierCache()
+	invalidateAdminUsersCache()
+	businessVerticalsCache.invalidate()
+
+	response := businessResponse{
+		ID:          business.ID,
+		Name:        business.Name,
+		Code:        business.Code,
+		Description: business.Description,
+		IsActive:    business.IsActive,
+		UserCount:   0,
+		RoleCount:   0,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// DeleteBusinessVertical deactivates an existing business vertical by ID.
+// This is a safe delete to avoid foreign key issues with historical references.
+func DeleteBusinessVertical(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	businessID, err := uuid.Parse(vars["id"])
+	if err != nil {
+		http.Error(w, "invalid business id", http.StatusBadRequest)
+		return
+	}
+
+	var business models.BusinessVertical
+	if err := config.DB.Where("id = ?", businessID).First(&business).Error; err != nil {
+		http.Error(w, "business vertical not found", http.StatusNotFound)
+		return
+	}
+
+	if !business.IsActive {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"message": "Business vertical already deleted"})
+		return
+	}
+
+	if err := config.DB.Model(&business).Update("is_active", false).Error; err != nil {
+		http.Error(w, "failed to delete business vertical: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	middleware.InvalidateAccessibleBusinessVerticalsCache()
+	middleware.InvalidateBusinessIdentifierCache()
+	invalidateAdminUsersCache()
+	businessVerticalsCache.invalidate()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"message": "Business vertical deleted successfully"})
 }
 
 // GetBusinessRoles returns all roles for a specific business vertical
@@ -581,6 +683,57 @@ func UpdateBusinessRole(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
+}
+
+// DeleteBusinessRole deactivates a business role within the current business context.
+func DeleteBusinessRole(w http.ResponseWriter, r *http.Request) {
+	businessID := middleware.GetCurrentBusinessID(r)
+	if businessID == uuid.Nil {
+		http.Error(w, "invalid business identifier", http.StatusBadRequest)
+		return
+	}
+
+	vars := mux.Vars(r)
+	roleID, err := uuid.Parse(vars["roleId"])
+	if err != nil {
+		http.Error(w, "invalid role ID", http.StatusBadRequest)
+		return
+	}
+
+	var role models.BusinessRole
+	if err := config.DB.Where("id = ? AND business_vertical_id = ?", roleID, businessID).First(&role).Error; err != nil {
+		http.Error(w, "role not found in this business", http.StatusNotFound)
+		return
+	}
+
+	if !role.IsActive {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"message": "role already deleted"})
+		return
+	}
+
+	// Refuse deletion when active users are assigned to this role.
+	var activeAssignments int64
+	config.DB.Model(&models.UserBusinessRole{}).
+		Where("business_role_id = ? AND is_active = ?", role.ID, true).
+		Count(&activeAssignments)
+
+	if activeAssignments > 0 {
+		http.Error(w, "cannot delete role: users are assigned to this role", http.StatusBadRequest)
+		return
+	}
+
+	role.IsActive = false
+	if err := config.DB.Save(&role).Error; err != nil {
+		http.Error(w, "failed to delete role: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	invalidateUnifiedRolesCache()
+	invalidateAdminUsersCache()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"message": "role deleted successfully"})
 }
 
 // AssignUserToBusinessRole assigns a user to a role in a business vertical

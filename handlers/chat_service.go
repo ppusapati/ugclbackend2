@@ -1178,6 +1178,7 @@ func (s *ChatService) SendChatNotifications(message *models.ChatMessage, senderN
 
 	// Create notifications for each participant
 	now := time.Now()
+	notificationService := NewNotificationService()
 	for _, participant := range participants {
 		// Check if user has muted this conversation
 		if participant.IsMuted {
@@ -1210,6 +1211,29 @@ func (s *ChatService) SendChatNotifications(message *models.ChatMessage, senderN
 			log.Printf("⚠️ Failed to create chat notification for user %s: %v", participant.UserID, err)
 			continue
 		}
+
+		notificationService.SendWebPushToUser(
+			participant.UserID,
+			title,
+			body,
+			notification.ActionURL,
+			message.ID.String(),
+		)
+
+		notificationService.SendMobilePushToUser(
+			participant.UserID,
+			models.NotificationTypeChatMessage,
+			title,
+			body,
+			map[string]string{
+				"type":            string(models.NotificationTypeChatMessage),
+				"notification_id": notification.ID.String(),
+				"conversation_id": message.ConversationID.String(),
+				"message_id":      message.ID.String(),
+				"sender_id":       message.SenderID,
+				"action_url":      notification.ActionURL,
+			},
+		)
 	}
 
 	log.Printf("✅ Sent chat notifications for message %s to %d participants", message.ID, len(participants))
@@ -1222,16 +1246,16 @@ func (s *ChatService) SendChatNotifications(message *models.ChatMessage, senderN
 
 // ChatUserDTO represents a user for chat user selection
 type ChatUserDTO struct {
-	ID                   string  `json:"id"`
-	Name                 string  `json:"name"`
-	Email                string  `json:"email,omitempty"`
-	Phone                string  `json:"phone,omitempty"`
-	AvatarURL            string  `json:"avatar_url,omitempty"`
-	Role                 string  `json:"role,omitempty"`
-	BusinessVerticalID   string  `json:"business_vertical_id,omitempty"`
-	BusinessVerticalName string  `json:"business_vertical_name,omitempty"`
-	BusinessVerticalCode string  `json:"business_vertical_code,omitempty"`
-	IsOnline             bool    `json:"is_online"`
+	ID                   string `json:"id"`
+	Name                 string `json:"name"`
+	Email                string `json:"email,omitempty"`
+	Phone                string `json:"phone,omitempty"`
+	AvatarURL            string `json:"avatar_url,omitempty"`
+	Role                 string `json:"role,omitempty"`
+	BusinessVerticalID   string `json:"business_vertical_id,omitempty"`
+	BusinessVerticalName string `json:"business_vertical_name,omitempty"`
+	BusinessVerticalCode string `json:"business_vertical_code,omitempty"`
+	IsOnline             bool   `json:"is_online"`
 }
 
 // ListUsersForChat returns users for chat selection, sorted by business vertical
@@ -1300,4 +1324,42 @@ func (s *ChatService) ListUsersForChat(currentUserID string, search string, page
 	}
 
 	return dtos, totalCount, nil
+}
+
+// ChatSSEEvent is the payload sent to clients over the SSE stream.
+type ChatSSEEvent struct {
+	Type           string             `json:"type"`
+	ConversationID string             `json:"conversation_id,omitempty"`
+	Message        *models.MessageDTO `json:"message,omitempty"`
+}
+
+// GetNewEventsForUser returns new message events for a user since the given time.
+func (s *ChatService) GetNewEventsForUser(userID string, since time.Time) ([]ChatSSEEvent, error) {
+	var convIDs []string
+	if err := s.db.Model(&models.ChatParticipant{}).
+		Where("user_id = ? AND left_at IS NULL", userID).
+		Pluck("conversation_id", &convIDs).Error; err != nil || len(convIDs) == 0 {
+		return nil, err
+	}
+
+	var messages []models.ChatMessage
+	if err := s.db.
+		Where("conversation_id IN ? AND created_at > ? AND sender_id != ? AND deleted_at IS NULL",
+			convIDs, since, userID).
+		Order("created_at asc").
+		Limit(50).
+		Find(&messages).Error; err != nil {
+		return nil, err
+	}
+
+	events := make([]ChatSSEEvent, 0, len(messages))
+	for i := range messages {
+		dto := messages[i].ToDTO()
+		events = append(events, ChatSSEEvent{
+			Type:           "new_message",
+			ConversationID: messages[i].ConversationID.String(),
+			Message:        &dto,
+		})
+	}
+	return events, nil
 }

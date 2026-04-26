@@ -34,6 +34,16 @@ func RegisterNotificationRoutes(api *mux.Router, admin *mux.Router) {
 	// Update user preferences
 	api.HandleFunc("/notifications/preferences", notifHandler.UpdateNotificationPreferences).Methods("PUT")
 
+	// Web push subscription management
+	api.HandleFunc("/notifications/push/public-key", notifHandler.GetWebPushPublicKey).Methods("GET")
+	api.HandleFunc("/notifications/push/subscriptions", notifHandler.SaveWebPushSubscription).Methods("POST")
+	api.HandleFunc("/notifications/push/subscriptions", notifHandler.DeleteWebPushSubscription).Methods("DELETE")
+	api.HandleFunc("/notifications/push/mobile/tokens", notifHandler.GetMobilePushTokens).Methods("GET")
+	api.HandleFunc("/notifications/push/mobile/tokens", notifHandler.SaveMobilePushToken).Methods("POST")
+	api.HandleFunc("/notifications/push/mobile/tokens", notifHandler.DeleteMobilePushToken).Methods("DELETE")
+	api.HandleFunc("/notifications/push/test", notifHandler.SendTestWebPush).Methods("POST")
+	api.HandleFunc("/notifications/push/mobile/test", notifHandler.SendTestMobilePush).Methods("POST")
+
 	// Server-Sent Events stream for real-time notifications
 	api.HandleFunc("/notifications/stream", notifHandler.StreamNotifications).Methods("GET")
 
@@ -95,4 +105,6 @@ func RegisterNotificationRoutes(api *mux.Router, admin *mux.Router) {
 		http.HandlerFunc(adminHandler.GetNotificationStats))).Methods("GET")
 	admin.Handle("/notification-rules/stats", middleware.RequirePermission("manage_notifications")(
 		http.HandlerFunc(adminHandler.GetNotificationStats))).Methods("GET")
+	admin.Handle("/notifications/push/mobile-tokens", middleware.RequirePermission("manage_notifications")(
+		http.HandlerFunc(notifHandler.GetMobilePushTokensForAdmin))).Methods("GET")
 }

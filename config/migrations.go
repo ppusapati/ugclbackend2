@@ -102,6 +102,8 @@ func Migrations(db *gorm.DB) error {
 					&models.NotificationRecipient{},
 					&models.Notification{},
 					&models.NotificationPreference{},
+					&models.WebPushSubscription{},
+					&models.MobilePushToken{},
 				); err != nil {
 					return err
 				}
@@ -452,6 +454,51 @@ func Migrations(db *gorm.DB) error {
 			},
 		},
 		{
+			ID: "20260425_notifications_web_push_subscriptions",
+			Migrate: func(tx *gorm.DB) error {
+				if err := tx.AutoMigrate(&models.WebPushSubscription{}); err != nil {
+					return err
+				}
+
+				queries := []string{
+					"CREATE UNIQUE INDEX IF NOT EXISTS idx_web_push_subscriptions_endpoint ON web_push_subscriptions(endpoint)",
+					"CREATE INDEX IF NOT EXISTS idx_web_push_subscriptions_user_id ON web_push_subscriptions(user_id)",
+				}
+
+				for _, q := range queries {
+					if err := tx.Exec(q).Error; err != nil {
+						return err
+					}
+				}
+
+				return nil
+			},
+		},
+		{
+			ID: "20260425_notifications_mobile_push_tokens",
+			Migrate: func(tx *gorm.DB) error {
+				if err := tx.AutoMigrate(&models.MobilePushToken{}); err != nil {
+					return err
+				}
+
+				queries := []string{
+					"ALTER TABLE notification_preferences ADD COLUMN IF NOT EXISTS enable_mobile_push BOOLEAN DEFAULT TRUE",
+					"CREATE UNIQUE INDEX IF NOT EXISTS idx_mobile_push_tokens_token ON mobile_push_tokens(token)",
+					"CREATE INDEX IF NOT EXISTS idx_mobile_push_tokens_user_active ON mobile_push_tokens(user_id, is_active)",
+					"CREATE INDEX IF NOT EXISTS idx_mobile_push_tokens_device_id ON mobile_push_tokens(device_id)",
+					"UPDATE notification_preferences SET enable_mobile_push = TRUE WHERE enable_mobile_push IS NULL",
+				}
+
+				for _, q := range queries {
+					if err := tx.Exec(q).Error; err != nil {
+						return err
+					}
+				}
+
+				return nil
+			},
+		},
+		{
 			ID: "20260425_backfill_attendance_permissions",
 			Migrate: func(tx *gorm.DB) error {
 				type permissionSeed struct {
@@ -527,6 +574,26 @@ func Migrations(db *gorm.DB) error {
 								return err
 							}
 						}
+					}
+				}
+
+				return nil
+			},
+		},
+		{
+			ID: "20260425_add_user_login_events",
+			Migrate: func(tx *gorm.DB) error {
+				if err := tx.AutoMigrate(&models.UserLoginEvent{}); err != nil {
+					return err
+				}
+
+				queries := []string{
+					"CREATE INDEX IF NOT EXISTS idx_user_login_events_login_at_desc ON user_login_events(login_at DESC)",
+				}
+
+				for _, q := range queries {
+					if err := tx.Exec(q).Error; err != nil {
+						return err
 					}
 				}
 

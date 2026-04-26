@@ -24,6 +24,10 @@ func RegisterChatRoutes(api *mux.Router) {
 	// User list for starting conversations
 	// ============================================================================
 
+	// Real-time chat event stream via Server-Sent Events
+	// GET /api/v1/chat/events
+	chat.HandleFunc("/events", chatHandler.StreamChatEvents).Methods("GET")
+
 	// List users for chat (sorted by business vertical)
 	// GET /api/v1/chat/users
 	chat.HandleFunc("/users", chatHandler.ListUsersForChat).Methods("GET")

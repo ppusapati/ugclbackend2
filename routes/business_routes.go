@@ -63,6 +63,10 @@ func registerGlobalAdminRoutes(admin *mux.Router) {
 		http.HandlerFunc(handlers.GetAllBusinessVerticals))).Methods("GET")
 	admin.Handle("/businesses", middleware.RequirePermission("manage_businesses")(
 		http.HandlerFunc(handlers.CreateBusinessVertical))).Methods("POST")
+	admin.Handle("/businesses/{id}", middleware.RequirePermission("manage_businesses")(
+		http.HandlerFunc(handlers.UpdateBusinessVertical))).Methods("PUT")
+	admin.Handle("/businesses/{id}", middleware.RequirePermission("manage_businesses")(
+		http.HandlerFunc(handlers.DeleteBusinessVertical))).Methods("DELETE")
 
 	// Super admin dashboard
 	admin.Handle("/dashboard", middleware.RequirePermission("admin_all")(
@@ -91,6 +95,8 @@ func registerGlobalAdminRoutes(admin *mux.Router) {
 	// General form routes LAST
 	admin.Handle("/app-forms/{formCode}", middleware.RequirePermission("admin_all")(
 		http.HandlerFunc(handlers.UpdateForm))).Methods("PUT")
+	admin.Handle("/app-forms/{formCode}", middleware.RequirePermission("admin_all")(
+		http.HandlerFunc(handlers.DeleteForm))).Methods("DELETE")
 
 	// Workflow management
 	admin.Handle("/workflows", middleware.RequirePermission("super_admin")(
@@ -116,6 +122,8 @@ func registerBusinessRoleRoutes(business *mux.Router) {
 		http.HandlerFunc(handlers.CreateBusinessRole))).Methods("POST")
 	business.Handle("/roles/{roleId}", middleware.RequireBusinessPermission("business_manage_roles")(
 		http.HandlerFunc(handlers.UpdateBusinessRole))).Methods("PUT")
+	business.Handle("/roles/{roleId}", middleware.RequireBusinessPermission("business_manage_roles")(
+		http.HandlerFunc(handlers.DeleteBusinessRole))).Methods("DELETE")
 
 	// Business user management
 	business.Handle("/users", middleware.RequireBusinessPermission("business_manage_users")(

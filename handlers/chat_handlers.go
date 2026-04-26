@@ -2,9 +2,11 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
@@ -1078,4 +1080,64 @@ func (h *ChatHandler) ListUsersForChat(w http.ResponseWriter, r *http.Request) {
 		"page":        page,
 		"page_size":   pageSize,
 	})
+}
+
+// StreamChatEvents streams chat events via Server-Sent Events for real-time updates.
+// GET /api/v1/chat/events
+func (h *ChatHandler) StreamChatEvents(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetClaims(r)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	origin := r.Header.Get("Origin")
+	if origin != "" {
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
+		w.Header().Set("Vary", "Origin")
+	} else {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	fmt.Fprintf(w, "data: {\"type\":\"connected\"}\n\n")
+	flusher.Flush()
+
+	ticker := time.NewTicker(5 * time.Second)
+	heartbeat := time.NewTicker(25 * time.Second)
+	defer ticker.Stop()
+	defer heartbeat.Stop()
+
+	since := time.Now().Add(-10 * time.Second)
+
+	for {
+		select {
+		case <-ticker.C:
+			events, err := getChatService().GetNewEventsForUser(claims.UserID, since)
+			if err == nil && len(events) > 0 {
+				for _, event := range events {
+					data, merr := json.Marshal(event)
+					if merr == nil {
+						fmt.Fprintf(w, "data: %s\n\n", data)
+					}
+				}
+				since = time.Now()
+				flusher.Flush()
+			}
+		case <-heartbeat.C:
+			fmt.Fprintf(w, "data: {\"type\":\"heartbeat\"}\n\n")
+			flusher.Flush()
+		case <-r.Context().Done():
+			return
+		}
+	}
 }

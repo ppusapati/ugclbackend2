@@ -1,0 +1,27 @@
+
+2026/04/25 20:25:39 [32mD:/gopath/pkg/mod/github.com/go-gormigrate/gormigrate/v2@v2.1.4/gormigrate.go:401 [33mSLOW SQL >= 200ms
+[0m[31;1m[205.806ms] [33m[rows:1][35m SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'migrations' AND table_type = 'BASE TABLE'[0m
+
+2026/04/25 20:25:41 [32mE:/Maheshwari/UGCL/backend/v1/middleware/auth_service.go:54 [33mSLOW SQL >= 200ms
+[0m[31;1m[203.544ms] [33m[rows:1][35m SELECT * FROM "role_permissions" WHERE "role_permissions"."role_id" = '01472eae-45a5-4257-930c-a63ccdab1d17'[0m
+
+2026/04/25 20:25:41 [32mE:/Maheshwari/UGCL/backend/v1/middleware/auth_service.go:54 [33mSLOW SQL >= 200ms
+[0m[31;1m[577.829ms] [33m[rows:1][35m SELECT * FROM "roles" WHERE "roles"."id" = '01472eae-45a5-4257-930c-a63ccdab1d17'[0m
+
+2026/04/25 20:25:41 [32mE:/Maheshwari/UGCL/backend/v1/middleware/auth_service.go:54 [33mSLOW SQL >= 200ms
+[0m[31;1m[649.670ms] [33m[rows:7][35m SELECT * FROM "business_roles" WHERE "business_roles"."id" IN ('bb380520-d5aa-43fc-9688-9e34d1bd8e6a','ac3fa367-d5cd-4b4f-bdf3-572c87795862','c6f598a3-9b59-4f62-bede-3693b5350aa0','d4858992-d6ee-4721-8dee-8add46b4414f','e87ffefa-f06d-4bb9-909c-355b3fcd3773','4b1573df-5771-4b00-a756-e7903c4c2459','fe6068c7-a469-4f0d-883d-2fb77a20137d') AND is_active = true[0m
+
+2026/04/25 20:25:41 [32mE:/Maheshwari/UGCL/backend/v1/middleware/auth_service.go:54 [33mSLOW SQL >= 200ms
+[0m[31;1m[785.089ms] [33m[rows:7][35m SELECT * FROM "user_business_roles" WHERE "user_business_roles"."user_id" = '4f74d110-db88-4c7d-b5b5-ccf5ace1c0ea' AND is_active = true[0m
+
+2026/04/25 20:25:41 [32mE:/Maheshwari/UGCL/backend/v1/middleware/auth_service.go:54 [33mSLOW SQL >= 200ms
+[0m[31;1m[1994.441ms] [33m[rows:1][35m SELECT * FROM "users" WHERE is_active = true ORDER BY updated_at DESC LIMIT 1[0m
+
+2026/04/25 20:25:48 [32mE:/Maheshwari/UGCL/backend/v1/handlers/auth.go:177 [33mSLOW SQL >= 200ms
+[0m[31;1m[279.326ms] [33m[rows:1][35m INSERT INTO "user_login_events" ("id","user_id","login_at","ip_address","user_agent","created_at") VALUES ('49db69f0-2ff4-4a48-8e58-6682ff6033eb','4f74d110-db88-4c7d-b5b5-ccf5ace1c0ea','2026-04-25 14:55:48.552','::1','Mozilla/5.0 (Windows NT 10.0; Microsoft Windows 10.0.29570; en-IN) PowerShell/7.5.5','2026-04-25 20:25:48.612')[0m
+
+2026/04/25 20:25:49 [32mE:/Maheshwari/UGCL/backend/v1/handlers/auth.go:177 [33mSLOW SQL >= 200ms
+[0m[31;1m[211.563ms] [33m[rows:1][35m INSERT INTO "user_login_events" ("id","user_id","login_at","ip_address","user_agent","created_at") VALUES ('4290ebc3-822b-46c1-801c-c9bb9e32962b','4f74d110-db88-4c7d-b5b5-ccf5ace1c0ea','2026-04-25 14:55:49.221','::1','Mozilla/5.0 (Windows NT 10.0; Microsoft Windows 10.0.29570; en-IN) PowerShell/7.5.5','2026-04-25 20:25:49.282')[0m
+
+2026/04/25 20:25:49 [32mE:/Maheshwari/UGCL/backend/v1/routes/routes.go:238 [33mSLOW SQL >= 200ms
+[0m[31;1m[259.650ms] [33m[rows:1][35m UPDATE "users" SET "name"='Super Admin',"email"='super_admin@sreeugcl.com',"phone"='9999999999',"password_hash"='$2a$10$ue1hFPc1pcLFglzznpaJou147rbBKWtq4.mQ95lL7Ec/A6UY/ZB5y',"role_id"='01472eae-45a5-4257-930c-a63ccdab1d17',"business_vertical_id"=NULL,"is_active"=true,"created_at"='2025-12-12 10:50:05.476',"updated_at"='2026-04-25 20:25:49.642' WHERE "id" = '4f74d110-db88-4c7d-b5b5-ccf5ace1c0ea'[0m

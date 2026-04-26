@@ -150,6 +150,26 @@ func (ns *NotificationService) processNotification(
 		// Mark as sent (in production, this would be done by delivery service)
 		notification.MarkAsSent()
 		ns.db.Save(&notification)
+
+		pushData := map[string]string{
+			"type":            string(notification.Type),
+			"notification_id": notification.ID.String(),
+			"action_url":      notification.ActionURL,
+		}
+		if notification.ConversationID != nil {
+			pushData["conversation_id"] = notification.ConversationID.String()
+		}
+		if notification.MessageID != nil {
+			pushData["message_id"] = notification.MessageID.String()
+		}
+
+		ns.SendMobilePushToUser(
+			recipientID,
+			notification.Type,
+			title,
+			body,
+			pushData,
+		)
 	}
 
 	return nil
@@ -597,6 +617,10 @@ func (ns *NotificationService) checkUserPreferences(userID string, notifType mod
 		case "web_push":
 			if prefs.EnableWebPush {
 				return true, "web_push"
+			}
+		case "mobile_push":
+			if prefs.EnableMobilePush {
+				return true, "mobile_push"
 			}
 		}
 	}

@@ -275,12 +275,13 @@ func (h *NotificationHandler) GetNotificationPreferences(w http.ResponseWriter, 
 	if err := getNotificationService().db.Where("user_id = ?", claims.UserID).First(&prefs).Error; err != nil {
 		// Create default preferences if not found
 		prefs = models.NotificationPreference{
-			UserID:        claims.UserID,
-			EnableInApp:   true,
-			EnableEmail:   true,
-			EnableSMS:     false,
-			EnableWebPush: true,
-			DisabledTypes: []string{},
+			UserID:           claims.UserID,
+			EnableInApp:      true,
+			EnableEmail:      true,
+			EnableSMS:        false,
+			EnableWebPush:    true,
+			EnableMobilePush: true,
+			DisabledTypes:    []string{},
 		}
 		getNotificationService().db.Create(&prefs)
 	}
@@ -305,6 +306,7 @@ func (h *NotificationHandler) UpdateNotificationPreferences(w http.ResponseWrite
 		EnableEmail       *bool    `json:"enable_email"`
 		EnableSMS         *bool    `json:"enable_sms"`
 		EnableWebPush     *bool    `json:"enable_web_push"`
+		EnableMobilePush  *bool    `json:"enable_mobile_push"`
 		DisabledTypes     []string `json:"disabled_types"`
 		QuietHoursEnabled *bool    `json:"quiet_hours_enabled"`
 		QuietHoursStart   *string  `json:"quiet_hours_start"`
@@ -336,6 +338,9 @@ func (h *NotificationHandler) UpdateNotificationPreferences(w http.ResponseWrite
 	}
 	if req.EnableWebPush != nil {
 		prefs.EnableWebPush = *req.EnableWebPush
+	}
+	if req.EnableMobilePush != nil {
+		prefs.EnableMobilePush = *req.EnableMobilePush
 	}
 	if req.DisabledTypes != nil {
 		prefs.DisabledTypes = req.DisabledTypes

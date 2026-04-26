@@ -32,7 +32,8 @@ func main() {
 
 	fmt.Println("========================================")
 	fmt.Println("VERIFICATION: Consultant Role Permissions")
-	fmt.Println("========================================\n")
+	fmt.Println("========================================")
+	fmt.Println()
 
 	// Query the Consultant role and its permissions
 	var results []RolePermissionJoin

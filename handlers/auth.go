@@ -3,6 +3,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -167,6 +168,17 @@ func Login(w http.ResponseWriter, r *http.Request) {
 	// Check if user is super admin
 	isSuperAdmin := roleName == "super_admin"
 
+	loginEvent := models.UserLoginEvent{
+		UserID:    u.ID,
+		LoginAt:   time.Now().UTC(),
+		IPAddress: clientIPFromRequest(r),
+		UserAgent: strings.TrimSpace(r.UserAgent()),
+	}
+	if err := config.DB.Create(&loginEvent).Error; err != nil {
+		http.Error(w, "failed to persist login audit event", http.StatusInternalServerError)
+		return
+	}
+
 	out := loginResp{
 		Token: token,
 		User: userPayload{
@@ -180,6 +192,28 @@ func Login(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 	json.NewEncoder(w).Encode(out)
+}
+
+func clientIPFromRequest(r *http.Request) string {
+	xForwardedFor := strings.TrimSpace(r.Header.Get("X-Forwarded-For"))
+	if xForwardedFor != "" {
+		parts := strings.Split(xForwardedFor, ",")
+		if len(parts) > 0 {
+			return strings.TrimSpace(parts[0])
+		}
+	}
+
+	xRealIP := strings.TrimSpace(r.Header.Get("X-Real-IP"))
+	if xRealIP != "" {
+		return xRealIP
+	}
+
+	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
+	if err == nil && host != "" {
+		return host
+	}
+
+	return strings.TrimSpace(r.RemoteAddr)
 }
 
 func GetCurrentUser(w http.ResponseWriter, r *http.Request) {

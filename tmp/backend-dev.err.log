@@ -1,0 +1,6 @@
+2026/04/25 20:25:38 Database connection pool configured: MaxOpen=100, MaxIdle=25, MaxLifetime=1h0m0s, MaxIdleTime=10m0s
+2026/04/25 20:25:39 Server starting at port 8080
+2026/04/25 20:25:40 [REPORT-VIEWS] startup autosync completed: 2 active forms synced
+2026/04/25 20:25:41 [PREWARM] auth cache loaded users: 1
+2026/04/25 20:25:42 [PREWARM] super-admin vertical cache loaded: 4
+2026/04/25 20:25:49 [SECURITY] ✅ Allowed - App=InternalOps UserID=- Name=- Role=- IP=::1 Path=/api/v1/profile Method=PUT Time=2026-04-25T20:25:49+05:30
