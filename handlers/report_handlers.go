@@ -368,9 +368,82 @@ func GetSubmissionWorkflowHistory(w http.ResponseWriter, r *http.Request) {
 func GetFormTableFields(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	tableName := vars["table_name"]
+	normalizedTable := strings.ToLower(strings.TrimSpace(tableName))
+
+	if normalizedTable == "attendance_sessions" {
+		attendanceSessionFields := []map[string]interface{}{
+			{"id": "id", "label": "Session ID", "type": "text", "dataType": "text", "source": "system", "column_name": "id"},
+			{"id": "user_id", "label": "User ID", "type": "text", "dataType": "text", "source": "system", "column_name": "user_id"},
+			{"id": "site_id", "label": "Site ID", "type": "text", "dataType": "text", "source": "system", "column_name": "site_id"},
+			{"id": "business_vertical_id", "label": "Business Vertical ID", "type": "text", "dataType": "text", "source": "system", "column_name": "business_vertical_id"},
+			{"id": "status", "label": "Status", "type": "text", "dataType": "text", "source": "system", "column_name": "status"},
+			{"id": "validation_status", "label": "Validation Status", "type": "text", "dataType": "text", "source": "system", "column_name": "validation_status"},
+			{"id": "validation_method", "label": "Validation Method", "type": "text", "dataType": "text", "source": "system", "column_name": "validation_method"},
+			{"id": "check_in_at", "label": "Check In At", "type": "datetime", "dataType": "datetime", "source": "system", "column_name": "check_in_at"},
+			{"id": "check_out_at", "label": "Check Out At", "type": "datetime", "dataType": "datetime", "source": "system", "column_name": "check_out_at"},
+			{"id": "last_seen_at", "label": "Last Seen At", "type": "datetime", "dataType": "datetime", "source": "system", "column_name": "last_seen_at"},
+			{"id": "check_in_latitude", "label": "Check In Latitude", "type": "number", "dataType": "number", "source": "system", "column_name": "check_in_latitude"},
+			{"id": "check_in_longitude", "label": "Check In Longitude", "type": "number", "dataType": "number", "source": "system", "column_name": "check_in_longitude"},
+			{"id": "check_out_latitude", "label": "Check Out Latitude", "type": "number", "dataType": "number", "source": "system", "column_name": "check_out_latitude"},
+			{"id": "check_out_longitude", "label": "Check Out Longitude", "type": "number", "dataType": "number", "source": "system", "column_name": "check_out_longitude"},
+			{"id": "last_latitude", "label": "Last Latitude", "type": "number", "dataType": "number", "source": "system", "column_name": "last_latitude"},
+			{"id": "last_longitude", "label": "Last Longitude", "type": "number", "dataType": "number", "source": "system", "column_name": "last_longitude"},
+			{"id": "last_accuracy", "label": "Last Accuracy", "type": "number", "dataType": "number", "source": "system", "column_name": "last_accuracy"},
+			{"id": "device_id", "label": "Device ID", "type": "text", "dataType": "text", "source": "system", "column_name": "device_id"},
+			{"id": "anomaly_flags", "label": "Anomaly Flags", "type": "json", "dataType": "json", "source": "system", "column_name": "anomaly_flags"},
+			{"id": "metadata", "label": "Metadata", "type": "json", "dataType": "json", "source": "system", "column_name": "metadata"},
+			{"id": "created_at", "label": "Created At", "type": "datetime", "dataType": "datetime", "source": "system", "column_name": "created_at"},
+			{"id": "updated_at", "label": "Updated At", "type": "datetime", "dataType": "datetime", "source": "system", "column_name": "updated_at"},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"table_name":  "attendance_sessions",
+			"form_title":  "Attendance Sessions",
+			"form_fields": attendanceSessionFields,
+			"db_fields":   []map[string]interface{}{},
+			"all_fields":  attendanceSessionFields,
+		})
+		return
+	}
+
+	if normalizedTable == "attendance_events" {
+		attendanceEventFields := []map[string]interface{}{
+			{"id": "id", "label": "Event ID", "type": "text", "dataType": "text", "source": "system", "column_name": "id"},
+			{"id": "session_id", "label": "Session ID", "type": "text", "dataType": "text", "source": "system", "column_name": "session_id"},
+			{"id": "user_id", "label": "User ID", "type": "text", "dataType": "text", "source": "system", "column_name": "user_id"},
+			{"id": "site_id", "label": "Site ID", "type": "text", "dataType": "text", "source": "system", "column_name": "site_id"},
+			{"id": "business_vertical_id", "label": "Business Vertical ID", "type": "text", "dataType": "text", "source": "system", "column_name": "business_vertical_id"},
+			{"id": "event_type", "label": "Event Type", "type": "text", "dataType": "text", "source": "system", "column_name": "event_type"},
+			{"id": "event_time", "label": "Event Time", "type": "datetime", "dataType": "datetime", "source": "system", "column_name": "event_time"},
+			{"id": "latitude", "label": "Latitude", "type": "number", "dataType": "number", "source": "system", "column_name": "latitude"},
+			{"id": "longitude", "label": "Longitude", "type": "number", "dataType": "number", "source": "system", "column_name": "longitude"},
+			{"id": "accuracy", "label": "Accuracy", "type": "number", "dataType": "number", "source": "system", "column_name": "accuracy"},
+			{"id": "device_id", "label": "Device ID", "type": "text", "dataType": "text", "source": "system", "column_name": "device_id"},
+			{"id": "validation_status", "label": "Validation Status", "type": "text", "dataType": "text", "source": "system", "column_name": "validation_status"},
+			{"id": "validation_method", "label": "Validation Method", "type": "text", "dataType": "text", "source": "system", "column_name": "validation_method"},
+			{"id": "anomaly_flags", "label": "Anomaly Flags", "type": "json", "dataType": "json", "source": "system", "column_name": "anomaly_flags"},
+			{"id": "is_mock_location", "label": "Mock Location", "type": "boolean", "dataType": "boolean", "source": "system", "column_name": "is_mock_location"},
+			{"id": "is_gps_enabled", "label": "GPS Enabled", "type": "boolean", "dataType": "boolean", "source": "system", "column_name": "is_gps_enabled"},
+			{"id": "app_state", "label": "App State", "type": "text", "dataType": "text", "source": "system", "column_name": "app_state"},
+			{"id": "network_status", "label": "Network Status", "type": "text", "dataType": "text", "source": "system", "column_name": "network_status"},
+			{"id": "battery_level", "label": "Battery Level", "type": "number", "dataType": "number", "source": "system", "column_name": "battery_level"},
+			{"id": "server_received_at", "label": "Server Received At", "type": "datetime", "dataType": "datetime", "source": "system", "column_name": "server_received_at"},
+			{"id": "created_at", "label": "Created At", "type": "datetime", "dataType": "datetime", "source": "system", "column_name": "created_at"},
+			{"id": "updated_at", "label": "Updated At", "type": "datetime", "dataType": "datetime", "source": "system", "column_name": "updated_at"},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"table_name":  "attendance_events",
+			"form_title":  "Attendance Events",
+			"form_fields": attendanceEventFields,
+			"db_fields":   []map[string]interface{}{},
+			"all_fields":  attendanceEventFields,
+		})
+		return
+	}
 
 	// Special system tables: return their columns directly without form schema lookup.
-	if strings.ToLower(tableName) == "workflow_transitions" {
+	if normalizedTable == "workflow_transitions" {
 		wtFields := []map[string]interface{}{
 			{"id": "id", "label": "Transition ID", "type": "text", "dataType": "text", "source": "system", "column_name": "id"},
 			{"id": "submission_id", "label": "Submission ID", "type": "text", "dataType": "text", "source": "system", "column_name": "submission_id"},
@@ -774,6 +847,28 @@ func GetAvailableFormTables(w http.ResponseWriter, r *http.Request) {
 		"form_code":            "",
 		"form_title":           "Workflow Audit Trail",
 		"table_name":           "workflow_transitions",
+		"schema_name":          "public",
+		"module_id":            nil,
+		"accessible_verticals": []string{},
+		"system":               true,
+	})
+
+	// Attendance system data sources for attendance-specific analytics reports.
+	tables = append(tables, map[string]interface{}{
+		"form_id":              nil,
+		"form_code":            "",
+		"form_title":           "Attendance Sessions",
+		"table_name":           "attendance_sessions",
+		"schema_name":          "public",
+		"module_id":            nil,
+		"accessible_verticals": []string{},
+		"system":               true,
+	})
+	tables = append(tables, map[string]interface{}{
+		"form_id":              nil,
+		"form_code":            "",
+		"form_title":           "Attendance Events",
+		"table_name":           "attendance_events",
 		"schema_name":          "public",
 		"module_id":            nil,
 		"accessible_verticals": []string{},
