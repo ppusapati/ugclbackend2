@@ -59,13 +59,13 @@ type CreateProjectRequest struct {
 
 // UpdateProjectRequest represents the request to update a project
 type UpdateProjectRequest struct {
-	Name               string     `json:"name"`
-	Description        string     `json:"description"`
-	StartDate          *time.Time `json:"start_date"`
-	EndDate            *time.Time `json:"end_date"`
-	TotalBudget        float64    `json:"total_budget"`
-	Status             string     `json:"status"`
-	Progress           float64    `json:"progress"`
+	Name        string     `json:"name"`
+	Description string     `json:"description"`
+	StartDate   *time.Time `json:"start_date"`
+	EndDate     *time.Time `json:"end_date"`
+	TotalBudget float64    `json:"total_budget"`
+	Status      string     `json:"status"`
+	Progress    float64    `json:"progress"`
 }
 
 // CreateProject creates a new project
@@ -261,19 +261,19 @@ func (h *ProjectHandler) UploadKMZ(w http.ResponseWriter, r *http.Request) {
 		locationWKT := fmt.Sprintf("SRID=4326;POINT(%f %f)", nodeData.Longitude, nodeData.Latitude)
 
 		node := models.Node{
-			ProjectID:   project.ID,
-			ZoneID:      zoneID,
-			Name:        nodeData.Name,
-			Code:        nodeData.Code,
-			Label:       nodeData.Label,
-			NodeType:    nodeData.NodeType,
-			Latitude:    nodeData.Latitude,
-			Longitude:   nodeData.Longitude,
-			Elevation:   nodeData.Elevation,
-			Location:    locationWKT,
-			GeoJSON:     json.RawMessage(nodeGeoJSON),
-			Properties:  json.RawMessage(nodeProps),
-			Status:      "available",
+			ProjectID:  project.ID,
+			ZoneID:     zoneID,
+			Name:       nodeData.Name,
+			Code:       nodeData.Code,
+			Label:      nodeData.Label,
+			NodeType:   nodeData.NodeType,
+			Latitude:   nodeData.Latitude,
+			Longitude:  nodeData.Longitude,
+			Elevation:  nodeData.Elevation,
+			Location:   locationWKT,
+			GeoJSON:    json.RawMessage(nodeGeoJSON),
+			Properties: json.RawMessage(nodeProps),
+			Status:     "available",
 		}
 
 		if err := tx.Create(&node).Error; err != nil {

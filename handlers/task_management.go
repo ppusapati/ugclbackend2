@@ -51,18 +51,18 @@ type CreateTaskRequest struct {
 
 // UpdateTaskRequest represents the request to update a task
 type UpdateTaskRequest struct {
-	Title            string     `json:"title"`
-	Description      string     `json:"description"`
+	Title            *string    `json:"title"`
+	Description      *string    `json:"description"`
 	PlannedStartDate *time.Time `json:"planned_start_date"`
 	PlannedEndDate   *time.Time `json:"planned_end_date"`
-	AllocatedBudget  float64    `json:"allocated_budget"`
-	Status           string     `json:"status"`
-	Progress         float64    `json:"progress"`
-	Priority         string     `json:"priority"`
-	LaborCost        float64    `json:"labor_cost"`
-	MaterialCost     float64    `json:"material_cost"`
-	EquipmentCost    float64    `json:"equipment_cost"`
-	OtherCost        float64    `json:"other_cost"`
+	AllocatedBudget  *float64   `json:"allocated_budget"`
+	Status           *string    `json:"status"`
+	Progress         *float64   `json:"progress"`
+	Priority         *string    `json:"priority"`
+	LaborCost        *float64   `json:"labor_cost"`
+	MaterialCost     *float64   `json:"material_cost"`
+	EquipmentCost    *float64   `json:"equipment_cost"`
+	OtherCost        *float64   `json:"other_cost"`
 }
 
 // AssignTaskRequest represents the request to assign users to a task
@@ -121,6 +121,9 @@ func (h *TaskHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUser(r)
 
 	// Prepare metadata
+	if req.Metadata == nil {
+		req.Metadata = map[string]interface{}{}
+	}
 	metadataJSON, _ := json.Marshal(req.Metadata)
 
 	taskLabel := strings.TrimSpace(req.Title)
@@ -128,25 +131,81 @@ func (h *TaskHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
 		taskLabel = strings.TrimSpace(req.Code)
 	}
 
+	startDate := time.Now().UTC()
+	if req.PlannedStartDate != nil {
+		startDate = req.PlannedStartDate.UTC()
+	}
+
+	endDate := startDate
+	if req.PlannedEndDate != nil {
+		endDate = req.PlannedEndDate.UTC()
+	}
+	if endDate.Before(startDate) {
+		endDate = startDate
+	}
+
+	expectedDays := int(endDate.Sub(startDate).Hours() / 24)
+	if expectedDays < 0 {
+		expectedDays = 0
+	}
+
+	location := strings.TrimSpace(fmt.Sprintf("%s -> %s", startNode.Name, stopNode.Name))
+	if location == "->" || location == "" {
+		location = req.ProjectID.String()
+	}
+
+	measurement := strings.TrimSpace(fmt.Sprintf("allocated_budget: %.2f", req.AllocatedBudget))
+	if measurement == "" {
+		measurement = "allocated_budget: 0"
+	}
+
+	taskType := strings.TrimSpace(req.Priority)
+	if taskType == "" {
+		taskType = "medium"
+	}
+
+	siteEngineerName := "System"
+	siteEngineerPhone := "NA"
+	if strings.TrimSpace(user.Name) != "" {
+		siteEngineerName = strings.TrimSpace(user.Name)
+	}
+	if strings.TrimSpace(user.Phone) != "" {
+		siteEngineerPhone = strings.TrimSpace(user.Phone)
+	}
+
+	assignedBy := siteEngineerName
+
 	// Create task
 	task := models.Tasks{
-		Code:             req.Code,
-		Label:            taskLabel,
-		Title:            req.Title,
-		Description:      req.Description,
-		ProjectID:        req.ProjectID,
-		ZoneID:           req.ZoneID,
-		StartNodeID:      req.StartNodeID,
-		StopNodeID:       req.StopNodeID,
-		PlannedStartDate: req.PlannedStartDate,
-		PlannedEndDate:   req.PlannedEndDate,
-		AllocatedBudget:  req.AllocatedBudget,
-		Priority:         req.Priority,
-		WorkflowID:       req.WorkflowID,
-		Status:           "pending",
-		Progress:         0,
-		Metadata:         json.RawMessage(metadataJSON),
-		CreatedBy:        claims.UserID,
+		Code:                   req.Code,
+		Label:                  taskLabel,
+		Title:                  req.Title,
+		Description:            req.Description,
+		Location:               location,
+		Measurement:            measurement,
+		TaskType:               taskType,
+		ExpectedCompletionDays: fmt.Sprintf("%d", expectedDays),
+		StartDate:              startDate,
+		EndDate:                endDate,
+		WorkAssignedBy:         &assignedBy,
+		Latitude:               startNode.Latitude,
+		Longitude:              startNode.Longitude,
+		SubmittedAt:            time.Now().UTC(),
+		SiteEngineerName:       siteEngineerName,
+		SiteEngineerPhone:      siteEngineerPhone,
+		ProjectID:              req.ProjectID,
+		ZoneID:                 req.ZoneID,
+		StartNodeID:            req.StartNodeID,
+		StopNodeID:             req.StopNodeID,
+		PlannedStartDate:       req.PlannedStartDate,
+		PlannedEndDate:         req.PlannedEndDate,
+		AllocatedBudget:        req.AllocatedBudget,
+		Priority:               req.Priority,
+		WorkflowID:             req.WorkflowID,
+		Status:                 "pending",
+		Progress:               0,
+		Metadata:               json.RawMessage(metadataJSON),
+		CreatedBy:              claims.UserID,
 	}
 
 	// Set default priority if not provided
@@ -165,7 +224,7 @@ func (h *TaskHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
 	if err := tx.Create(&task).Error; err != nil {
 		tx.Rollback()
 		log.Printf("❌ Failed to create task: %v", err)
-		http.Error(w, "Failed to create task", http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("Failed to create task: %v", err), http.StatusInternalServerError)
 		return
 	}
 
@@ -345,19 +404,17 @@ func (h *TaskHandler) UpdateTaskStatus(w http.ResponseWriter, r *http.Request) {
 	task.UpdatedBy = claims.UserID
 
 	// Update dates based on status
-	if req.Status == "in-progress" && task.ActualStartDate == nil {
+	if req.ActualStartDate != nil {
+		task.ActualStartDate = req.ActualStartDate
+	} else if req.Status == "in-progress" && task.ActualStartDate == nil {
 		now := time.Now()
 		task.ActualStartDate = &now
-		if req.ActualStartDate != nil {
-			task.ActualStartDate = req.ActualStartDate
-		}
 	}
-	if req.Status == "completed" && task.ActualEndDate == nil {
+	if req.ActualEndDate != nil {
+		task.ActualEndDate = req.ActualEndDate
+	} else if req.Status == "completed" && task.ActualEndDate == nil {
 		now := time.Now()
 		task.ActualEndDate = &now
-		if req.ActualEndDate != nil {
-			task.ActualEndDate = req.ActualEndDate
-		}
 		task.Progress = 100
 	}
 
@@ -406,7 +463,7 @@ func (h *TaskHandler) GetTask(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	taskID := vars["id"]
 
-	var task models.Task
+	var task models.Tasks
 	if err := h.db.
 		Preload("Project").
 		Preload("Zone").
@@ -426,21 +483,20 @@ func (h *TaskHandler) GetTask(w http.ResponseWriter, r *http.Request) {
 
 // ListTasks lists all tasks with filters
 func (h *TaskHandler) ListTasks(w http.ResponseWriter, r *http.Request) {
-	var tasks []models.Task
+	var tasks []models.Tasks
 
-	query := h.db.
-		Preload("Project").
-		Preload("StartNode").
-		Preload("StopNode")
+	projectID := r.URL.Query().Get("project_id")
+
+	query := h.db.Model(&models.Tasks{})
 
 	// Apply filters
-	if projectID := r.URL.Query().Get("project_id"); projectID != "" {
+	if projectID != "" {
 		query = query.Where("project_id = ?", projectID)
 	}
-	if status := r.URL.Query().Get("status"); status != "" {
+	if status := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("status"))); status != "" && status != "undefined" && status != "null" {
 		query = query.Where("status = ?", status)
 	}
-	if priority := r.URL.Query().Get("priority"); priority != "" {
+	if priority := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("priority"))); priority != "" && priority != "undefined" && priority != "null" {
 		query = query.Where("priority = ?", priority)
 	}
 	if assignedTo := r.URL.Query().Get("assigned_to"); assignedTo != "" {
@@ -449,6 +505,7 @@ func (h *TaskHandler) ListTasks(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := query.Order("created_at DESC").Find(&tasks).Error; err != nil {
+		log.Printf("❌ ListTasks DB error: %v", err)
 		http.Error(w, "Failed to fetch tasks", http.StatusInternalServerError)
 		return
 	}
@@ -485,16 +542,16 @@ func (h *TaskHandler) UpdateTask(w http.ResponseWriter, r *http.Request) {
 	changes := []models.TaskAuditLog{}
 
 	// Update fields and track changes
-	if req.Title != "" && req.Title != task.Title {
+	if req.Title != nil && *req.Title != task.Title {
 		changes = append(changes, models.TaskAuditLog{
 			TaskID: task.ID, Action: "updated", Field: "title",
-			OldValue: task.Title, NewValue: req.Title,
+			OldValue: task.Title, NewValue: *req.Title,
 			PerformedBy: claims.UserID, PerformedByName: user.Name, PerformedAt: time.Now(),
 		})
-		task.Title = req.Title
+		task.Title = *req.Title
 	}
-	if req.Description != "" && req.Description != task.Description {
-		task.Description = req.Description
+	if req.Description != nil && *req.Description != task.Description {
+		task.Description = *req.Description
 	}
 	if req.PlannedStartDate != nil {
 		task.PlannedStartDate = req.PlannedStartDate
@@ -502,28 +559,28 @@ func (h *TaskHandler) UpdateTask(w http.ResponseWriter, r *http.Request) {
 	if req.PlannedEndDate != nil {
 		task.PlannedEndDate = req.PlannedEndDate
 	}
-	if req.AllocatedBudget > 0 {
-		task.AllocatedBudget = req.AllocatedBudget
+	if req.AllocatedBudget != nil {
+		task.AllocatedBudget = *req.AllocatedBudget
 	}
-	if req.Priority != "" {
-		task.Priority = req.Priority
+	if req.Priority != nil {
+		task.Priority = *req.Priority
 	}
-	if req.Progress >= 0 {
-		task.Progress = req.Progress
+	if req.Progress != nil {
+		task.Progress = *req.Progress
 	}
 
 	// Update costs and recalculate total
-	if req.LaborCost >= 0 {
-		task.LaborCost = req.LaborCost
+	if req.LaborCost != nil {
+		task.LaborCost = *req.LaborCost
 	}
-	if req.MaterialCost >= 0 {
-		task.MaterialCost = req.MaterialCost
+	if req.MaterialCost != nil {
+		task.MaterialCost = *req.MaterialCost
 	}
-	if req.EquipmentCost >= 0 {
-		task.EquipmentCost = req.EquipmentCost
+	if req.EquipmentCost != nil {
+		task.EquipmentCost = *req.EquipmentCost
 	}
-	if req.OtherCost >= 0 {
-		task.OtherCost = req.OtherCost
+	if req.OtherCost != nil {
+		task.OtherCost = *req.OtherCost
 	}
 	task.TotalCost = task.LaborCost + task.MaterialCost + task.EquipmentCost + task.OtherCost
 

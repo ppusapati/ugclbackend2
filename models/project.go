@@ -145,11 +145,26 @@ func (Node) TableName() string {
 
 // Task represents a work task allocated to users
 type Tasks struct {
-	ID          uuid.UUID `gorm:"type:uuid;primary_key;default:gen_random_uuid()" json:"id"`
-	Code        string    `gorm:"size:50;uniqueIndex;not null" json:"code"`
-	Label       string    `gorm:"size:255;not null;default:''" json:"label"`
-	Title       string    `gorm:"size:255;not null" json:"title"`
-	Description string    `gorm:"type:text" json:"description,omitempty"`
+	ID                     uuid.UUID `gorm:"type:uuid;primary_key;default:gen_random_uuid()" json:"id"`
+	Code                   string    `gorm:"size:50;uniqueIndex;not null" json:"code"`
+	Label                  string    `gorm:"type:text;not null" json:"label"`
+	Title                  string    `gorm:"size:255;not null" json:"title"`
+	Description            string    `gorm:"type:text" json:"description,omitempty"`
+	Location               string    `gorm:"type:text;not null" json:"location"`
+	Measurement            string    `gorm:"type:text;not null" json:"measurement"`
+	TaskType               string    `gorm:"column:task_type;type:text;not null" json:"task_type"`
+	ExpectedCompletionDays string    `gorm:"column:expected_completion_days;type:text;not null" json:"expected_completion_days"`
+	StartDate              time.Time `gorm:"column:start_date;not null" json:"start_date"`
+	EndDate                time.Time `gorm:"column:end_date;not null" json:"end_date"`
+	PipeMaterial           *string   `gorm:"column:pipe_material;type:text" json:"pipe_material,omitempty"`
+	PipeDia                *string   `gorm:"column:pipe_dia;type:text" json:"pipe_dia,omitempty"`
+	Remarks                *string   `gorm:"type:text" json:"remarks,omitempty"`
+	WorkAssignedBy         *string   `gorm:"column:work_assigned_by;type:text" json:"work_assigned_by,omitempty"`
+	Latitude               float64   `gorm:"type:decimal(10,8);not null" json:"latitude"`
+	Longitude              float64   `gorm:"type:decimal(11,8);not null" json:"longitude"`
+	SubmittedAt            time.Time `gorm:"column:submitted_at;not null" json:"submitted_at"`
+	SiteEngineerName       string    `gorm:"column:site_engineer_name;type:text;not null" json:"site_engineer_name"`
+	SiteEngineerPhone      string    `gorm:"column:site_engineer_phone;type:text;not null" json:"site_engineer_phone"`
 
 	// Project context
 	ProjectID uuid.UUID  `gorm:"type:uuid;not null;index" json:"project_id"`

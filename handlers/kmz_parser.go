@@ -48,8 +48,8 @@ type ExtendedData struct {
 		Value string `xml:"value"`
 	} `xml:"Data"`
 	SchemaData []struct {
-		SchemaURL    string `xml:"schemaUrl,attr"`
-		SimpleData   []struct {
+		SchemaURL  string `xml:"schemaUrl,attr"`
+		SimpleData []struct {
 			Name  string `xml:"name,attr"`
 			Value string `xml:",chardata"`
 		} `xml:"SimpleData"`
@@ -374,21 +374,21 @@ func (p *KMZParser) ParseKMZToGeoJSON(kmzData []byte) (*geojson.FeatureCollectio
 
 // ParsedKMZData represents the structured data extracted from KMZ
 type ParsedKMZData struct {
-	GeoJSON      *geojson.FeatureCollection `json:"geojson"`
-	Zones        []ZoneData                 `json:"zones"`
-	Nodes        []NodeData                 `json:"nodes"`
-	Labels       []LabelData                `json:"labels"`
-	TotalFeatures int                       `json:"total_features"`
+	GeoJSON       *geojson.FeatureCollection `json:"geojson"`
+	Zones         []ZoneData                 `json:"zones"`
+	Nodes         []NodeData                 `json:"nodes"`
+	Labels        []LabelData                `json:"labels"`
+	TotalFeatures int                        `json:"total_features"`
 }
 
 // ZoneData represents a zone extracted from KMZ
 type ZoneData struct {
-	Name       string                 `json:"name"`
-	Code       string                 `json:"code,omitempty"`
-	Label      string                 `json:"label,omitempty"`
-	GeometryType string               `json:"geometry_type"`
-	GeoJSON    map[string]interface{} `json:"geojson"`
-	Properties map[string]interface{} `json:"properties"`
+	Name         string                 `json:"name"`
+	Code         string                 `json:"code,omitempty"`
+	Label        string                 `json:"label,omitempty"`
+	GeometryType string                 `json:"geometry_type"`
+	GeoJSON      map[string]interface{} `json:"geojson"`
+	Properties   map[string]interface{} `json:"properties"`
 }
 
 // NodeData represents a node (point) extracted from KMZ
@@ -420,10 +420,10 @@ func (p *KMZParser) ParseKMZToStructuredData(kmzData []byte) (*ParsedKMZData, er
 	}
 
 	result := &ParsedKMZData{
-		GeoJSON:      fc,
-		Zones:        []ZoneData{},
-		Nodes:        []NodeData{},
-		Labels:       []LabelData{},
+		GeoJSON:       fc,
+		Zones:         []ZoneData{},
+		Nodes:         []NodeData{},
+		Labels:        []LabelData{},
 		TotalFeatures: len(fc.Features),
 	}
 
