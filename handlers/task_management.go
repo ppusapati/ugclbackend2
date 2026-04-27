@@ -504,7 +504,11 @@ func (h *TaskHandler) ListTasks(w http.ResponseWriter, r *http.Request) {
 			Where("task_assignments.user_id = ? AND task_assignments.is_active = ?", assignedTo, true)
 	}
 
-	if err := query.Order("created_at DESC").Find(&tasks).Error; err != nil {
+	if err := query.
+		Preload("StartNode").
+		Preload("StopNode").
+		Preload("Assignments").
+		Order("created_at DESC").Find(&tasks).Error; err != nil {
 		log.Printf("❌ ListTasks DB error: %v", err)
 		http.Error(w, "Failed to fetch tasks", http.StatusInternalServerError)
 		return

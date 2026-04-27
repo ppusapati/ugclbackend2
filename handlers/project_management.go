@@ -521,6 +521,9 @@ func (h *ProjectHandler) GetProjectStats(w http.ResponseWriter, r *http.Request)
 	h.db.Model(&models.Zone{}).Where("project_id = ?", projectID).Count(&zoneCount)
 
 	// Count nodes by type
+	var totalNodes int64
+	h.db.Model(&models.Node{}).Where("project_id = ?", projectID).Count(&totalNodes)
+
 	var nodeStats []struct {
 		NodeType string
 		Count    int64
@@ -532,15 +535,31 @@ func (h *ProjectHandler) GetProjectStats(w http.ResponseWriter, r *http.Request)
 		Scan(&nodeStats)
 
 	// Count tasks by status
+	var totalTasks int64
+	h.db.Model(&models.Tasks{}).Where("project_id = ?", projectID).Count(&totalTasks)
+
 	var taskStats []struct {
 		Status string
 		Count  int64
 	}
-	h.db.Model(&models.Task{}).
+	h.db.Model(&models.Tasks{}).
 		Select("status, count(*) as count").
 		Where("project_id = ?", projectID).
 		Group("status").
 		Scan(&taskStats)
+
+	completedTasks := int64(0)
+	for _, row := range taskStats {
+		if row.Status == "completed" {
+			completedTasks = row.Count
+			break
+		}
+	}
+
+	completionPercentage := 0.0
+	if totalTasks > 0 {
+		completionPercentage = (float64(completedTasks) / float64(totalTasks)) * 100
+	}
 
 	// Budget stats
 	var budgetStats struct {
@@ -555,13 +574,23 @@ func (h *ProjectHandler) GetProjectStats(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"project_id":       projectID,
+		"total_zones":      zoneCount,
+		"total_nodes":      totalNodes,
+		"total_tasks":      totalTasks,
 		"total_budget":     project.TotalBudget,
 		"allocated_budget": budgetStats.TotalAllocated,
 		"spent_budget":     budgetStats.TotalSpent,
-		"progress":         project.Progress,
-		"status":           project.Status,
-		"zones_count":      zoneCount,
-		"nodes_by_type":    nodeStats,
-		"tasks_by_status":  taskStats,
+		"budget_utilization": func() float64 {
+			if project.TotalBudget <= 0 {
+				return 0
+			}
+			return (budgetStats.TotalSpent / project.TotalBudget) * 100
+		}(),
+		"completion_percentage": completionPercentage,
+		"progress":              project.Progress,
+		"status":                project.Status,
+		"zones_count":           zoneCount,
+		"nodes_by_type":         nodeStats,
+		"tasks_by_status":       taskStats,
 	})
 }
