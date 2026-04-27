@@ -43,85 +43,91 @@ type WorkflowState struct {
 
 // WorkflowTransitionDef represents a state transition definition
 type WorkflowTransitionDef struct {
-	From            string                      `json:"from"`
-	To              string                      `json:"to"`
-	Action          string                      `json:"action"`
-	Label           string                      `json:"label,omitempty"`
-	Permission      string                      `json:"permission,omitempty"`
-	RequiresComment bool                        `json:"requires_comment,omitempty"`
+	From                 string                                  `json:"from"`
+	To                   string                                  `json:"to"`
+	Action               string                                  `json:"action"`
+	Label                string                                  `json:"label,omitempty"`
+	Permission           string                                  `json:"permission,omitempty"`
+	RequiresComment      bool                                    `json:"requires_comment,omitempty"`
+	DocumentRequirements *WorkflowTransitionDocumentRequirements `json:"document_requirements,omitempty"`
 
 	// Notification configuration
-	Notifications   []TransitionNotification    `json:"notifications,omitempty"`
+	Notifications []TransitionNotification `json:"notifications,omitempty"`
+}
+
+type WorkflowTransitionDocumentRequirements struct {
+	MinDocuments         int `json:"min_documents,omitempty"`
+	MinApprovedDocuments int `json:"min_approved_documents,omitempty"`
 }
 
 // TransitionNotification defines notification config for a transition
 type TransitionNotification struct {
 	// Recipients - supports multiple targeting strategies
-	Recipients      []NotificationRecipientDef `json:"recipients"`
+	Recipients []NotificationRecipientDef `json:"recipients"`
 
 	// Content
-	TitleTemplate   string                     `json:"title_template"`
-	BodyTemplate    string                     `json:"body_template"`
-	Priority        string                     `json:"priority,omitempty"`        // low, normal, high, critical
+	TitleTemplate string `json:"title_template"`
+	BodyTemplate  string `json:"body_template"`
+	Priority      string `json:"priority,omitempty"` // low, normal, high, critical
 
 	// Delivery
-	Channels        []string                   `json:"channels,omitempty"`        // in_app, email, sms, web_push
+	Channels []string `json:"channels,omitempty"` // in_app, email, sms, web_push
 
 	// Conditions (optional - send only if condition met)
-	Condition       map[string]interface{}     `json:"condition,omitempty"`
+	Condition map[string]interface{} `json:"condition,omitempty"`
 }
 
 // NotificationRecipientDef defines who receives the notification
 type NotificationRecipientDef struct {
-	Type            string                 `json:"type"`                     // user, role, business_role, permission, attribute, policy, submitter, approver, field_value
+	Type string `json:"type"` // user, role, business_role, permission, attribute, policy, submitter, approver, field_value
 
 	// Type-specific values
-	Value           string                 `json:"value,omitempty"`          // For user (user_id), role (role_name), permission (perm_code), field_value (field_name)
-	RoleID          string                 `json:"role_id,omitempty"`        // For role targeting
-	BusinessRoleID  string                 `json:"business_role_id,omitempty"` // For business_role targeting
-	PermissionCode  string                 `json:"permission_code,omitempty"`  // For permission targeting
-	AttributeQuery  map[string]interface{} `json:"attribute_query,omitempty"` // For ABAC targeting
-	PolicyID        string                 `json:"policy_id,omitempty"`      // For PBAC targeting
+	Value          string                 `json:"value,omitempty"`            // For user (user_id), role (role_name), permission (perm_code), field_value (field_name)
+	RoleID         string                 `json:"role_id,omitempty"`          // For role targeting
+	BusinessRoleID string                 `json:"business_role_id,omitempty"` // For business_role targeting
+	PermissionCode string                 `json:"permission_code,omitempty"`  // For permission targeting
+	AttributeQuery map[string]interface{} `json:"attribute_query,omitempty"`  // For ABAC targeting
+	PolicyID       string                 `json:"policy_id,omitempty"`        // For PBAC targeting
 }
 
 // FormSubmission represents a submitted form instance with workflow state
 type FormSubmission struct {
-	ID               uuid.UUID `gorm:"type:uuid;primary_key;default:gen_random_uuid()" json:"id"`
+	ID uuid.UUID `gorm:"type:uuid;primary_key;default:gen_random_uuid()" json:"id"`
 
 	// Form reference
-	FormCode         string     `gorm:"size:50;not null;index" json:"form_code"`
-	FormID           uuid.UUID  `gorm:"type:uuid;not null;index" json:"form_id"`
-	Form             *AppForm   `gorm:"foreignKey:FormID" json:"form,omitempty"`
+	FormCode string    `gorm:"size:50;not null;index" json:"form_code"`
+	FormID   uuid.UUID `gorm:"type:uuid;not null;index" json:"form_id"`
+	Form     *AppForm  `gorm:"foreignKey:FormID" json:"form,omitempty"`
 
 	// Business context
-	BusinessVerticalID uuid.UUID       `gorm:"type:uuid;not null;index" json:"business_vertical_id"`
+	BusinessVerticalID uuid.UUID         `gorm:"type:uuid;not null;index" json:"business_vertical_id"`
 	BusinessVertical   *BusinessVertical `gorm:"foreignKey:BusinessVerticalID" json:"business_vertical,omitempty"`
 
 	// Site context (optional - for site-specific forms)
-	SiteID           *uuid.UUID `gorm:"type:uuid;index" json:"site_id,omitempty"`
+	SiteID *uuid.UUID `gorm:"type:uuid;index" json:"site_id,omitempty"`
 
 	// Workflow state
-	WorkflowID       *uuid.UUID          `gorm:"type:uuid;index" json:"workflow_id,omitempty"`
-	Workflow         *WorkflowDefinition `gorm:"foreignKey:WorkflowID" json:"workflow,omitempty"`
-	CurrentState     string              `gorm:"size:50;not null;default:'draft';index" json:"current_state"`
+	WorkflowID   *uuid.UUID          `gorm:"type:uuid;index" json:"workflow_id,omitempty"`
+	Workflow     *WorkflowDefinition `gorm:"foreignKey:WorkflowID" json:"workflow,omitempty"`
+	CurrentState string              `gorm:"size:50;not null;default:'draft';index" json:"current_state"`
 
 	// Form data (submitted field values)
-	FormData         json.RawMessage `gorm:"type:jsonb;not null;default:'{}'" json:"form_data"`
+	FormData json.RawMessage `gorm:"type:jsonb;not null;default:'{}'" json:"form_data"`
 
 	// Metadata
-	Version          int       `gorm:"default:1" json:"version"`
-	SubmittedBy      string    `gorm:"size:255;not null" json:"submitted_by"`
-	SubmittedAt      time.Time `json:"submitted_at"`
-	LastModifiedBy   string    `gorm:"size:255" json:"last_modified_by,omitempty"`
-	LastModifiedAt   time.Time `json:"last_modified_at,omitempty"`
+	Version        int       `gorm:"default:1" json:"version"`
+	SubmittedBy    string    `gorm:"size:255;not null" json:"submitted_by"`
+	SubmittedAt    time.Time `json:"submitted_at"`
+	LastModifiedBy string    `gorm:"size:255" json:"last_modified_by,omitempty"`
+	LastModifiedAt time.Time `json:"last_modified_at,omitempty"`
 
 	// Audit trail
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
-	DeletedAt        *time.Time `gorm:"index" json:"deleted_at,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
+	DeletedAt *time.Time `gorm:"index" json:"deleted_at,omitempty"`
 
 	// Relationships
-	Transitions      []WorkflowTransition `gorm:"foreignKey:SubmissionID" json:"transitions,omitempty"`
+	Transitions []WorkflowTransition `gorm:"foreignKey:SubmissionID" json:"transitions,omitempty"`
 }
 
 // TableName specifies the table name for FormSubmission
@@ -131,25 +137,25 @@ func (FormSubmission) TableName() string {
 
 // WorkflowTransition represents a state transition event (audit trail)
 type WorkflowTransition struct {
-	ID           uuid.UUID `gorm:"type:uuid;primary_key;default:gen_random_uuid()" json:"id"`
+	ID uuid.UUID `gorm:"type:uuid;primary_key;default:gen_random_uuid()" json:"id"`
 
 	// Submission reference
 	SubmissionID uuid.UUID       `gorm:"type:uuid;not null;index" json:"submission_id"`
 	Submission   *FormSubmission `gorm:"foreignKey:SubmissionID" json:"submission,omitempty"`
 
 	// Transition details
-	FromState    string    `gorm:"size:50;not null" json:"from_state"`
-	ToState      string    `gorm:"size:50;not null" json:"to_state"`
-	Action       string    `gorm:"size:50;not null" json:"action"`
+	FromState string `gorm:"size:50;not null" json:"from_state"`
+	ToState   string `gorm:"size:50;not null" json:"to_state"`
+	Action    string `gorm:"size:50;not null" json:"action"`
 
 	// Actor information
-	ActorID      string    `gorm:"size:255;not null" json:"actor_id"`
-	ActorName    string    `gorm:"size:255" json:"actor_name,omitempty"`
-	ActorRole    string    `gorm:"size:100" json:"actor_role,omitempty"`
+	ActorID   string `gorm:"size:255;not null" json:"actor_id"`
+	ActorName string `gorm:"size:255" json:"actor_name,omitempty"`
+	ActorRole string `gorm:"size:100" json:"actor_role,omitempty"`
 
 	// Additional context
-	Comment      string          `gorm:"type:text" json:"comment,omitempty"`
-	Metadata     json.RawMessage `gorm:"type:jsonb;default:'{}'" json:"metadata,omitempty"`
+	Comment  string          `gorm:"type:text" json:"comment,omitempty"`
+	Metadata json.RawMessage `gorm:"type:jsonb;default:'{}'" json:"metadata,omitempty"`
 
 	// Timestamp
 	TransitionedAt time.Time `gorm:"not null;index" json:"transitioned_at"`
@@ -257,17 +263,17 @@ func (s *FormSubmission) CanTransition(action string, workflowDef *WorkflowDefin
 
 // FormSubmissionDTO represents the response structure for form submissions
 type FormSubmissionDTO struct {
-	ID                 uuid.UUID       `json:"id"`
-	FormCode           string          `json:"form_code"`
-	FormTitle          string          `json:"form_title,omitempty"`
-	BusinessVerticalID uuid.UUID       `json:"business_vertical_id"`
-	SiteID             *uuid.UUID      `json:"site_id,omitempty"`
-	CurrentState       string          `json:"current_state"`
-	FormData           json.RawMessage `json:"form_data"`
-	SubmittedBy        string          `json:"submitted_by"`
-	SubmittedAt        time.Time       `json:"submitted_at"`
-	LastModifiedBy     string          `json:"last_modified_by,omitempty"`
-	LastModifiedAt     time.Time       `json:"last_modified_at,omitempty"`
+	ID                 uuid.UUID        `json:"id"`
+	FormCode           string           `json:"form_code"`
+	FormTitle          string           `json:"form_title,omitempty"`
+	BusinessVerticalID uuid.UUID        `json:"business_vertical_id"`
+	SiteID             *uuid.UUID       `json:"site_id,omitempty"`
+	CurrentState       string           `json:"current_state"`
+	FormData           json.RawMessage  `json:"form_data"`
+	SubmittedBy        string           `json:"submitted_by"`
+	SubmittedAt        time.Time        `json:"submitted_at"`
+	LastModifiedBy     string           `json:"last_modified_by,omitempty"`
+	LastModifiedAt     time.Time        `json:"last_modified_at,omitempty"`
 	AvailableActions   []WorkflowAction `json:"available_actions,omitempty"`
 }
 

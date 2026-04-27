@@ -10,10 +10,231 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
+	"gorm.io/gorm"
 	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/middleware"
 	"p9e.in/ugcl/models"
 )
+
+func buildSystemFields(tableName string, title string, fields []map[string]interface{}) map[string]interface{} {
+	return map[string]interface{}{
+		"table_name":  tableName,
+		"form_title":  title,
+		"form_fields": fields,
+		"db_fields":   []map[string]interface{}{},
+		"all_fields":  fields,
+	}
+}
+
+func getDMSDocumentFields() []map[string]interface{} {
+	return []map[string]interface{}{
+		{"id": "id", "label": "Document ID", "type": "text", "dataType": "text", "source": "system", "column_name": "id"},
+		{"id": "title", "label": "Title", "type": "text", "dataType": "text", "source": "system", "column_name": "title"},
+		{"id": "description", "label": "Description", "type": "text", "dataType": "text", "source": "system", "column_name": "description"},
+		{"id": "file_name", "label": "File Name", "type": "text", "dataType": "text", "source": "system", "column_name": "file_name"},
+		{"id": "file_type", "label": "File Type", "type": "text", "dataType": "text", "source": "system", "column_name": "file_type"},
+		{"id": "file_size", "label": "File Size", "type": "number", "dataType": "number", "source": "system", "column_name": "file_size"},
+		{"id": "status", "label": "Status", "type": "text", "dataType": "text", "source": "system", "column_name": "status"},
+		{"id": "current_state", "label": "Workflow State", "type": "text", "dataType": "text", "source": "system", "column_name": "current_state"},
+		{"id": "business_vertical_id", "label": "Business Vertical ID", "type": "text", "dataType": "text", "source": "system", "column_name": "business_vertical_id"},
+		{"id": "project_id", "label": "Project ID", "type": "text", "dataType": "text", "source": "system", "column_name": "project_id"},
+		{"id": "task_id", "label": "Task ID", "type": "text", "dataType": "text", "source": "system", "column_name": "task_id"},
+		{"id": "uploaded_by_id", "label": "Uploaded By ID", "type": "text", "dataType": "text", "source": "system", "column_name": "uploaded_by_id"},
+		{"id": "download_count", "label": "Download Count", "type": "number", "dataType": "number", "source": "system", "column_name": "download_count"},
+		{"id": "view_count", "label": "View Count", "type": "number", "dataType": "number", "source": "system", "column_name": "view_count"},
+		{"id": "is_public", "label": "Is Public", "type": "boolean", "dataType": "boolean", "source": "system", "column_name": "is_public"},
+		{"id": "created_at", "label": "Created At", "type": "datetime", "dataType": "datetime", "source": "system", "column_name": "created_at"},
+		{"id": "updated_at", "label": "Updated At", "type": "datetime", "dataType": "datetime", "source": "system", "column_name": "updated_at"},
+	}
+}
+
+func getPMSProjectFields() []map[string]interface{} {
+	return []map[string]interface{}{
+		{"id": "id", "label": "Project ID", "type": "text", "dataType": "text", "source": "system", "column_name": "id"},
+		{"id": "code", "label": "Project Code", "type": "text", "dataType": "text", "source": "system", "column_name": "code"},
+		{"id": "name", "label": "Project Name", "type": "text", "dataType": "text", "source": "system", "column_name": "name"},
+		{"id": "description", "label": "Description", "type": "text", "dataType": "text", "source": "system", "column_name": "description"},
+		{"id": "business_vertical_id", "label": "Business Vertical ID", "type": "text", "dataType": "text", "source": "system", "column_name": "business_vertical_id"},
+		{"id": "status", "label": "Status", "type": "text", "dataType": "text", "source": "system", "column_name": "status"},
+		{"id": "progress", "label": "Progress", "type": "number", "dataType": "number", "source": "system", "column_name": "progress"},
+		{"id": "total_budget", "label": "Total Budget", "type": "number", "dataType": "number", "source": "system", "column_name": "total_budget"},
+		{"id": "allocated_budget", "label": "Allocated Budget", "type": "number", "dataType": "number", "source": "system", "column_name": "allocated_budget"},
+		{"id": "spent_budget", "label": "Spent Budget", "type": "number", "dataType": "number", "source": "system", "column_name": "spent_budget"},
+		{"id": "start_date", "label": "Start Date", "type": "datetime", "dataType": "datetime", "source": "system", "column_name": "start_date"},
+		{"id": "end_date", "label": "End Date", "type": "datetime", "dataType": "datetime", "source": "system", "column_name": "end_date"},
+		{"id": "created_by", "label": "Created By", "type": "text", "dataType": "text", "source": "system", "column_name": "created_by"},
+		{"id": "created_at", "label": "Created At", "type": "datetime", "dataType": "datetime", "source": "system", "column_name": "created_at"},
+		{"id": "updated_at", "label": "Updated At", "type": "datetime", "dataType": "datetime", "source": "system", "column_name": "updated_at"},
+	}
+}
+
+func getPMSTaskFields() []map[string]interface{} {
+	return []map[string]interface{}{
+		{"id": "id", "label": "Task ID", "type": "text", "dataType": "text", "source": "system", "column_name": "id"},
+		{"id": "code", "label": "Task Code", "type": "text", "dataType": "text", "source": "system", "column_name": "code"},
+		{"id": "title", "label": "Task Title", "type": "text", "dataType": "text", "source": "system", "column_name": "title"},
+		{"id": "project_id", "label": "Project ID", "type": "text", "dataType": "text", "source": "system", "column_name": "project_id"},
+		{"id": "zone_id", "label": "Zone ID", "type": "text", "dataType": "text", "source": "system", "column_name": "zone_id"},
+		{"id": "start_node_id", "label": "Start Node ID", "type": "text", "dataType": "text", "source": "system", "column_name": "start_node_id"},
+		{"id": "stop_node_id", "label": "Stop Node ID", "type": "text", "dataType": "text", "source": "system", "column_name": "stop_node_id"},
+		{"id": "status", "label": "Task Status", "type": "text", "dataType": "text", "source": "system", "column_name": "status"},
+		{"id": "current_state", "label": "Workflow State", "type": "text", "dataType": "text", "source": "system", "column_name": "current_state"},
+		{"id": "priority", "label": "Priority", "type": "text", "dataType": "text", "source": "system", "column_name": "priority"},
+		{"id": "progress", "label": "Progress", "type": "number", "dataType": "number", "source": "system", "column_name": "progress"},
+		{"id": "allocated_budget", "label": "Allocated Budget", "type": "number", "dataType": "number", "source": "system", "column_name": "allocated_budget"},
+		{"id": "total_cost", "label": "Total Cost", "type": "number", "dataType": "number", "source": "system", "column_name": "total_cost"},
+		{"id": "planned_start_date", "label": "Planned Start", "type": "datetime", "dataType": "datetime", "source": "system", "column_name": "planned_start_date"},
+		{"id": "planned_end_date", "label": "Planned End", "type": "datetime", "dataType": "datetime", "source": "system", "column_name": "planned_end_date"},
+		{"id": "actual_start_date", "label": "Actual Start", "type": "datetime", "dataType": "datetime", "source": "system", "column_name": "actual_start_date"},
+		{"id": "actual_end_date", "label": "Actual End", "type": "datetime", "dataType": "datetime", "source": "system", "column_name": "actual_end_date"},
+		{"id": "created_by", "label": "Created By", "type": "text", "dataType": "text", "source": "system", "column_name": "created_by"},
+		{"id": "created_at", "label": "Created At", "type": "datetime", "dataType": "datetime", "source": "system", "column_name": "created_at"},
+		{"id": "updated_at", "label": "Updated At", "type": "datetime", "dataType": "datetime", "source": "system", "column_name": "updated_at"},
+	}
+}
+
+func appendSystemReportTable(tables []map[string]interface{}, title string, tableName string) []map[string]interface{} {
+	return append(tables, map[string]interface{}{
+		"form_id":              nil,
+		"form_code":            "",
+		"form_title":           title,
+		"table_name":           tableName,
+		"schema_name":          "public",
+		"module_id":            nil,
+		"accessible_verticals": []string{},
+		"system":               true,
+	})
+}
+
+func ensureDefaultReportTemplates() error {
+	templates := []models.ReportTemplate{
+		{
+			Code:        "dms_documents_overview",
+			Name:        "DMS Documents Overview",
+			Description: "Track documents by status, size, ownership, and project/task linkage.",
+			Category:    "DMS",
+			Icon:        "i-heroicons-document-duplicate-solid",
+		},
+		{
+			Code:        "dms_documents_by_context",
+			Name:        "DMS Project-Task Document Matrix",
+			Description: "Analyze document counts and visibility across project and task context.",
+			Category:    "DMS",
+			Icon:        "i-heroicons-table-cells-solid",
+		},
+		{
+			Code:        "pms_projects_health_overview",
+			Name:        "PMS Projects Health Overview",
+			Description: "Monitor project progress and budget burn across statuses.",
+			Category:    "PMS",
+			Icon:        "i-heroicons-building-office-2-solid",
+		},
+		{
+			Code:        "pms_tasks_execution_tracker",
+			Name:        "PMS Tasks Execution Tracker",
+			Description: "Track task workflow, delivery dates, and execution costs.",
+			Category:    "PMS",
+			Icon:        "i-heroicons-clipboard-document-list-solid",
+		},
+	}
+
+	templatePayloads := map[string]map[string]interface{}{
+		"dms_documents_overview": {
+			"report_type": "table",
+			"data_sources": []map[string]interface{}{{
+				"alias":      "dms_documents",
+				"table_name": "documents",
+			}},
+			"fields": []map[string]interface{}{
+				{"field_name": "title", "alias": "Title", "data_source": "dms_documents", "data_type": "text", "is_visible": true, "order": 1},
+				{"field_name": "status", "alias": "Status", "data_source": "dms_documents", "data_type": "text", "is_visible": true, "order": 2},
+				{"field_name": "current_state", "alias": "Workflow State", "data_source": "dms_documents", "data_type": "text", "is_visible": true, "order": 3},
+				{"field_name": "file_type", "alias": "File Type", "data_source": "dms_documents", "data_type": "text", "is_visible": true, "order": 4},
+				{"field_name": "file_size", "alias": "File Size", "data_source": "dms_documents", "data_type": "number", "is_visible": true, "order": 5},
+				{"field_name": "project_id", "alias": "Project ID", "data_source": "dms_documents", "data_type": "text", "is_visible": true, "order": 6},
+				{"field_name": "task_id", "alias": "Task ID", "data_source": "dms_documents", "data_type": "text", "is_visible": true, "order": 7},
+				{"field_name": "created_at", "alias": "Uploaded At", "data_source": "dms_documents", "data_type": "datetime", "is_visible": true, "order": 8},
+			},
+		},
+		"dms_documents_by_context": {
+			"report_type": "table",
+			"data_sources": []map[string]interface{}{{
+				"alias":      "dms_documents",
+				"table_name": "documents",
+			}},
+			"fields": []map[string]interface{}{
+				{"field_name": "project_id", "alias": "Project ID", "data_source": "dms_documents", "data_type": "text", "is_visible": true, "order": 1},
+				{"field_name": "task_id", "alias": "Task ID", "data_source": "dms_documents", "data_type": "text", "is_visible": true, "order": 2},
+				{"field_name": "status", "alias": "Status", "data_source": "dms_documents", "data_type": "text", "is_visible": true, "order": 3},
+				{"field_name": "view_count", "alias": "View Count", "data_source": "dms_documents", "data_type": "number", "is_visible": true, "order": 4},
+				{"field_name": "download_count", "alias": "Download Count", "data_source": "dms_documents", "data_type": "number", "is_visible": true, "order": 5},
+				{"field_name": "created_at", "alias": "Created At", "data_source": "dms_documents", "data_type": "datetime", "is_visible": true, "order": 6},
+			},
+		},
+		"pms_projects_health_overview": {
+			"report_type": "table",
+			"data_sources": []map[string]interface{}{{
+				"alias":      "pms_projects",
+				"table_name": "projects",
+			}},
+			"fields": []map[string]interface{}{
+				{"field_name": "code", "alias": "Project Code", "data_source": "pms_projects", "data_type": "text", "is_visible": true, "order": 1},
+				{"field_name": "name", "alias": "Project Name", "data_source": "pms_projects", "data_type": "text", "is_visible": true, "order": 2},
+				{"field_name": "status", "alias": "Status", "data_source": "pms_projects", "data_type": "text", "is_visible": true, "order": 3},
+				{"field_name": "progress", "alias": "Progress", "data_source": "pms_projects", "data_type": "number", "is_visible": true, "order": 4},
+				{"field_name": "total_budget", "alias": "Total Budget", "data_source": "pms_projects", "data_type": "number", "is_visible": true, "order": 5},
+				{"field_name": "spent_budget", "alias": "Spent Budget", "data_source": "pms_projects", "data_type": "number", "is_visible": true, "order": 6},
+				{"field_name": "start_date", "alias": "Start Date", "data_source": "pms_projects", "data_type": "datetime", "is_visible": true, "order": 7},
+				{"field_name": "end_date", "alias": "End Date", "data_source": "pms_projects", "data_type": "datetime", "is_visible": true, "order": 8},
+			},
+		},
+		"pms_tasks_execution_tracker": {
+			"report_type": "table",
+			"data_sources": []map[string]interface{}{{
+				"alias":      "pms_tasks",
+				"table_name": "tasks",
+			}},
+			"fields": []map[string]interface{}{
+				{"field_name": "code", "alias": "Task Code", "data_source": "pms_tasks", "data_type": "text", "is_visible": true, "order": 1},
+				{"field_name": "title", "alias": "Task", "data_source": "pms_tasks", "data_type": "text", "is_visible": true, "order": 2},
+				{"field_name": "project_id", "alias": "Project ID", "data_source": "pms_tasks", "data_type": "text", "is_visible": true, "order": 3},
+				{"field_name": "status", "alias": "Status", "data_source": "pms_tasks", "data_type": "text", "is_visible": true, "order": 4},
+				{"field_name": "current_state", "alias": "Workflow State", "data_source": "pms_tasks", "data_type": "text", "is_visible": true, "order": 5},
+				{"field_name": "priority", "alias": "Priority", "data_source": "pms_tasks", "data_type": "text", "is_visible": true, "order": 6},
+				{"field_name": "progress", "alias": "Progress", "data_source": "pms_tasks", "data_type": "number", "is_visible": true, "order": 7},
+				{"field_name": "allocated_budget", "alias": "Allocated Budget", "data_source": "pms_tasks", "data_type": "number", "is_visible": true, "order": 8},
+				{"field_name": "total_cost", "alias": "Total Cost", "data_source": "pms_tasks", "data_type": "number", "is_visible": true, "order": 9},
+				{"field_name": "planned_end_date", "alias": "Planned End", "data_source": "pms_tasks", "data_type": "datetime", "is_visible": true, "order": 10},
+				{"field_name": "actual_end_date", "alias": "Actual End", "data_source": "pms_tasks", "data_type": "datetime", "is_visible": true, "order": 11},
+			},
+		},
+	}
+
+	for _, template := range templates {
+		var existing models.ReportTemplate
+		err := config.DB.Where("code = ?", template.Code).First(&existing).Error
+		if err == nil {
+			continue
+		}
+		if err != gorm.ErrRecordNotFound {
+			return err
+		}
+
+		payload := templatePayloads[template.Code]
+		rawPayload, marshalErr := json.Marshal(payload)
+		if marshalErr != nil {
+			return marshalErr
+		}
+
+		template.Template = rawPayload
+		template.IsActive = true
+		if createErr := config.DB.Create(&template).Error; createErr != nil {
+			return createErr
+		}
+	}
+
+	return nil
+}
 
 // CreateReportDefinition creates a new report
 func CreateReportDefinition(w http.ResponseWriter, r *http.Request) {
@@ -468,6 +689,24 @@ func GetFormTableFields(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if normalizedTable == "documents" {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(buildSystemFields("documents", "DMS Documents", getDMSDocumentFields()))
+		return
+	}
+
+	if normalizedTable == "projects" {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(buildSystemFields("projects", "PMS Projects", getPMSProjectFields()))
+		return
+	}
+
+	if normalizedTable == "tasks" {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(buildSystemFields("tasks", "PMS Tasks", getPMSTaskFields()))
+		return
+	}
+
 	// Find the form by db_table_name OR code (table_name may be a form code for forms without a dedicated table).
 	var form models.AppForm
 	var formFields []map[string]interface{}
@@ -841,39 +1080,15 @@ func GetAvailableFormTables(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// Always append the workflow audit trail as a system data source.
-	tables = append(tables, map[string]interface{}{
-		"form_id":              nil,
-		"form_code":            "",
-		"form_title":           "Workflow Audit Trail",
-		"table_name":           "workflow_transitions",
-		"schema_name":          "public",
-		"module_id":            nil,
-		"accessible_verticals": []string{},
-		"system":               true,
-	})
+	// Always append system data sources.
+	tables = appendSystemReportTable(tables, "Workflow Audit Trail", "workflow_transitions")
+	tables = appendSystemReportTable(tables, "DMS Documents", "documents")
+	tables = appendSystemReportTable(tables, "PMS Projects", "projects")
+	tables = appendSystemReportTable(tables, "PMS Tasks", "tasks")
 
 	// Attendance system data sources for attendance-specific analytics reports.
-	tables = append(tables, map[string]interface{}{
-		"form_id":              nil,
-		"form_code":            "",
-		"form_title":           "Attendance Sessions",
-		"table_name":           "attendance_sessions",
-		"schema_name":          "public",
-		"module_id":            nil,
-		"accessible_verticals": []string{},
-		"system":               true,
-	})
-	tables = append(tables, map[string]interface{}{
-		"form_id":              nil,
-		"form_code":            "",
-		"form_title":           "Attendance Events",
-		"table_name":           "attendance_events",
-		"schema_name":          "public",
-		"module_id":            nil,
-		"accessible_verticals": []string{},
-		"system":               true,
-	})
+	tables = appendSystemReportTable(tables, "Attendance Sessions", "attendance_sessions")
+	tables = appendSystemReportTable(tables, "Attendance Events", "attendance_events")
 	fmt.Printf("[REPORT BUILDER] available forms=%d (module_id=%s, vertical=%s)\n", len(tables), moduleID, verticalToken)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -1171,6 +1386,11 @@ func RemoveWidgetFromDashboard(w http.ResponseWriter, r *http.Request) {
 // GetReportTemplates retrieves all report templates
 func GetReportTemplates(w http.ResponseWriter, r *http.Request) {
 	category := r.URL.Query().Get("category")
+
+	if err := ensureDefaultReportTemplates(); err != nil {
+		http.Error(w, "Failed to initialize default templates", http.StatusInternalServerError)
+		return
+	}
 
 	query := config.DB.Where("is_active = ?", true)
 

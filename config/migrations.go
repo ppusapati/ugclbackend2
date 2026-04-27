@@ -700,6 +700,14 @@ func Migrations(db *gorm.DB) error {
 				return nil
 			},
 		},
+		{
+			ID: "20260427_document_context_columns",
+			Migrate: func(tx *gorm.DB) error {
+				// Ensure first-class project/task context columns exist for legacy DBs
+				// that were initialized before these fields were introduced.
+				return tx.AutoMigrate(&models.Document{})
+			},
+		},
 	})
 
 	return m.Migrate()

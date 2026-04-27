@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 
@@ -28,6 +29,168 @@ func NewProjectWorkflowHandler() *ProjectWorkflowHandler {
 	}
 }
 
+type taskDocumentRule struct {
+	MinDocuments         int `json:"min_documents"`
+	MinApprovedDocuments int `json:"min_approved_documents"`
+}
+
+type taskDocumentComplianceResult struct {
+	Action            string           `json:"action"`
+	Ready             bool             `json:"ready"`
+	TotalDocuments    int64            `json:"total_documents"`
+	ApprovedDocuments int64            `json:"approved_documents"`
+	Rule              taskDocumentRule `json:"rule"`
+	Message           string           `json:"message,omitempty"`
+}
+
+func defaultTaskDocumentPolicy() map[string]taskDocumentRule {
+	return map[string]taskDocumentRule{
+		"submit": {
+			MinDocuments: 1,
+		},
+		"approve": {
+			MinApprovedDocuments: 1,
+		},
+		"complete": {
+			MinApprovedDocuments: 1,
+		},
+	}
+}
+
+func parseTaskDocumentRule(raw map[string]interface{}) taskDocumentRule {
+	rule := taskDocumentRule{}
+
+	if minDocs, ok := raw["min_documents"].(float64); ok {
+		rule.MinDocuments = int(minDocs)
+	}
+
+	if minApproved, ok := raw["min_approved_documents"].(float64); ok {
+		rule.MinApprovedDocuments = int(minApproved)
+	}
+
+	return rule
+}
+
+func (h *ProjectWorkflowHandler) getTaskDocumentCounts(taskID uuid.UUID) (int64, int64, error) {
+	var total int64
+	if err := h.db.Model(&models.Document{}).
+		Where("deleted_at IS NULL").
+		Where("task_id = ? OR (metadata ->> 'task_id' = ?)", taskID, taskID.String()).
+		Count(&total).Error; err != nil {
+		return 0, 0, err
+	}
+
+	var approved int64
+	if err := h.db.Model(&models.Document{}).
+		Where("deleted_at IS NULL").
+		Where("status = ?", models.DocumentStatusApproved).
+		Where("task_id = ? OR (metadata ->> 'task_id' = ?)", taskID, taskID.String()).
+		Count(&approved).Error; err != nil {
+		return 0, 0, err
+	}
+
+	return total, approved, nil
+}
+
+func (h *ProjectWorkflowHandler) resolveTaskDocumentPolicy(task models.Tasks) map[string]taskDocumentRule {
+	policy := defaultTaskDocumentPolicy()
+
+	if task.WorkflowID != nil {
+		var workflow models.WorkflowDefinition
+		if err := h.db.First(&workflow, "id = ?", *task.WorkflowID).Error; err == nil {
+			var transitions []models.WorkflowTransitionDef
+			if err := json.Unmarshal(workflow.Transitions, &transitions); err == nil {
+				for _, transition := range transitions {
+					if transition.DocumentRequirements == nil {
+						continue
+					}
+
+					policy[transition.Action] = taskDocumentRule{
+						MinDocuments:         transition.DocumentRequirements.MinDocuments,
+						MinApprovedDocuments: transition.DocumentRequirements.MinApprovedDocuments,
+					}
+				}
+			}
+		}
+	}
+
+	if len(task.Metadata) == 0 {
+		return policy
+	}
+
+	var metadata map[string]interface{}
+	if err := json.Unmarshal(task.Metadata, &metadata); err != nil {
+		return policy
+	}
+
+	policyValue, ok := metadata["document_policy"]
+	if !ok {
+		return policy
+	}
+
+	policyMap, ok := policyValue.(map[string]interface{})
+	if !ok {
+		return policy
+	}
+
+	for action, value := range policyMap {
+		ruleMap, ok := value.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		policy[action] = parseTaskDocumentRule(ruleMap)
+	}
+
+	return policy
+}
+
+func (h *ProjectWorkflowHandler) evaluateTaskDocumentCompliance(task models.Tasks, action string) (*taskDocumentComplianceResult, error) {
+	policy := h.resolveTaskDocumentPolicy(task)
+	rule, hasRule := policy[action]
+	if !hasRule {
+		return &taskDocumentComplianceResult{
+			Action: action,
+			Ready:  true,
+		}, nil
+	}
+
+	total, approved, err := h.getTaskDocumentCounts(task.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &taskDocumentComplianceResult{
+		Action:            action,
+		Ready:             true,
+		TotalDocuments:    total,
+		ApprovedDocuments: approved,
+		Rule:              rule,
+	}
+
+	if rule.MinDocuments > 0 && total < int64(rule.MinDocuments) {
+		result.Ready = false
+		result.Message = fmt.Sprintf("At least %d linked document(s) are required; found %d", rule.MinDocuments, total)
+		return result, nil
+	}
+
+	if rule.MinApprovedDocuments > 0 && approved < int64(rule.MinApprovedDocuments) {
+		result.Ready = false
+		result.Message = fmt.Sprintf("At least %d approved linked document(s) are required; found %d", rule.MinApprovedDocuments, approved)
+		return result, nil
+	}
+
+	return result, nil
+}
+
+func writeTaskDocumentComplianceError(w http.ResponseWriter, compliance *taskDocumentComplianceResult) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusPreconditionFailed)
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"error":               "Document compliance requirement not met for workflow action",
+		"document_compliance": compliance,
+	})
+}
+
 // SubmitTaskForApproval submits a task for approval workflow
 func (h *ProjectWorkflowHandler) SubmitTaskForApproval(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
@@ -52,6 +215,16 @@ func (h *ProjectWorkflowHandler) SubmitTaskForApproval(w http.ResponseWriter, r 
 	// Check if task has a workflow
 	if task.WorkflowID == nil {
 		http.Error(w, "Task does not have a workflow configured", http.StatusBadRequest)
+		return
+	}
+
+	compliance, err := h.evaluateTaskDocumentCompliance(task, "submit")
+	if err != nil {
+		http.Error(w, "Failed to validate task documents", http.StatusInternalServerError)
+		return
+	}
+	if !compliance.Ready {
+		writeTaskDocumentComplianceError(w, compliance)
 		return
 	}
 
@@ -146,6 +319,16 @@ func (h *ProjectWorkflowHandler) ApproveTask(w http.ResponseWriter, r *http.Requ
 
 	if task.FormSubmissionID == nil {
 		http.Error(w, "Task not submitted for approval", http.StatusBadRequest)
+		return
+	}
+
+	compliance, err := h.evaluateTaskDocumentCompliance(task, "approve")
+	if err != nil {
+		http.Error(w, "Failed to validate task documents", http.StatusInternalServerError)
+		return
+	}
+	if !compliance.Ready {
+		writeTaskDocumentComplianceError(w, compliance)
 		return
 	}
 
@@ -274,6 +457,16 @@ func (h *ProjectWorkflowHandler) CompleteTask(w http.ResponseWriter, r *http.Req
 
 	// If task has workflow, transition to completed state
 	if task.FormSubmissionID != nil {
+		compliance, err := h.evaluateTaskDocumentCompliance(task, "complete")
+		if err != nil {
+			http.Error(w, "Failed to validate task documents", http.StatusInternalServerError)
+			return
+		}
+		if !compliance.Ready {
+			writeTaskDocumentComplianceError(w, compliance)
+			return
+		}
+
 		submission, err := h.workflowEngine.TransitionState(
 			*task.FormSubmissionID,
 			"complete",
@@ -376,10 +569,34 @@ func (h *ProjectWorkflowHandler) GetAvailableTaskActions(w http.ResponseWriter, 
 		return
 	}
 
+	actionsWithCompliance := make([]map[string]interface{}, 0, len(actions))
+	for _, action := range actions {
+		compliance, err := h.evaluateTaskDocumentCompliance(task, action.Action)
+		if err != nil {
+			http.Error(w, "Failed to evaluate action compliance", http.StatusInternalServerError)
+			return
+		}
+
+		actionsWithCompliance = append(actionsWithCompliance, map[string]interface{}{
+			"action":            action.Action,
+			"label":             action.Label,
+			"to":                action.ToState,
+			"requires_comment":  action.RequiresComment,
+			"permission":        action.Permission,
+			"document_ready":    compliance.Ready,
+			"document_message":  compliance.Message,
+			"document_required": compliance.Rule,
+			"document_counts": map[string]int64{
+				"total":    compliance.TotalDocuments,
+				"approved": compliance.ApprovedDocuments,
+			},
+		})
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"current_state": task.CurrentState,
-		"actions":       actions,
+		"actions":       actionsWithCompliance,
 	})
 }
 

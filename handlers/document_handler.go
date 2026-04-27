@@ -27,8 +27,175 @@ type DocumentUploadRequest struct {
 	Tags               []string               `json:"tags"`
 	Metadata           map[string]interface{} `json:"metadata"`
 	BusinessVerticalID string                 `json:"business_vertical_id"`
+	ProjectID          string                 `json:"project_id"`
+	TaskID             string                 `json:"task_id"`
 	WorkflowID         string                 `json:"workflow_id"`
 	IsPublic           bool                   `json:"is_public"`
+}
+
+type DocumentContextBackfillRequest struct {
+	DryRun bool `json:"dry_run"`
+	Limit  int  `json:"limit"`
+}
+
+type DocumentContextBackfillResult struct {
+	DryRun              bool `json:"dry_run"`
+	Scanned             int  `json:"scanned"`
+	Matched             int  `json:"matched"`
+	UpdatedDocuments    int  `json:"updated_documents"`
+	UpdatedProjectLinks int  `json:"updated_project_links"`
+	UpdatedTaskLinks    int  `json:"updated_task_links"`
+	SkippedInvalid      int  `json:"skipped_invalid"`
+}
+
+func hasDocumentContextColumns() (bool, bool) {
+	projectColumnExists := config.DB.Migrator().HasColumn(&models.Document{}, "project_id")
+	taskColumnExists := config.DB.Migrator().HasColumn(&models.Document{}, "task_id")
+	return projectColumnExists, taskColumnExists
+}
+
+func getUUIDFromDocumentMetadata(metadata models.DocumentMetadata, key string) *uuid.UUID {
+	if metadata == nil {
+		return nil
+	}
+
+	raw, ok := metadata[key]
+	if !ok || raw == nil {
+		return nil
+	}
+
+	value, ok := raw.(string)
+	if !ok {
+		return nil
+	}
+
+	parsed, err := uuid.Parse(strings.TrimSpace(value))
+	if err != nil {
+		return nil
+	}
+
+	return &parsed
+}
+
+// BackfillDocumentContextLinksHandler migrates legacy metadata context links into first-class project_id/task_id fields.
+func BackfillDocumentContextLinksHandler(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetClaims(r)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var req DocumentContextBackfillRequest
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+
+	if req.Limit < 0 {
+		req.Limit = 0
+	}
+
+	query := config.DB.Model(&models.Document{}).
+		Where("deleted_at IS NULL").
+		Where("(project_id IS NULL AND metadata ? 'project_id') OR (task_id IS NULL AND metadata ? 'task_id')")
+
+	if req.Limit > 0 {
+		query = query.Limit(req.Limit)
+	}
+
+	var documents []models.Document
+	if err := query.Find(&documents).Error; err != nil {
+		http.Error(w, "failed to fetch documents for backfill: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	result := DocumentContextBackfillResult{
+		DryRun:  req.DryRun,
+		Scanned: len(documents),
+	}
+
+	if req.DryRun {
+		for _, document := range documents {
+			projectID := getUUIDFromDocumentMetadata(document.Metadata, "project_id")
+			taskID := getUUIDFromDocumentMetadata(document.Metadata, "task_id")
+
+			canUpdateProject := document.ProjectID == nil && projectID != nil
+			canUpdateTask := document.TaskID == nil && taskID != nil
+
+			if canUpdateProject || canUpdateTask {
+				result.Matched++
+				if canUpdateProject {
+					result.UpdatedProjectLinks++
+				}
+				if canUpdateTask {
+					result.UpdatedTaskLinks++
+				}
+			} else {
+				result.SkippedInvalid++
+			}
+		}
+
+		result.UpdatedDocuments = result.Matched
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"message": "Dry run completed",
+			"result":  result,
+		})
+		return
+	}
+
+	tx := config.DB.Begin()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			tx.Rollback()
+		}
+	}()
+
+	for _, document := range documents {
+		projectID := getUUIDFromDocumentMetadata(document.Metadata, "project_id")
+		taskID := getUUIDFromDocumentMetadata(document.Metadata, "task_id")
+
+		updates := map[string]interface{}{}
+
+		if document.ProjectID == nil && projectID != nil {
+			updates["project_id"] = *projectID
+		}
+
+		if document.TaskID == nil && taskID != nil {
+			updates["task_id"] = *taskID
+		}
+
+		if len(updates) == 0 {
+			result.SkippedInvalid++
+			continue
+		}
+
+		if err := tx.Model(&models.Document{}).Where("id = ?", document.ID).Updates(updates).Error; err != nil {
+			tx.Rollback()
+			http.Error(w, "failed to backfill document context links: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		result.Matched++
+		result.UpdatedDocuments++
+		if _, ok := updates["project_id"]; ok {
+			result.UpdatedProjectLinks++
+		}
+		if _, ok := updates["task_id"]; ok {
+			result.UpdatedTaskLinks++
+		}
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		http.Error(w, "failed to commit context backfill transaction: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message": "Context backfill completed",
+		"result":  result,
+	})
 }
 
 // UploadDocumentHandler handles document uploads with metadata
@@ -75,6 +242,19 @@ func UploadDocumentHandler(w http.ResponseWriter, r *http.Request) {
 		req.Title = header.Filename
 	}
 
+	// Backward compatibility: allow project/task context inside metadata map.
+	if req.ProjectID == "" && req.Metadata != nil {
+		if projectIDValue, ok := req.Metadata["project_id"].(string); ok {
+			req.ProjectID = strings.TrimSpace(projectIDValue)
+		}
+	}
+
+	if req.TaskID == "" && req.Metadata != nil {
+		if taskIDValue, ok := req.Metadata["task_id"].(string); ok {
+			req.TaskID = strings.TrimSpace(taskIDValue)
+		}
+	}
+
 	// Calculate file hash for deduplication
 	hasher := sha256.New()
 	if _, err := io.Copy(hasher, file); err != nil {
@@ -86,16 +266,20 @@ func UploadDocumentHandler(w http.ResponseWriter, r *http.Request) {
 	// Reset file pointer
 	file.Seek(0, 0)
 
-	// Check for duplicate file
-	var existingDoc models.Document
-	if err := config.DB.Where("file_hash = ? AND deleted_at IS NULL", fileHash).First(&existingDoc).Error; err == nil {
-		// File already exists, return existing document
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"message":  "File already exists",
-			"document": existingDoc,
-		})
-		return
+	// Check for duplicate file only for global uploads.
+	// Context-scoped uploads (project/task) should create their own records for traceability.
+	hasScopedContext := strings.TrimSpace(req.ProjectID) != "" || strings.TrimSpace(req.TaskID) != ""
+	if !hasScopedContext {
+		var existingDoc models.Document
+		if err := config.DB.Where("file_hash = ? AND deleted_at IS NULL", fileHash).First(&existingDoc).Error; err == nil {
+			// File already exists, return existing document
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"message":  "File already exists",
+				"document": existingDoc,
+			})
+			return
+		}
 	}
 
 	upload, err := storeUploadedFile(r, "file", "./uploads/documents")
@@ -138,6 +322,22 @@ func UploadDocumentHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	var projectID *uuid.UUID
+	if req.ProjectID != "" {
+		pid, err := uuid.Parse(req.ProjectID)
+		if err == nil {
+			projectID = &pid
+		}
+	}
+
+	var taskID *uuid.UUID
+	if req.TaskID != "" {
+		tid, err := uuid.Parse(req.TaskID)
+		if err == nil {
+			taskID = &tid
+		}
+	}
+
 	var workflowDef *models.WorkflowDefinition
 	if workflowID != nil {
 		var selectedWorkflow models.WorkflowDefinition
@@ -173,6 +373,8 @@ func UploadDocumentHandler(w http.ResponseWriter, r *http.Request) {
 		CategoryID:         categoryID,
 		Metadata:           req.Metadata,
 		BusinessVerticalID: businessVerticalID,
+		ProjectID:          projectID,
+		TaskID:             taskID,
 		UploadedByID:       userID,
 		WorkflowID:         workflowID,
 		CurrentState:       initialState,
@@ -285,7 +487,23 @@ func GetDocumentsHandler(w http.ResponseWriter, r *http.Request) {
 	status := r.URL.Query().Get("status")
 	search := r.URL.Query().Get("search")
 	businessVerticalID := r.URL.Query().Get("business_vertical_id")
+	projectID := r.URL.Query().Get("project_id")
+	taskID := r.URL.Query().Get("task_id")
 	tag := r.URL.Query().Get("tag")
+
+	if projectID != "" {
+		if _, err := uuid.Parse(projectID); err != nil {
+			http.Error(w, "invalid project_id", http.StatusBadRequest)
+			return
+		}
+	}
+
+	if taskID != "" {
+		if _, err := uuid.Parse(taskID); err != nil {
+			http.Error(w, "invalid task_id", http.StatusBadRequest)
+			return
+		}
+	}
 
 	// Build query
 	query := config.DB.Model(&models.Document{}).Preload("Category").Preload("Tags").Preload("UploadedBy")
@@ -300,6 +518,24 @@ func GetDocumentsHandler(w http.ResponseWriter, r *http.Request) {
 
 	if businessVerticalID != "" {
 		query = query.Where("business_vertical_id = ?", businessVerticalID)
+	}
+
+	projectColumnExists, taskColumnExists := hasDocumentContextColumns()
+
+	if projectID != "" {
+		if projectColumnExists {
+			query = query.Where("project_id = ? OR (metadata ->> 'project_id' = ?)", projectID, projectID)
+		} else {
+			query = query.Where("metadata ->> 'project_id' = ?", projectID)
+		}
+	}
+
+	if taskID != "" {
+		if taskColumnExists {
+			query = query.Where("task_id = ? OR (metadata ->> 'task_id' = ?)", taskID, taskID)
+		} else {
+			query = query.Where("metadata ->> 'task_id' = ?", taskID)
+		}
 	}
 
 	if search != "" {

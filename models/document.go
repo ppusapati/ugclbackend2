@@ -135,6 +135,10 @@ type Document struct {
 	Metadata           DocumentMetadata    `gorm:"type:jsonb;default:'{}'" json:"metadata"`
 	BusinessVerticalID *uuid.UUID          `gorm:"type:uuid;not null" json:"business_vertical_id"`
 	BusinessVertical   *BusinessVertical   `gorm:"foreignKey:BusinessVerticalID" json:"business_vertical,omitempty"`
+	ProjectID          *uuid.UUID          `gorm:"type:uuid;index" json:"project_id"`
+	Project            *Project            `gorm:"foreignKey:ProjectID" json:"project,omitempty"`
+	TaskID             *uuid.UUID          `gorm:"type:uuid;index" json:"task_id"`
+	Task               *Tasks              `gorm:"foreignKey:TaskID" json:"task,omitempty"`
 	UploadedByID       uuid.UUID           `gorm:"type:uuid;not null" json:"uploaded_by_id"`
 	UploadedBy         *User               `gorm:"foreignKey:UploadedByID" json:"uploaded_by,omitempty"`
 	WorkflowID         *uuid.UUID          `gorm:"type:uuid" json:"workflow_id"`

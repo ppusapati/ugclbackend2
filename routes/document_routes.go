@@ -52,6 +52,8 @@ func RegisterDocumentRoutes(api *mux.Router, admin *mux.Router) {
 		http.HandlerFunc(handlers.BulkDownloadDocumentsHandler))).Methods("POST")
 	api.Handle("/documents/bulk/tags", middleware.RequirePermission("document:update")(
 		http.HandlerFunc(handlers.BulkAddTagsHandler))).Methods("POST")
+	api.Handle("/documents/backfill/context-links", middleware.RequirePermission("document:update")(
+		http.HandlerFunc(handlers.BackfillDocumentContextLinksHandler))).Methods("POST")
 
 	api.Handle("/documents", middleware.RequirePermission("document:read")(
 		http.HandlerFunc(handlers.GetDocumentsHandler))).Methods("GET")
