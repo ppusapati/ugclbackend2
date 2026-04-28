@@ -33,6 +33,8 @@ func (we *WorkflowEngine) CreateSubmission(
 	businessVerticalID uuid.UUID,
 	siteID *uuid.UUID,
 	formData json.RawMessage,
+	latitude *float64,
+	longitude *float64,
 	userID string,
 ) (*models.FormSubmission, error) {
 	// Get the form definition
@@ -84,6 +86,8 @@ func (we *WorkflowEngine) CreateSubmission(
 		FormData:           enhancedFormData,
 		SubmittedBy:        userID,
 		SubmittedAt:        time.Now(),
+		Latitude:           latitude,
+		Longitude:          longitude,
 		LastModifiedBy:     userID,
 		LastModifiedAt:     time.Now(),
 		Version:            1,
@@ -209,6 +213,8 @@ func (we *WorkflowEngine) TransitionState(
 func (we *WorkflowEngine) UpdateSubmissionData(
 	submissionID uuid.UUID,
 	formData json.RawMessage,
+	latitude *float64,
+	longitude *float64,
 	userID string,
 ) (*models.FormSubmission, error) {
 	var submission models.FormSubmission
@@ -238,6 +244,8 @@ func (we *WorkflowEngine) UpdateSubmissionData(
 
 	// Update data
 	submission.FormData = enhancedFormData
+	submission.Latitude = latitude
+	submission.Longitude = longitude
 	submission.LastModifiedBy = userID
 	submission.LastModifiedAt = time.Now()
 	submission.Version++

@@ -708,6 +708,25 @@ func Migrations(db *gorm.DB) error {
 				return tx.AutoMigrate(&models.Document{})
 			},
 		},
+		{
+			ID: "20260428_form_submission_location_metadata",
+			Migrate: func(tx *gorm.DB) error {
+				queries := []string{
+					"ALTER TABLE form_submissions ADD COLUMN IF NOT EXISTS latitude NUMERIC(10,8)",
+					"ALTER TABLE form_submissions ADD COLUMN IF NOT EXISTS longitude NUMERIC(11,8)",
+					"CREATE INDEX IF NOT EXISTS idx_form_submissions_latitude ON form_submissions(latitude)",
+					"CREATE INDEX IF NOT EXISTS idx_form_submissions_longitude ON form_submissions(longitude)",
+				}
+
+				for _, q := range queries {
+					if err := tx.Exec(q).Error; err != nil {
+						return err
+					}
+				}
+
+				return nil
+			},
+		},
 	})
 
 	return m.Migrate()

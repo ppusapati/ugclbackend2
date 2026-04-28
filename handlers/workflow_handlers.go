@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -73,6 +74,90 @@ func getWorkflowEngine() *WorkflowEngine {
 type SubmitFormRequest struct {
 	FormData json.RawMessage `json:"form_data"`
 	SiteID   *uuid.UUID      `json:"site_id,omitempty"`
+	Latitude *float64        `json:"latitude,omitempty"`
+	Longitude *float64       `json:"longitude,omitempty"`
+}
+
+func parseCoordinate(raw interface{}) (float64, bool) {
+	switch v := raw.(type) {
+	case float64:
+		return v, true
+	case float32:
+		return float64(v), true
+	case int:
+		return float64(v), true
+	case int32:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		if err != nil {
+			return 0, false
+		}
+		return parsed, true
+	default:
+		return 0, false
+	}
+}
+
+func normalizeSubmissionPayload(formData json.RawMessage, reqLatitude *float64, reqLongitude *float64) (json.RawMessage, *float64, *float64, error) {
+	if len(formData) == 0 || strings.TrimSpace(string(formData)) == "null" {
+		return nil, nil, nil, fmt.Errorf("form_data is required")
+	}
+
+	var data map[string]interface{}
+	if err := json.Unmarshal(formData, &data); err != nil {
+		return nil, nil, nil, fmt.Errorf("form_data must be a JSON object")
+	}
+
+	var latValue *float64
+	if reqLatitude != nil {
+		lat := *reqLatitude
+		latValue = &lat
+	} else {
+		latRaw, latExists := data["latitude"]
+		if !latExists {
+			latRaw, latExists = data["lat"]
+		}
+		if latExists {
+			if lat, ok := parseCoordinate(latRaw); ok {
+				latValue = &lat
+			}
+		}
+	}
+
+	var lngValue *float64
+	if reqLongitude != nil {
+		lng := *reqLongitude
+		lngValue = &lng
+	} else {
+		lngRaw, lngExists := data["longitude"]
+		if !lngExists {
+			lngRaw, lngExists = data["lng"]
+		}
+		if lngExists {
+			if lng, ok := parseCoordinate(lngRaw); ok {
+				lngValue = &lng
+			}
+		}
+	}
+
+	if latValue == nil || lngValue == nil {
+		return nil, nil, nil, fmt.Errorf("latitude and longitude are required")
+	}
+
+	delete(data, "latitude")
+	delete(data, "longitude")
+	delete(data, "lat")
+	delete(data, "lng")
+
+	normalized, err := json.Marshal(data)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to normalize form_data")
+	}
+
+	return normalized, latValue, lngValue, nil
 }
 
 // TransitionRequest represents the request body for workflow transitions
@@ -114,6 +199,12 @@ func CreateFormSubmission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	normalizedFormData, latitude, longitude, err := normalizeSubmissionPayload(req.FormData, req.Latitude, req.Longitude)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	log.Printf("📝 Creating form submission: %s for business: %s, user: %s", formCode, businessCode, claims.UserID)
 
 	// Create submission
@@ -121,7 +212,9 @@ func CreateFormSubmission(w http.ResponseWriter, r *http.Request) {
 		formCode,
 		businessID,
 		req.SiteID,
-		req.FormData,
+		normalizedFormData,
+		latitude,
+		longitude,
 		claims.UserID,
 	)
 	if err != nil {
@@ -474,7 +567,13 @@ func UpdateFormSubmission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	submission, err := getWorkflowEngine().UpdateSubmissionData(submissionID, req.FormData, claims.UserID)
+	normalizedFormData, latitude, longitude, err := normalizeSubmissionPayload(req.FormData, req.Latitude, req.Longitude)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	submission, err := getWorkflowEngine().UpdateSubmissionData(submissionID, normalizedFormData, latitude, longitude, claims.UserID)
 	if err != nil {
 		log.Printf("❌ Error updating submission: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)

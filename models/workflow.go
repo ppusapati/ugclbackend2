@@ -118,6 +118,8 @@ type FormSubmission struct {
 	Version        int       `gorm:"default:1" json:"version"`
 	SubmittedBy    string    `gorm:"size:255;not null" json:"submitted_by"`
 	SubmittedAt    time.Time `json:"submitted_at"`
+	Latitude       *float64  `gorm:"type:decimal(10,8)" json:"latitude,omitempty"`
+	Longitude      *float64  `gorm:"type:decimal(11,8)" json:"longitude,omitempty"`
 	LastModifiedBy string    `gorm:"size:255" json:"last_modified_by,omitempty"`
 	LastModifiedAt time.Time `json:"last_modified_at,omitempty"`
 
@@ -272,6 +274,8 @@ type FormSubmissionDTO struct {
 	FormData           json.RawMessage  `json:"form_data"`
 	SubmittedBy        string           `json:"submitted_by"`
 	SubmittedAt        time.Time        `json:"submitted_at"`
+	Latitude           *float64         `json:"latitude,omitempty"`
+	Longitude          *float64         `json:"longitude,omitempty"`
 	LastModifiedBy     string           `json:"last_modified_by,omitempty"`
 	LastModifiedAt     time.Time        `json:"last_modified_at,omitempty"`
 	AvailableActions   []WorkflowAction `json:"available_actions,omitempty"`
@@ -288,6 +292,8 @@ func (s *FormSubmission) ToDTO(workflowDef *WorkflowDefinition) FormSubmissionDT
 		FormData:           s.FormData,
 		SubmittedBy:        s.SubmittedBy,
 		SubmittedAt:        s.SubmittedAt,
+		Latitude:           s.Latitude,
+		Longitude:          s.Longitude,
 		LastModifiedBy:     s.LastModifiedBy,
 		LastModifiedAt:     s.LastModifiedAt,
 	}

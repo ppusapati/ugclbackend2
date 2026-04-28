@@ -250,6 +250,8 @@ func (h *ProjectWorkflowHandler) SubmitTaskForApproval(w http.ResponseWriter, r 
 			task.Project.BusinessVerticalID,
 			nil, // no specific site
 			json.RawMessage(formDataJSON),
+			nil,
+			nil,
 			claims.UserID,
 		)
 
