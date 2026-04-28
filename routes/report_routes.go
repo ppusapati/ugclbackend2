@@ -67,6 +67,8 @@ func RegisterReportRoutes(r *mux.Router) {
 
 	// Report Templates
 	reportRead.HandleFunc("/report-templates", handlers.GetReportTemplates).Methods("GET")
+	reportWrite.HandleFunc("/report-templates", handlers.CreateReportTemplate).Methods("POST")
+	reportWrite.HandleFunc("/report-templates/{template_id}", handlers.UpdateReportTemplate).Methods("PUT")
 	reportRead.HandleFunc("/report-templates/{template_id}/create", handlers.CreateReportFromTemplate).Methods("POST")
 
 	// Scheduled Reports – requires report:read; schedule-mutating actions additionally require report:export

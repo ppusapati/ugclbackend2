@@ -219,6 +219,7 @@ func loadAPIKeyConfigs() map[string]APIClientConfig {
 		AllowedMethods: map[string]bool{
 			http.MethodGet:  true,
 			http.MethodPost: true,
+			http.MethodPut:  true,
 		},
 		SkipIPCheck: true,
 	})

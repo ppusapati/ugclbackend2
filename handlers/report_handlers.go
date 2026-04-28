@@ -93,7 +93,7 @@ func getPMSTaskFields() []map[string]interface{} {
 	}
 }
 
-func appendSystemReportTable(tables []map[string]interface{}, title string, tableName string) []map[string]interface{} {
+func appendSystemReportTable(tables []map[string]interface{}, title string, tableName string, systemScope string) []map[string]interface{} {
 	return append(tables, map[string]interface{}{
 		"form_id":              nil,
 		"form_code":            "",
@@ -103,10 +103,42 @@ func appendSystemReportTable(tables []map[string]interface{}, title string, tabl
 		"module_id":            nil,
 		"accessible_verticals": []string{},
 		"system":               true,
+		"system_scope":         systemScope,
 	})
 }
 
 func ensureDefaultReportTemplates() error {
+	type templateSeed struct {
+		Code        string
+		Name        string
+		Description string
+		Category    string
+		Icon        string
+		Payload     map[string]interface{}
+	}
+
+	buildTableTemplatePayload := func(alias string, tableName string, fields []map[string]interface{}) map[string]interface{} {
+		return map[string]interface{}{
+			"report_type": "table",
+			"data_sources": []map[string]interface{}{{
+				"alias":      alias,
+				"table_name": tableName,
+			}},
+			"fields": fields,
+		}
+	}
+
+	buildField := func(fieldName string, alias string, dataSource string, dataType string, order int) map[string]interface{} {
+		return map[string]interface{}{
+			"field_name":  fieldName,
+			"alias":       alias,
+			"data_source": dataSource,
+			"data_type":   dataType,
+			"is_visible":  true,
+			"order":       order,
+		}
+	}
+
 	templates := []models.ReportTemplate{
 		{
 			Code:        "dms_documents_overview",
@@ -136,6 +168,34 @@ func ensureDefaultReportTemplates() error {
 			Category:    "PMS",
 			Icon:        "i-heroicons-clipboard-document-list-solid",
 		},
+		{
+			Code:        "dms_document_compliance_tracker",
+			Name:        "DMS Document Compliance Tracker",
+			Description: "Track approval workflow and publication status for compliance-critical documents.",
+			Category:    "DMS",
+			Icon:        "i-heroicons-shield-check-solid",
+		},
+		{
+			Code:        "dms_document_aging_summary",
+			Name:        "DMS Document Aging Summary",
+			Description: "Identify stale and pending documents by workflow state and upload age.",
+			Category:    "DMS",
+			Icon:        "i-heroicons-clock-solid",
+		},
+		{
+			Code:        "pms_budget_variance_monitor",
+			Name:        "PMS Budget Variance Monitor",
+			Description: "Monitor allocated budget vs actual spend at task level to detect overruns.",
+			Category:    "PMS",
+			Icon:        "i-heroicons-currency-rupee-solid",
+		},
+		{
+			Code:        "pms_workflow_bottlenecks",
+			Name:        "PMS Workflow Bottlenecks",
+			Description: "Highlight tasks stuck in states and delayed completion windows.",
+			Category:    "PMS",
+			Icon:        "i-heroicons-funnel-solid",
+		},
 	}
 
 	templatePayloads := map[string]map[string]interface{}{
@@ -146,14 +206,14 @@ func ensureDefaultReportTemplates() error {
 				"table_name": "documents",
 			}},
 			"fields": []map[string]interface{}{
-				{"field_name": "title", "alias": "Title", "data_source": "dms_documents", "data_type": "text", "is_visible": true, "order": 1},
-				{"field_name": "status", "alias": "Status", "data_source": "dms_documents", "data_type": "text", "is_visible": true, "order": 2},
-				{"field_name": "current_state", "alias": "Workflow State", "data_source": "dms_documents", "data_type": "text", "is_visible": true, "order": 3},
-				{"field_name": "file_type", "alias": "File Type", "data_source": "dms_documents", "data_type": "text", "is_visible": true, "order": 4},
-				{"field_name": "file_size", "alias": "File Size", "data_source": "dms_documents", "data_type": "number", "is_visible": true, "order": 5},
-				{"field_name": "project_id", "alias": "Project ID", "data_source": "dms_documents", "data_type": "text", "is_visible": true, "order": 6},
-				{"field_name": "task_id", "alias": "Task ID", "data_source": "dms_documents", "data_type": "text", "is_visible": true, "order": 7},
-				{"field_name": "created_at", "alias": "Uploaded At", "data_source": "dms_documents", "data_type": "datetime", "is_visible": true, "order": 8},
+				buildField("title", "Title", "dms_documents", "text", 1),
+				buildField("status", "Status", "dms_documents", "text", 2),
+				buildField("current_state", "Workflow State", "dms_documents", "text", 3),
+				buildField("file_type", "File Type", "dms_documents", "text", 4),
+				buildField("file_size", "File Size", "dms_documents", "number", 5),
+				buildField("project_id", "Project ID", "dms_documents", "text", 6),
+				buildField("task_id", "Task ID", "dms_documents", "text", 7),
+				buildField("created_at", "Uploaded At", "dms_documents", "datetime", 8),
 			},
 		},
 		"dms_documents_by_context": {
@@ -163,12 +223,12 @@ func ensureDefaultReportTemplates() error {
 				"table_name": "documents",
 			}},
 			"fields": []map[string]interface{}{
-				{"field_name": "project_id", "alias": "Project ID", "data_source": "dms_documents", "data_type": "text", "is_visible": true, "order": 1},
-				{"field_name": "task_id", "alias": "Task ID", "data_source": "dms_documents", "data_type": "text", "is_visible": true, "order": 2},
-				{"field_name": "status", "alias": "Status", "data_source": "dms_documents", "data_type": "text", "is_visible": true, "order": 3},
-				{"field_name": "view_count", "alias": "View Count", "data_source": "dms_documents", "data_type": "number", "is_visible": true, "order": 4},
-				{"field_name": "download_count", "alias": "Download Count", "data_source": "dms_documents", "data_type": "number", "is_visible": true, "order": 5},
-				{"field_name": "created_at", "alias": "Created At", "data_source": "dms_documents", "data_type": "datetime", "is_visible": true, "order": 6},
+				buildField("project_id", "Project ID", "dms_documents", "text", 1),
+				buildField("task_id", "Task ID", "dms_documents", "text", 2),
+				buildField("status", "Status", "dms_documents", "text", 3),
+				buildField("view_count", "View Count", "dms_documents", "number", 4),
+				buildField("download_count", "Download Count", "dms_documents", "number", 5),
+				buildField("created_at", "Created At", "dms_documents", "datetime", 6),
 			},
 		},
 		"pms_projects_health_overview": {
@@ -178,14 +238,14 @@ func ensureDefaultReportTemplates() error {
 				"table_name": "projects",
 			}},
 			"fields": []map[string]interface{}{
-				{"field_name": "code", "alias": "Project Code", "data_source": "pms_projects", "data_type": "text", "is_visible": true, "order": 1},
-				{"field_name": "name", "alias": "Project Name", "data_source": "pms_projects", "data_type": "text", "is_visible": true, "order": 2},
-				{"field_name": "status", "alias": "Status", "data_source": "pms_projects", "data_type": "text", "is_visible": true, "order": 3},
-				{"field_name": "progress", "alias": "Progress", "data_source": "pms_projects", "data_type": "number", "is_visible": true, "order": 4},
-				{"field_name": "total_budget", "alias": "Total Budget", "data_source": "pms_projects", "data_type": "number", "is_visible": true, "order": 5},
-				{"field_name": "spent_budget", "alias": "Spent Budget", "data_source": "pms_projects", "data_type": "number", "is_visible": true, "order": 6},
-				{"field_name": "start_date", "alias": "Start Date", "data_source": "pms_projects", "data_type": "datetime", "is_visible": true, "order": 7},
-				{"field_name": "end_date", "alias": "End Date", "data_source": "pms_projects", "data_type": "datetime", "is_visible": true, "order": 8},
+				buildField("code", "Project Code", "pms_projects", "text", 1),
+				buildField("name", "Project Name", "pms_projects", "text", 2),
+				buildField("status", "Status", "pms_projects", "text", 3),
+				buildField("progress", "Progress", "pms_projects", "number", 4),
+				buildField("total_budget", "Total Budget", "pms_projects", "number", 5),
+				buildField("spent_budget", "Spent Budget", "pms_projects", "number", 6),
+				buildField("start_date", "Start Date", "pms_projects", "datetime", 7),
+				buildField("end_date", "End Date", "pms_projects", "datetime", 8),
 			},
 		},
 		"pms_tasks_execution_tracker": {
@@ -195,19 +255,59 @@ func ensureDefaultReportTemplates() error {
 				"table_name": "tasks",
 			}},
 			"fields": []map[string]interface{}{
-				{"field_name": "code", "alias": "Task Code", "data_source": "pms_tasks", "data_type": "text", "is_visible": true, "order": 1},
-				{"field_name": "title", "alias": "Task", "data_source": "pms_tasks", "data_type": "text", "is_visible": true, "order": 2},
-				{"field_name": "project_id", "alias": "Project ID", "data_source": "pms_tasks", "data_type": "text", "is_visible": true, "order": 3},
-				{"field_name": "status", "alias": "Status", "data_source": "pms_tasks", "data_type": "text", "is_visible": true, "order": 4},
-				{"field_name": "current_state", "alias": "Workflow State", "data_source": "pms_tasks", "data_type": "text", "is_visible": true, "order": 5},
-				{"field_name": "priority", "alias": "Priority", "data_source": "pms_tasks", "data_type": "text", "is_visible": true, "order": 6},
-				{"field_name": "progress", "alias": "Progress", "data_source": "pms_tasks", "data_type": "number", "is_visible": true, "order": 7},
-				{"field_name": "allocated_budget", "alias": "Allocated Budget", "data_source": "pms_tasks", "data_type": "number", "is_visible": true, "order": 8},
-				{"field_name": "total_cost", "alias": "Total Cost", "data_source": "pms_tasks", "data_type": "number", "is_visible": true, "order": 9},
-				{"field_name": "planned_end_date", "alias": "Planned End", "data_source": "pms_tasks", "data_type": "datetime", "is_visible": true, "order": 10},
-				{"field_name": "actual_end_date", "alias": "Actual End", "data_source": "pms_tasks", "data_type": "datetime", "is_visible": true, "order": 11},
+				buildField("code", "Task Code", "pms_tasks", "text", 1),
+				buildField("title", "Task", "pms_tasks", "text", 2),
+				buildField("project_id", "Project ID", "pms_tasks", "text", 3),
+				buildField("status", "Status", "pms_tasks", "text", 4),
+				buildField("current_state", "Workflow State", "pms_tasks", "text", 5),
+				buildField("priority", "Priority", "pms_tasks", "text", 6),
+				buildField("progress", "Progress", "pms_tasks", "number", 7),
+				buildField("allocated_budget", "Allocated Budget", "pms_tasks", "number", 8),
+				buildField("total_cost", "Total Cost", "pms_tasks", "number", 9),
+				buildField("planned_end_date", "Planned End", "pms_tasks", "datetime", 10),
+				buildField("actual_end_date", "Actual End", "pms_tasks", "datetime", 11),
 			},
 		},
+		"dms_document_compliance_tracker": buildTableTemplatePayload("dms_documents", "documents", []map[string]interface{}{
+			buildField("title", "Title", "dms_documents", "text", 1),
+			buildField("status", "Document Status", "dms_documents", "text", 2),
+			buildField("current_state", "Workflow State", "dms_documents", "text", 3),
+			buildField("project_id", "Project ID", "dms_documents", "text", 4),
+			buildField("task_id", "Task ID", "dms_documents", "text", 5),
+			buildField("uploaded_by_id", "Uploaded By", "dms_documents", "text", 6),
+			buildField("created_at", "Uploaded At", "dms_documents", "datetime", 7),
+			buildField("updated_at", "Last Updated", "dms_documents", "datetime", 8),
+		}),
+		"dms_document_aging_summary": buildTableTemplatePayload("dms_documents", "documents", []map[string]interface{}{
+			buildField("title", "Title", "dms_documents", "text", 1),
+			buildField("status", "Status", "dms_documents", "text", 2),
+			buildField("current_state", "Workflow State", "dms_documents", "text", 3),
+			buildField("created_at", "Created At", "dms_documents", "datetime", 4),
+			buildField("updated_at", "Updated At", "dms_documents", "datetime", 5),
+			buildField("view_count", "View Count", "dms_documents", "number", 6),
+			buildField("download_count", "Download Count", "dms_documents", "number", 7),
+		}),
+		"pms_budget_variance_monitor": buildTableTemplatePayload("pms_tasks", "tasks", []map[string]interface{}{
+			buildField("code", "Task Code", "pms_tasks", "text", 1),
+			buildField("title", "Task", "pms_tasks", "text", 2),
+			buildField("project_id", "Project ID", "pms_tasks", "text", 3),
+			buildField("allocated_budget", "Allocated Budget", "pms_tasks", "number", 4),
+			buildField("total_cost", "Total Cost", "pms_tasks", "number", 5),
+			buildField("progress", "Progress", "pms_tasks", "number", 6),
+			buildField("status", "Status", "pms_tasks", "text", 7),
+			buildField("actual_end_date", "Actual End", "pms_tasks", "datetime", 8),
+		}),
+		"pms_workflow_bottlenecks": buildTableTemplatePayload("pms_tasks", "tasks", []map[string]interface{}{
+			buildField("code", "Task Code", "pms_tasks", "text", 1),
+			buildField("title", "Task", "pms_tasks", "text", 2),
+			buildField("project_id", "Project ID", "pms_tasks", "text", 3),
+			buildField("status", "Task Status", "pms_tasks", "text", 4),
+			buildField("current_state", "Workflow State", "pms_tasks", "text", 5),
+			buildField("priority", "Priority", "pms_tasks", "text", 6),
+			buildField("planned_end_date", "Planned End", "pms_tasks", "datetime", 7),
+			buildField("actual_end_date", "Actual End", "pms_tasks", "datetime", 8),
+			buildField("updated_at", "Last Updated", "pms_tasks", "datetime", 9),
+		}),
 	}
 
 	for _, template := range templates {
@@ -1081,14 +1181,14 @@ func GetAvailableFormTables(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Always append system data sources.
-	tables = appendSystemReportTable(tables, "Workflow Audit Trail", "workflow_transitions")
-	tables = appendSystemReportTable(tables, "DMS Documents", "documents")
-	tables = appendSystemReportTable(tables, "PMS Projects", "projects")
-	tables = appendSystemReportTable(tables, "PMS Tasks", "tasks")
+	tables = appendSystemReportTable(tables, "Workflow Audit Trail", "workflow_transitions", "workflow")
+	tables = appendSystemReportTable(tables, "DMS Documents", "documents", "documents")
+	tables = appendSystemReportTable(tables, "PMS Projects", "projects", "projects")
+	tables = appendSystemReportTable(tables, "PMS Tasks", "tasks", "projects")
 
 	// Attendance system data sources for attendance-specific analytics reports.
-	tables = appendSystemReportTable(tables, "Attendance Sessions", "attendance_sessions")
-	tables = appendSystemReportTable(tables, "Attendance Events", "attendance_events")
+	tables = appendSystemReportTable(tables, "Attendance Sessions", "attendance_sessions", "attendance")
+	tables = appendSystemReportTable(tables, "Attendance Events", "attendance_events", "attendance")
 	fmt.Printf("[REPORT BUILDER] available forms=%d (module_id=%s, vertical=%s)\n", len(tables), moduleID, verticalToken)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -1381,6 +1481,293 @@ func RemoveWidgetFromDashboard(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"message": "Widget removed successfully"})
+}
+
+func normalizeTemplateCode(value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	normalized = strings.ReplaceAll(normalized, "-", "_")
+	normalized = strings.ReplaceAll(normalized, " ", "_")
+
+	b := strings.Builder{}
+	lastUnderscore := false
+	for _, ch := range normalized {
+		if (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') {
+			b.WriteRune(ch)
+			lastUnderscore = false
+			continue
+		}
+		if ch == '_' && !lastUnderscore {
+			b.WriteRune(ch)
+			lastUnderscore = true
+		}
+	}
+
+	result := strings.Trim(b.String(), "_")
+	if result == "" {
+		return fmt.Sprintf("template_%d", time.Now().Unix())
+	}
+	return result
+}
+
+func buildTemplatePayloadFromReport(report models.ReportDefinition) (json.RawMessage, error) {
+	templateData := map[string]interface{}{
+		"report_type": report.ReportType,
+		"chart_type":  report.ChartType,
+	}
+
+	if len(report.DataSources) > 0 {
+		var dataSources interface{}
+		if err := json.Unmarshal(report.DataSources, &dataSources); err != nil {
+			return nil, err
+		}
+		templateData["data_sources"] = dataSources
+	} else {
+		templateData["data_sources"] = []interface{}{}
+	}
+
+	if len(report.Fields) > 0 {
+		var fields interface{}
+		if err := json.Unmarshal(report.Fields, &fields); err != nil {
+			return nil, err
+		}
+		templateData["fields"] = fields
+	} else {
+		templateData["fields"] = []interface{}{}
+	}
+
+	if len(report.Filters) > 0 {
+		var filters interface{}
+		if err := json.Unmarshal(report.Filters, &filters); err == nil {
+			templateData["filters"] = filters
+		}
+	}
+
+	if len(report.Groupings) > 0 {
+		var groupings interface{}
+		if err := json.Unmarshal(report.Groupings, &groupings); err == nil {
+			templateData["groupings"] = groupings
+		}
+	}
+
+	if len(report.Aggregations) > 0 {
+		var aggregations interface{}
+		if err := json.Unmarshal(report.Aggregations, &aggregations); err == nil {
+			templateData["aggregations"] = aggregations
+		}
+	}
+
+	if len(report.Sorting) > 0 {
+		var sorting interface{}
+		if err := json.Unmarshal(report.Sorting, &sorting); err == nil {
+			templateData["sorting"] = sorting
+		}
+	}
+
+	if len(report.Calculations) > 0 {
+		var calculations interface{}
+		if err := json.Unmarshal(report.Calculations, &calculations); err == nil {
+			templateData["calculations"] = calculations
+		}
+	}
+
+	if len(report.ChartConfig) > 0 {
+		var chartConfig interface{}
+		if err := json.Unmarshal(report.ChartConfig, &chartConfig); err == nil {
+			templateData["chart_config"] = chartConfig
+		}
+	}
+
+	if len(report.Layout) > 0 {
+		var layout interface{}
+		if err := json.Unmarshal(report.Layout, &layout); err == nil {
+			templateData["layout"] = layout
+		}
+	}
+
+	return json.Marshal(templateData)
+}
+
+// CreateReportTemplate creates a reusable report template from an existing report definition.
+func CreateReportTemplate(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ReportID    uuid.UUID              `json:"report_id"`
+		Name        string                 `json:"name"`
+		Code        string                 `json:"code"`
+		Description string                 `json:"description"`
+		Category    string                 `json:"category"`
+		Icon        string                 `json:"icon"`
+		Template    map[string]interface{} `json:"template"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" {
+		http.Error(w, "Template name is required", http.StatusBadRequest)
+		return
+	}
+
+	var templatePayload json.RawMessage
+	if len(req.Template) > 0 {
+		rawPayload, err := json.Marshal(req.Template)
+		if err != nil {
+			http.Error(w, "Invalid template payload", http.StatusBadRequest)
+			return
+		}
+		templatePayload = rawPayload
+	} else {
+		if req.ReportID == uuid.Nil {
+			http.Error(w, "report_id is required when template payload is not provided", http.StatusBadRequest)
+			return
+		}
+
+		var report models.ReportDefinition
+		if err := config.DB.Where("id = ?", req.ReportID).First(&report).Error; err != nil {
+			http.Error(w, "Report not found", http.StatusNotFound)
+			return
+		}
+
+		payload, err := buildTemplatePayloadFromReport(report)
+		if err != nil {
+			http.Error(w, "Failed to derive template from report", http.StatusInternalServerError)
+			return
+		}
+		templatePayload = payload
+
+		if strings.TrimSpace(req.Category) == "" {
+			req.Category = strings.TrimSpace(report.Category)
+		}
+		if strings.TrimSpace(req.Description) == "" {
+			req.Description = strings.TrimSpace(report.Description)
+		}
+	}
+
+	code := normalizeTemplateCode(req.Code)
+	if strings.TrimSpace(req.Code) == "" {
+		code = normalizeTemplateCode(req.Name)
+	}
+
+	finalCode := code
+	if finalCode == "" {
+		finalCode = fmt.Sprintf("template_%d", time.Now().Unix())
+	}
+
+	var existing models.ReportTemplate
+	if err := config.DB.Where("code = ?", finalCode).First(&existing).Error; err == nil {
+		finalCode = fmt.Sprintf("%s_%d", finalCode, time.Now().Unix())
+	} else if err != nil && err != gorm.ErrRecordNotFound {
+		http.Error(w, "Failed to validate template code", http.StatusInternalServerError)
+		return
+	}
+
+	template := &models.ReportTemplate{
+		Code:        finalCode,
+		Name:        req.Name,
+		Description: strings.TrimSpace(req.Description),
+		Category:    strings.TrimSpace(req.Category),
+		Icon:        strings.TrimSpace(req.Icon),
+		Template:    templatePayload,
+		IsActive:    true,
+	}
+
+	if err := config.DB.Create(template).Error; err != nil {
+		http.Error(w, "Failed to create template", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message":  "Template created successfully",
+		"template": template,
+	})
+}
+
+// UpdateReportTemplate updates editable template fields and optional template JSON payload.
+func UpdateReportTemplate(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	templateID := vars["template_id"]
+
+	var template models.ReportTemplate
+	if err := config.DB.Where("id = ?", templateID).First(&template).Error; err != nil {
+		http.Error(w, "Template not found", http.StatusNotFound)
+		return
+	}
+
+	var req struct {
+		Name        *string                `json:"name"`
+		Description *string                `json:"description"`
+		Category    *string                `json:"category"`
+		Icon        *string                `json:"icon"`
+		Code        *string                `json:"code"`
+		IsActive    *bool                  `json:"is_active"`
+		Template    map[string]interface{} `json:"template"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if req.Name != nil {
+		template.Name = strings.TrimSpace(*req.Name)
+	}
+	if req.Description != nil {
+		template.Description = strings.TrimSpace(*req.Description)
+	}
+	if req.Category != nil {
+		template.Category = strings.TrimSpace(*req.Category)
+	}
+	if req.Icon != nil {
+		template.Icon = strings.TrimSpace(*req.Icon)
+	}
+	if req.IsActive != nil {
+		template.IsActive = *req.IsActive
+	}
+
+	if req.Code != nil {
+		nextCode := normalizeTemplateCode(*req.Code)
+		if nextCode != "" && nextCode != template.Code {
+			var existing models.ReportTemplate
+			err := config.DB.Where("code = ?", nextCode).First(&existing).Error
+			if err == nil && existing.ID != template.ID {
+				http.Error(w, "Template code already exists", http.StatusConflict)
+				return
+			}
+			if err != nil && err != gorm.ErrRecordNotFound {
+				http.Error(w, "Failed to validate template code", http.StatusInternalServerError)
+				return
+			}
+			template.Code = nextCode
+		}
+	}
+
+	if len(req.Template) > 0 {
+		rawPayload, err := json.Marshal(req.Template)
+		if err != nil {
+			http.Error(w, "Invalid template payload", http.StatusBadRequest)
+			return
+		}
+		template.Template = rawPayload
+	}
+
+	if strings.TrimSpace(template.Name) == "" {
+		http.Error(w, "Template name is required", http.StatusBadRequest)
+		return
+	}
+
+	if err := config.DB.Save(&template).Error; err != nil {
+		http.Error(w, "Failed to update template", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message":  "Template updated successfully",
+		"template": template,
+	})
 }
 
 // GetReportTemplates retrieves all report templates

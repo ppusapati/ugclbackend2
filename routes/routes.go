@@ -25,7 +25,6 @@ func RegisterRoutes() http.Handler {
 	// =====================================================
 	r.HandleFunc("/register", handlers.Register).Methods("POST")
 	r.HandleFunc("/api/v1/login", handlers.Login).Methods("POST")
-	r.HandleFunc("/token", handlers.GetCurrentUser).Methods("GET")
 	r.PathPrefix("/uploads/").Handler(
 		http.StripPrefix("/uploads/", http.FileServer(http.Dir("./uploads"))),
 	)
@@ -40,6 +39,7 @@ func RegisterRoutes() http.Handler {
 	// User profile endpoint
 	api.HandleFunc("/profile", handleProfile).Methods("GET")
 	api.HandleFunc("/profile", handleUpdateProfile).Methods("PUT")
+	api.HandleFunc("/token", handlers.GetCurrentUser).Methods("GET")
 	api.HandleFunc("/context/business", handlers.GetActiveBusinessContext).Methods("GET")
 	api.HandleFunc("/context/business", handlers.SetActiveBusinessContext).Methods("PUT")
 
