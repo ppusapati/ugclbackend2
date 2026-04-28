@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"net/http"
+	"strings"
 
 	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/models"
@@ -134,6 +135,33 @@ func RequirePermission(permission string) func(http.Handler) http.Handler {
 // RequireAnyPermission is a convenience wrapper for checking any of the permissions
 func RequireAnyPermission(permissions []string) func(http.Handler) http.Handler {
 	return Authorize(WithAnyPermission(permissions...))
+}
+
+// RequireUploadAccess allows authenticated chat uploads while preserving
+// permission-gated access for other shared upload folders.
+func RequireUploadAccess(permissions []string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			userCtx, err := authService.LoadUserContext(r)
+			if err != nil {
+				handleAuthError(w, err)
+				return
+			}
+
+			folder := strings.TrimSpace(r.FormValue("folder"))
+			if strings.EqualFold(folder, "chat") {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			if !authService.HasAnyPermission(userCtx, permissions) {
+				handleAuthError(w, ErrForbidden)
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // RequireBusinessPermission is a convenience wrapper for business permission check

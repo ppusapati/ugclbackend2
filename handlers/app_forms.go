@@ -36,6 +36,15 @@ var (
 	formByCodeCacheMu sync.RWMutex
 )
 
+func isPublicFormPermission(permission string) bool {
+	switch strings.TrimSpace(permission) {
+	case "", "*", "*:*:*":
+		return true
+	default:
+		return false
+	}
+}
+
 func getCachedJSON(cache map[string]cachedJSONResponse, mu *sync.RWMutex, key string) ([]byte, bool) {
 	mu.RLock()
 	entry, ok := cache[key]
@@ -219,7 +228,7 @@ func GetFormsForVertical(w http.ResponseWriter, r *http.Request) {
 
 	for _, form := range forms {
 		// Check if user has required permission (global role OR business role in this vertical)
-		if form.RequiredPermission != "" && !userCanAccess(form.RequiredPermission) {
+		if !isPublicFormPermission(form.RequiredPermission) && !userCanAccess(form.RequiredPermission) {
 			log.Printf("   ⊘ Skipping form %s - user lacks permission %s", form.Code, form.RequiredPermission)
 			continue
 		}
@@ -301,7 +310,7 @@ func GetFormByCode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check permission — allow via global role OR any business role in this vertical
-	if form.RequiredPermission != "" {
+	if !isPublicFormPermission(form.RequiredPermission) {
 		var verticalForForm []models.BusinessVertical
 		_ = config.DB.Where("LOWER(code) = LOWER(?)", verticalCode).Find(&verticalForForm)
 		requestedVertical := strings.ToLower(strings.TrimSpace(verticalCode))
