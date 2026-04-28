@@ -72,10 +72,10 @@ func getWorkflowEngine() *WorkflowEngine {
 
 // SubmitFormRequest represents the request body for form submission
 type SubmitFormRequest struct {
-	FormData json.RawMessage `json:"form_data"`
-	SiteID   *uuid.UUID      `json:"site_id,omitempty"`
-	Latitude *float64        `json:"latitude,omitempty"`
-	Longitude *float64       `json:"longitude,omitempty"`
+	FormData  json.RawMessage `json:"form_data"`
+	SiteID    *uuid.UUID      `json:"site_id,omitempty"`
+	Latitude  *float64        `json:"latitude,omitempty"`
+	Longitude *float64        `json:"longitude,omitempty"`
 }
 
 func parseCoordinate(raw interface{}) (float64, bool) {
