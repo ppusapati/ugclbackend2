@@ -14,8 +14,8 @@ import (
 type WebhookEventType string
 
 const (
-	EventCreate        WebhookEventType = "CREATE"
-	EventUpdate        WebhookEventType = "UPDATE"
+	EventCreate WebhookEventType = "CREATE"
+	EventUpdate WebhookEventType = "UPDATE"
 	EventFormSubmitted WebhookEventType = "form.submitted"
 )
 

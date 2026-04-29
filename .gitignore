@@ -1,3 +1,5 @@
 ugcl_v1.exe
 go.sum
 nul
+*.exe
+ugcl.exe
