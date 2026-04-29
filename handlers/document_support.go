@@ -90,25 +90,21 @@ func openStoredFileReader(ctx context.Context, storagePath string) (io.ReadClose
 		return nil, 0, err
 	}
 
-	client, err := storage.NewClient(ctx)
+	client, err := getSharedGCSClient()
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to create GCS client: %w", err)
+		return nil, 0, fmt.Errorf("failed to get GCS client: %w", err)
 	}
 
 	objectName := normalizeStoredObjectPath(storagePath)
 	reader, err := client.Bucket(getUploadBucketName()).Object(objectName).NewReader(ctx)
 	if err != nil {
-		_ = client.Close()
 		if errors.Is(err, storage.ErrObjectNotExist) {
 			return nil, 0, errStoredFileNotFound
 		}
 		return nil, 0, fmt.Errorf("failed to open stored object: %w", err)
 	}
 
-	return &managedReadCloser{
-		ReadCloser: reader,
-		closeFn:    client.Close,
-	}, reader.Attrs.Size, nil
+	return reader, reader.Attrs.Size, nil
 }
 
 func serveStoredFile(w http.ResponseWriter, r *http.Request, storagePath, fileName, fileType string, fileSize int64) error {

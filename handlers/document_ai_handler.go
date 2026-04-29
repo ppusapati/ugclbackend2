@@ -22,6 +22,18 @@ import (
 	"p9e.in/ugcl/models"
 )
 
+// aiHTTPClient is a shared client for all outbound AI API calls (OpenAI, Claude, etc.).
+// Using a single client with a configured transport lets the Go runtime pool and
+// reuse TCP/TLS connections across requests, eliminating per-call handshake overhead.
+var aiHTTPClient = &http.Client{
+	Timeout: 45 * time.Second,
+	Transport: &http.Transport{
+		MaxIdleConns:        20,
+		MaxIdleConnsPerHost: 10,
+		IdleConnTimeout:     90 * time.Second,
+	},
+}
+
 const (
 	documentAITaskSynopsis      = "synopsis"
 	documentAITaskExtractFields = "extract_fields"
@@ -505,7 +517,7 @@ func callOpenAI(integration *models.ThirdPartyIntegration, prompt string) (strin
 	req.Header.Set(integration.AuthHeader, strings.TrimSpace(integration.AuthScheme+" "+apiKey))
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 45 * time.Second}
+	client := aiHTTPClient
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
@@ -558,7 +570,7 @@ func callClaude(integration *models.ThirdPartyIntegration, prompt string) (strin
 	req.Header.Set("anthropic-version", "2023-06-01")
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 45 * time.Second}
+	client := aiHTTPClient
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err

@@ -447,7 +447,13 @@ func GetReportDefinitions(w http.ResponseWriter, r *http.Request) {
 	category := r.URL.Query().Get("category")
 	reportType := r.URL.Query().Get("report_type")
 
-	query := config.DB.Where("deleted_at IS NULL")
+	// Phase 1: load only ACL-relevant columns so large JSONB fields (data_sources,
+	// fields, filters, groupings) are not transferred for every row during the filter pass.
+	aclCols := "id, code, name, description, report_type, chart_type, category, " +
+		"business_vertical_id, is_public, allowed_roles, created_by, is_active, " +
+		"is_favorited, favorited_by, deleted_at, created_at, updated_at"
+
+	query := config.DB.Select(aclCols).Where("deleted_at IS NULL")
 
 	if businessVerticalID != "" {
 		query = query.Where("business_vertical_id = ?", businessVerticalID)
@@ -1384,6 +1390,82 @@ func GetDashboard(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"dashboard": dashboard})
+}
+
+// ExecuteDashboard executes all widget reports for a dashboard and returns combined results.
+// POST /api/v1/dashboards/{id}/execute
+func ExecuteDashboard(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	dashboardID := vars["id"]
+	claims := middleware.GetClaims(r)
+
+	var dashboard models.Dashboard
+	if err := config.DB.Preload("Widgets").Preload("Widgets.Report").
+		Where("id = ? AND deleted_at IS NULL", dashboardID).
+		First(&dashboard).Error; err != nil {
+		http.Error(w, "Dashboard not found", http.StatusNotFound)
+		return
+	}
+
+	// Parse optional per-widget filter overrides: map[widget_id][]ReportFilter
+	var req struct {
+		WidgetFilters map[string][]models.ReportFilter `json:"widget_filters"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	engine := NewReportEngine()
+	type widgetResult struct {
+		WidgetID string      `json:"widget_id"`
+		Title    string      `json:"title"`
+		Position interface{} `json:"position"`
+		Report   interface{} `json:"report"`
+		Result   interface{} `json:"result"`
+		Error    string      `json:"error,omitempty"`
+	}
+
+	results := make([]widgetResult, 0, len(dashboard.Widgets))
+	for _, widget := range dashboard.Widgets {
+		wr := widgetResult{
+			WidgetID: widget.ID.String(),
+			Title:    widget.Title,
+			Position: widget.Position,
+		}
+
+		if widget.Report == nil {
+			wr.Error = "report definition not found"
+			results = append(results, wr)
+			continue
+		}
+
+		if !canViewReport(r, widget.Report) {
+			wr.Error = "access denied"
+			results = append(results, wr)
+			continue
+		}
+
+		if err := ensureReportViewsForDataSources(config.DB, widget.Report.DataSources); err != nil {
+			wr.Error = fmt.Sprintf("failed to sync report views: %v", err)
+			results = append(results, wr)
+			continue
+		}
+
+		filters := req.WidgetFilters[widget.ID.String()]
+		result, err := engine.ExecuteReport(widget.Report, filters, claims.UserID)
+		if err != nil {
+			wr.Error = err.Error()
+		} else {
+			wr.Report = widget.Report
+			wr.Result = result
+		}
+		results = append(results, wr)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"dashboard": dashboard,
+		"widgets":   results,
+		"count":     len(results),
+	})
 }
 
 // DeleteDashboard soft deletes a dashboard and removes related widgets

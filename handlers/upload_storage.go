@@ -4,10 +4,13 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"cloud.google.com/go/storage"
@@ -17,6 +20,42 @@ import (
 const (
 	bucketName = "sreeugcl"
 )
+
+// sharedGCSClient is initialised at most once and reused across requests.
+// Reuse lets the underlying HTTP/2 transport pool TCP connections to GCS,
+// eliminating the per-request TLS handshake overhead.
+var (
+	gcsClientOnce sync.Once
+	sharedGCS     *storage.Client
+	sharedGCSErr  error
+)
+
+// gcsUploadTimeout is the per-operation context deadline for GCS interactions.
+// Override with GCS_UPLOAD_TIMEOUT_SECONDS (default 120 s).
+func gcsUploadTimeout() time.Duration {
+	if s := strings.TrimSpace(os.Getenv("GCS_UPLOAD_TIMEOUT_SECONDS")); s != "" {
+		if v, err := strconv.Atoi(s); err == nil && v > 0 {
+			return time.Duration(v) * time.Second
+		}
+		log.Printf("[GCS] invalid GCS_UPLOAD_TIMEOUT_SECONDS %q, using default 120s", s)
+	}
+	return 120 * time.Second
+}
+
+// getSharedGCSClient returns the process-wide GCS client, initialising it on
+// the first call.  A background context is used for client creation so that an
+// individual request cancellation cannot tear down the shared connection pool.
+func getSharedGCSClient() (*storage.Client, error) {
+	gcsClientOnce.Do(func() {
+		sharedGCS, sharedGCSErr = storage.NewClient(context.Background())
+		if sharedGCSErr != nil {
+			log.Printf("[GCS] failed to create shared client: %v", sharedGCSErr)
+			// Reset Once so a future call can retry after transient failures.
+			gcsClientOnce = sync.Once{}
+		}
+	})
+	return sharedGCS, sharedGCSErr
+}
 
 type storedUpload struct {
 	OriginalFilename string
@@ -96,12 +135,13 @@ func storeUploadedFile(r *http.Request, fieldName, localDir string) (*storedUplo
 			return nil, err
 		}
 
-		ctx := context.Background()
-		client, err := storage.NewClient(ctx)
+		client, err := getSharedGCSClient()
 		if err != nil {
-			return nil, fmt.Errorf("failed to create GCS client: %w", err)
+			return nil, fmt.Errorf("failed to get GCS client: %w", err)
 		}
-		defer client.Close()
+
+		ctx, cancel := context.WithTimeout(context.Background(), gcsUploadTimeout())
+		defer cancel()
 
 		uploadBucket := getUploadBucketName()
 

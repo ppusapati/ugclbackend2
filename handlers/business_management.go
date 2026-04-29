@@ -107,6 +107,80 @@ type assignUserRoleReq struct {
 	BusinessRoleID string `json:"business_role_id"`
 }
 
+func resolveRolePermissionIDs(req createBusinessRoleReq) ([]uuid.UUID, error) {
+	idSet := make(map[uuid.UUID]struct{})
+	permissionNames := make(map[string]struct{})
+
+	for _, rawID := range req.PermissionIDs {
+		parsedID, err := uuid.Parse(strings.TrimSpace(rawID))
+		if err != nil {
+			continue
+		}
+		idSet[parsedID] = struct{}{}
+	}
+
+	if len(req.Permissions) > 0 {
+		var permObjects []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(req.Permissions, &permObjects); err == nil && len(permObjects) > 0 {
+			for _, p := range permObjects {
+				if parsedID, err := uuid.Parse(strings.TrimSpace(p.ID)); err == nil {
+					idSet[parsedID] = struct{}{}
+					continue
+				}
+				if name := strings.TrimSpace(p.Name); name != "" {
+					permissionNames[name] = struct{}{}
+				}
+			}
+		} else {
+			var permNames []string
+			if err := json.Unmarshal(req.Permissions, &permNames); err == nil {
+				for _, name := range permNames {
+					trimmed := strings.TrimSpace(name)
+					if trimmed == "" {
+						continue
+					}
+					permissionNames[trimmed] = struct{}{}
+				}
+			}
+		}
+	}
+
+	if len(permissionNames) > 0 {
+		names := make([]string, 0, len(permissionNames))
+		for name := range permissionNames {
+			names = append(names, name)
+		}
+
+		var permissionsByName []models.Permission
+		if err := config.DB.Select("id").Where("name IN ?", names).Find(&permissionsByName).Error; err != nil {
+			return nil, err
+		}
+
+		for _, permission := range permissionsByName {
+			idSet[permission.ID] = struct{}{}
+		}
+	}
+
+	if len(idSet) == 0 {
+		return nil, nil
+	}
+
+	requestedIDs := make([]uuid.UUID, 0, len(idSet))
+	for id := range idSet {
+		requestedIDs = append(requestedIDs, id)
+	}
+
+	var existingIDs []uuid.UUID
+	if err := config.DB.Model(&models.Permission{}).Where("id IN ?", requestedIDs).Pluck("id", &existingIDs).Error; err != nil {
+		return nil, err
+	}
+
+	return existingIDs, nil
+}
+
 // GetAllBusinessVerticals returns all business verticals
 func GetAllBusinessVerticals(w http.ResponseWriter, r *http.Request) {
 	pageStr := r.URL.Query().Get("page")
@@ -469,48 +543,13 @@ func CreateBusinessRole(w http.ResponseWriter, r *http.Request) {
 	}
 	invalidateUnifiedRolesCache()
 
-	// Assign permissions - support multiple formats
-	if len(req.PermissionIDs) > 0 {
-		for _, permID := range req.PermissionIDs {
-			var permission models.Permission
-			if err := config.DB.Where("id = ?", permID).First(&permission).Error; err != nil {
-				continue
-			}
-			config.DB.Model(&role).Association("Permissions").Append(&permission)
-		}
-	} else if len(req.Permissions) > 0 {
-		// Try parsing as array of objects first
-		var permObjects []struct {
-			ID   string `json:"id"`
-			Name string `json:"name"`
-		}
-		if err := json.Unmarshal(req.Permissions, &permObjects); err == nil && len(permObjects) > 0 {
-			for _, p := range permObjects {
-				var permission models.Permission
-				if p.ID != "" {
-					if err := config.DB.Where("id = ?", p.ID).First(&permission).Error; err != nil {
-						continue
-					}
-				} else if p.Name != "" {
-					if err := config.DB.Where("name = ?", p.Name).First(&permission).Error; err != nil {
-						continue
-					}
-				}
-				config.DB.Model(&role).Association("Permissions").Append(&permission)
-			}
-		} else {
-			// Try parsing as array of strings
-			var permNames []string
-			if err := json.Unmarshal(req.Permissions, &permNames); err == nil {
-				for _, permName := range permNames {
-					var permission models.Permission
-					if err := config.DB.Where("name = ?", permName).First(&permission).Error; err != nil {
-						continue
-					}
-					config.DB.Model(&role).Association("Permissions").Append(&permission)
-				}
-			}
-		}
+	permissionIDs, err := resolveRolePermissionIDs(req)
+	if err != nil {
+		http.Error(w, "failed to resolve permissions", http.StatusInternalServerError)
+		return
+	}
+	for _, permissionID := range permissionIDs {
+		config.DB.Exec("INSERT INTO business_role_permissions (business_role_id, permission_id) VALUES (?, ?)", role.ID, permissionID)
 	}
 
 	// Load for response
@@ -586,65 +625,23 @@ func UpdateBusinessRole(w http.ResponseWriter, r *http.Request) {
 	// Clear existing permissions and assign new ones using direct SQL (GORM association has UUID issues)
 	config.DB.Exec("DELETE FROM business_role_permissions WHERE business_role_id = ?", role.ID)
 
-	// Support multiple formats: permission_ids, permissions as strings, or permissions as objects
-	if len(req.PermissionIDs) > 0 {
-		var permissions []models.Permission
-		if err := config.DB.Where("id IN ?", req.PermissionIDs).Find(&permissions).Error; err == nil && len(permissions) > 0 {
-			for _, perm := range permissions {
-				config.DB.Exec("INSERT INTO business_role_permissions (business_role_id, permission_id) VALUES (?, ?)", role.ID, perm.ID)
-			}
-		}
-	} else if len(req.Permissions) > 0 {
-		// Try parsing as array of objects first: [{id: "...", name: "..."}]
-		var permObjects []struct {
-			ID   string `json:"id"`
-			Name string `json:"name"`
-		}
-		if err := json.Unmarshal(req.Permissions, &permObjects); err == nil && len(permObjects) > 0 {
-			for _, p := range permObjects {
-				var permission models.Permission
-				if p.ID != "" {
-					if err := config.DB.Where("id = ?", p.ID).First(&permission).Error; err == nil {
-						config.DB.Exec("INSERT INTO business_role_permissions (business_role_id, permission_id) VALUES (?, ?)", role.ID, permission.ID)
-					}
-				} else if p.Name != "" {
-					if err := config.DB.Where("name = ?", p.Name).First(&permission).Error; err == nil {
-						config.DB.Exec("INSERT INTO business_role_permissions (business_role_id, permission_id) VALUES (?, ?)", role.ID, permission.ID)
-					}
-				}
-			}
-		} else {
-			// Try parsing as array of strings: ["name1", "name2"]
-			var permNames []string
-			if err := json.Unmarshal(req.Permissions, &permNames); err == nil {
-				for _, permName := range permNames {
-					var permission models.Permission
-					if err := config.DB.Where("name = ?", permName).First(&permission).Error; err == nil {
-						config.DB.Exec("INSERT INTO business_role_permissions (business_role_id, permission_id) VALUES (?, ?)", role.ID, permission.ID)
-					}
-				}
-			}
-		}
+	permissionIDs, err := resolveRolePermissionIDs(req)
+	if err != nil {
+		http.Error(w, "failed to resolve permissions", http.StatusInternalServerError)
+		return
+	}
+	for _, permissionID := range permissionIDs {
+		config.DB.Exec("INSERT INTO business_role_permissions (business_role_id, permission_id) VALUES (?, ?)", role.ID, permissionID)
 	}
 
 	// Load fresh role with permissions for response
 	var updatedRole models.BusinessRole
-	if err := config.DB.First(&updatedRole, "id = ?", role.ID).Error; err != nil {
+	if err := config.DB.
+		Preload("BusinessVertical").
+		Preload("Permissions").
+		First(&updatedRole, "id = ?", role.ID).Error; err != nil {
 		http.Error(w, "role not found after update", http.StatusInternalServerError)
 		return
-	}
-
-	// Load business vertical
-	config.DB.First(&updatedRole.BusinessVertical, "id = ?", updatedRole.BusinessVerticalID)
-
-	// Load permissions via join table query
-	var permissionIDs []string
-	config.DB.Table("business_role_permissions").
-		Where("business_role_id = ?", role.ID).
-		Pluck("permission_id", &permissionIDs)
-
-	if len(permissionIDs) > 0 {
-		config.DB.Where("id IN ?", permissionIDs).Find(&updatedRole.Permissions)
 	}
 
 	permissions := make([]permissionResponse, len(updatedRole.Permissions))
@@ -946,6 +943,31 @@ func createDefaultBusinessRoles(businessID uuid.UUID) {
 		},
 	}
 
+	permissionNameSet := make(map[string]struct{})
+	for _, roleData := range defaultRoles {
+		for _, permName := range roleData.Permissions {
+			permissionNameSet[strings.TrimSpace(permName)] = struct{}{}
+		}
+	}
+
+	permissionNames := make([]string, 0, len(permissionNameSet))
+	for permName := range permissionNameSet {
+		if permName == "" {
+			continue
+		}
+		permissionNames = append(permissionNames, permName)
+	}
+
+	permissionByName := make(map[string]models.Permission, len(permissionNames))
+	if len(permissionNames) > 0 {
+		var permissions []models.Permission
+		if err := config.DB.Where("name IN ?", permissionNames).Find(&permissions).Error; err == nil {
+			for _, permission := range permissions {
+				permissionByName[permission.Name] = permission
+			}
+		}
+	}
+
 	for _, roleData := range defaultRoles {
 		role := models.BusinessRole{
 			Name:               roleData.Name,
@@ -962,8 +984,8 @@ func createDefaultBusinessRoles(businessID uuid.UUID) {
 
 		// Assign permissions
 		for _, permName := range roleData.Permissions {
-			var permission models.Permission
-			if err := config.DB.Where("name = ?", permName).First(&permission).Error; err != nil {
+			permission, ok := permissionByName[permName]
+			if !ok {
 				continue
 			}
 			config.DB.Model(&role).Association("Permissions").Append(&permission)
@@ -973,24 +995,18 @@ func createDefaultBusinessRoles(businessID uuid.UUID) {
 
 // GetUserBusinessAccess returns all business verticals the current user can access
 func GetUserBusinessAccess(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.GetClaims(r)
-	if claims == nil {
+	userCtx, err := authSvc.LoadUserContext(r)
+	if err != nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-
-	var user models.User
-	if err := config.DB.Preload("RoleModel.Permissions").
-		Preload("UserBusinessRoles.BusinessRole.BusinessVertical").
-		First(&user, "id = ?", claims.UserID).Error; err != nil {
-		http.Error(w, "user not found", http.StatusUnauthorized)
-		return
-	}
+	claims := userCtx.Claims
+	user := userCtx.User
 
 	var accessibleBusinesses []map[string]interface{}
 
 	// Check if user is super admin
-	isSuperAdmin := user.RoleModel != nil && user.RoleModel.Name == "super_admin"
+	isSuperAdmin := userCtx.IsSuperAdmin
 	if user.HasPermission("admin_all") || isSuperAdmin {
 		// Super admin can access all business verticals
 		var allBusinesses []models.BusinessVertical

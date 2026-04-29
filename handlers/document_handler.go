@@ -506,7 +506,14 @@ func GetDocumentsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build query
-	query := config.DB.Model(&models.Document{}).Preload("Category").Preload("Tags").Preload("UploadedBy")
+	// Preload Category and Tags (small); UploadedBy is restricted to list-safe columns
+	// to avoid transferring full User rows on every page request.
+	query := config.DB.Model(&models.Document{}).
+		Preload("Category").
+		Preload("Tags").
+		Preload("UploadedBy", func(db *gorm.DB) *gorm.DB {
+			return db.Select("id", "name", "email", "phone")
+		})
 
 	if categoryID != "" {
 		query = query.Where("category_id = ?", categoryID)

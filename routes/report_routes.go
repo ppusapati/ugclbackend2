@@ -62,6 +62,7 @@ func RegisterReportRoutes(r *mux.Router) {
 	dashboardRead.HandleFunc("/dashboards", handlers.GetDashboards).Methods("GET")
 	dashboardRead.HandleFunc("/dashboards/{id}", handlers.GetDashboard).Methods("GET")
 	dashboardRead.HandleFunc("/dashboards/{id}", handlers.DeleteDashboard).Methods("DELETE")
+	dashboardRead.HandleFunc("/dashboards/{id}/execute", handlers.ExecuteDashboard).Methods("POST")
 	dashboardRead.HandleFunc("/dashboards/{id}/widgets", handlers.AddWidgetToDashboard).Methods("POST")
 	dashboardRead.HandleFunc("/dashboards/{id}/widgets/{widget_id}", handlers.RemoveWidgetFromDashboard).Methods("DELETE")
 

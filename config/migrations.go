@@ -727,6 +727,121 @@ func Migrations(db *gorm.DB) error {
 				return nil
 			},
 		},
+		// ─────────────────────────────────────────────────────────────────────
+		// Phase 4 – Hot-path composite & partial performance indexes
+		//
+		// Rationale per table:
+		//
+		// notifications:
+		//   - Primary inbox query: WHERE user_id = ? ORDER BY created_at DESC
+		//   - Status-filtered inbox: WHERE user_id = ? AND status = ? ORDER BY created_at DESC
+		//   Both resolve with a single index scan instead of a heap-sort pass.
+		//
+		// form_submissions:
+		//   - Listing page: WHERE form_code = ? AND deleted_at IS NULL ORDER BY submitted_at DESC
+		//   - State-filtered: WHERE form_code = ? AND current_state = ? … ORDER BY submitted_at DESC
+		//   - User's own: WHERE submitted_by = ? … ORDER BY submitted_at DESC
+		//   - Business scope: WHERE business_vertical_id = ? … ORDER BY submitted_at DESC
+		//   Partial (WHERE deleted_at IS NULL) keeps index smaller and enables index-only scans.
+		//
+		// documents:
+		//   - Listing: WHERE business_vertical_id = ? AND deleted_at IS NULL ORDER BY created_at DESC
+		//   - Category filter: WHERE category_id = ? AND deleted_at IS NULL ORDER BY created_at DESC
+		//   - Dedup check on upload: WHERE file_hash = ? AND deleted_at IS NULL (First())
+		//   category_id has no single-column index; business_vertical_id has no index on this table.
+		//
+		// workflow_transitions:
+		//   - History lookup: WHERE submission_id = ? ORDER BY transitioned_at ASC
+		//   Existing single-column indexes on submission_id and transitioned_at force a sort step.
+		//
+		// report_definitions:
+		//   - Listing: WHERE business_vertical_id = ? AND deleted_at IS NULL ORDER BY created_at DESC
+		//   Existing single-column index cannot satisfy the ORDER BY without a sort.
+		//
+		// report_executions:
+		//   - History: WHERE report_id = ? ORDER BY executed_at DESC
+		//   Existing single-column index on report_id requires an extra sort pass.
+		//
+		// dashboards:
+		//   - Listing: WHERE business_vertical_id = ? AND is_active = ? AND deleted_at IS NULL
+		//   Partial index drops soft-deleted rows from the index entirely.
+		//
+		// document_audit_logs:
+		//   - Audit listing: WHERE document_id = ? ORDER BY created_at DESC
+		//   Existing single-column index on document_id has no ordering guarantee.
+		//
+		// attendance_sessions:
+		//   - GetAttendanceLogs: WHERE business_vertical_id = ? AND status = ? ORDER BY check_in_at DESC
+		//   - GetActiveAttendanceSessions: same filter, ORDER BY last_seen_at DESC
+		//   - Employee timeline: WHERE user_id = ? ORDER BY check_in_at DESC
+		//   Only site-scoped index existed; business-vertical scoped queries were doing full scans.
+		// ─────────────────────────────────────────────────────────────────────
+		{
+			ID: "20260429_perf_indexes_hotpath",
+			Migrate: func(tx *gorm.DB) error {
+				queries := []string{
+					// ── notifications ──────────────────────────────────────────────────
+					// Base inbox scan (no status filter)
+					"CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications(user_id, created_at DESC)",
+					// Status-filtered inbox (read / unread / dismissed)
+					"CREATE INDEX IF NOT EXISTS idx_notifications_user_status_created ON notifications(user_id, status, created_at DESC)",
+
+					// ── form_submissions ───────────────────────────────────────────────
+					// Listing page – form + ordering; partial drops soft-deleted rows
+					"CREATE INDEX IF NOT EXISTS idx_form_submissions_code_submitted ON form_submissions(form_code, submitted_at DESC) WHERE deleted_at IS NULL",
+					// Workflow state filter on top of form listing
+					"CREATE INDEX IF NOT EXISTS idx_form_submissions_code_state_submitted ON form_submissions(form_code, current_state, submitted_at DESC) WHERE deleted_at IS NULL",
+					// User's own submissions
+					"CREATE INDEX IF NOT EXISTS idx_form_submissions_submitter_submitted ON form_submissions(submitted_by, submitted_at DESC) WHERE deleted_at IS NULL",
+					// Business-vertical scoped listing (generic admin views)
+					"CREATE INDEX IF NOT EXISTS idx_form_submissions_bv_submitted ON form_submissions(business_vertical_id, submitted_at DESC) WHERE deleted_at IS NULL",
+
+					// ── documents ──────────────────────────────────────────────────────
+					// Primary listing – business_vertical_id has NO existing index on documents
+					"CREATE INDEX IF NOT EXISTS idx_documents_bv_created ON documents(business_vertical_id, created_at DESC) WHERE deleted_at IS NULL",
+					// Category filter; category_id has NO existing index on documents
+					"CREATE INDEX IF NOT EXISTS idx_documents_category_created ON documents(category_id, created_at DESC) WHERE deleted_at IS NULL",
+					// Dedup check during upload: WHERE file_hash = ? AND deleted_at IS NULL
+					"CREATE INDEX IF NOT EXISTS idx_documents_file_hash ON documents(file_hash) WHERE deleted_at IS NULL",
+
+					// ── workflow_transitions ────────────────────────────────────────────
+					// Covers GetSubmissionWorkflowHistory ORDER BY transitioned_at ASC
+					"CREATE INDEX IF NOT EXISTS idx_workflow_transitions_submission_time ON workflow_transitions(submission_id, transitioned_at ASC)",
+
+					// ── report_definitions ─────────────────────────────────────────────
+					// Listing ordered by recency within a business vertical
+					"CREATE INDEX IF NOT EXISTS idx_report_defs_bv_created ON report_definitions(business_vertical_id, created_at DESC) WHERE deleted_at IS NULL",
+
+					// ── report_executions ──────────────────────────────────────────────
+					// Execution history ordered newest-first per report
+					"CREATE INDEX IF NOT EXISTS idx_report_executions_report_executed ON report_executions(report_id, executed_at DESC)",
+
+					// ── dashboards ─────────────────────────────────────────────────────
+					// Listing active dashboards per business vertical
+					"CREATE INDEX IF NOT EXISTS idx_dashboards_bv_active ON dashboards(business_vertical_id, is_active) WHERE deleted_at IS NULL",
+
+					// ── document_audit_logs ────────────────────────────────────────────
+					// Audit history per document ordered newest-first
+					"CREATE INDEX IF NOT EXISTS idx_document_audit_logs_doc_created ON document_audit_logs(document_id, created_at DESC)",
+
+					// ── attendance_sessions ────────────────────────────────────────────
+					// GetAttendanceLogs: business vertical + status + time range ordering
+					"CREATE INDEX IF NOT EXISTS idx_attendance_sessions_bv_status_checkin ON attendance_sessions(business_vertical_id, status, check_in_at DESC) WHERE deleted_at IS NULL",
+					// GetActiveAttendanceSessions: business vertical + active status + recency
+					"CREATE INDEX IF NOT EXISTS idx_attendance_sessions_bv_status_lastseen ON attendance_sessions(business_vertical_id, status, last_seen_at DESC) WHERE deleted_at IS NULL",
+					// Employee timeline: user's own sessions sorted by check-in time
+					"CREATE INDEX IF NOT EXISTS idx_attendance_sessions_user_checkin ON attendance_sessions(user_id, check_in_at DESC) WHERE deleted_at IS NULL",
+				}
+
+				for _, q := range queries {
+					if err := tx.Exec(q).Error; err != nil {
+						return err
+					}
+				}
+
+				return nil
+			},
+		},
 	})
 
 	return m.Migrate()

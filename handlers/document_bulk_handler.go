@@ -12,9 +12,18 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/models"
 )
+
+// docTagLink is the junction record for document_tag_links (many2many).
+type docTagLink struct {
+	DocumentID    uuid.UUID `gorm:"column:document_id"`
+	DocumentTagID uuid.UUID `gorm:"column:document_tag_id"`
+}
+
+func (docTagLink) TableName() string { return "document_tag_links" }
 
 // BulkDeleteDocumentsHandler deletes multiple documents
 func BulkDeleteDocumentsHandler(w http.ResponseWriter, r *http.Request) {
@@ -38,44 +47,60 @@ func BulkDeleteDocumentsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Start transaction
+	// Batch fetch IDs that actually exist (for accurate count + audit)
+	var documents []models.Document
+	if err := config.DB.Select("id").Where("id IN ?", req.DocumentIDs).Find(&documents).Error; err != nil {
+		http.Error(w, "failed to fetch documents: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if len(documents) == 0 {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"message": "Documents deleted successfully", "deleted": 0, "total": len(req.DocumentIDs)})
+		return
+	}
+
+	validIDs := make([]uuid.UUID, len(documents))
+	for i, d := range documents {
+		validIDs[i] = d.ID
+	}
+
 	tx := config.DB.Begin()
 	defer func() {
-		if r := recover(); r != nil {
+		if rec := recover(); rec != nil {
 			tx.Rollback()
 		}
 	}()
 
-	deletedCount := 0
-	for _, docID := range req.DocumentIDs {
-		var document models.Document
-		if err := tx.First(&document, "id = ?", docID).Error; err != nil {
-			continue
-		}
+	// Single batch soft-delete
+	if err := tx.Where("id IN ?", validIDs).Delete(&models.Document{}).Error; err != nil {
+		tx.Rollback()
+		http.Error(w, "failed to delete documents: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
-		// Soft delete
-		if err := tx.Delete(&document).Error; err != nil {
-			continue
-		}
-
-		// Log audit
-		auditLog := models.DocumentAuditLog{
-			DocumentID: document.ID,
+	// Batch audit logs
+	auditLogs := make([]models.DocumentAuditLog, len(documents))
+	for i, doc := range documents {
+		auditLogs[i] = models.DocumentAuditLog{
+			DocumentID: doc.ID,
 			UserID:     &userID,
 			Action:     models.DocumentAuditActionDelete,
 			Details:    models.DocumentMetadata{"bulk_delete": true},
 			IPAddress:  r.RemoteAddr,
 			UserAgent:  r.UserAgent(),
 		}
-		tx.Create(&auditLog)
-
-		deletedCount++
+	}
+	if err := tx.CreateInBatches(auditLogs, 100).Error; err != nil {
+		tx.Rollback()
+		http.Error(w, "failed to log audit: "+err.Error(), http.StatusInternalServerError)
+		return
 	}
 
 	if err := tx.Commit().Error; err != nil {
 		http.Error(w, "failed to delete documents: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	deletedCount := len(documents)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -108,54 +133,72 @@ func BulkUpdateDocumentsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Start transaction
+	// Batch fetch valid document IDs
+	var documents []models.Document
+	if err := config.DB.Select("id").Where("id IN ?", req.DocumentIDs).Find(&documents).Error; err != nil {
+		http.Error(w, "failed to fetch documents: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if len(documents) == 0 {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"message": "Documents updated successfully", "updated": 0, "total": len(req.DocumentIDs)})
+		return
+	}
+
+	validIDs := make([]uuid.UUID, len(documents))
+	for i, d := range documents {
+		validIDs[i] = d.ID
+	}
+
+	// Build safe, whitelist-only updates map
+	safeUpdates := map[string]interface{}{}
+	if status, ok := req.Updates["status"].(string); ok {
+		safeUpdates["status"] = models.DocumentStatus(status)
+	}
+	if categoryIDStr, ok := req.Updates["category_id"].(string); ok {
+		if cid, err := uuid.Parse(categoryIDStr); err == nil {
+			safeUpdates["category_id"] = cid
+		}
+	}
+
 	tx := config.DB.Begin()
 	defer func() {
-		if r := recover(); r != nil {
+		if rec := recover(); rec != nil {
 			tx.Rollback()
 		}
 	}()
 
-	updatedCount := 0
-	for _, docID := range req.DocumentIDs {
-		var document models.Document
-		if err := tx.First(&document, "id = ?", docID).Error; err != nil {
-			continue
+	if len(safeUpdates) > 0 {
+		if err := tx.Model(&models.Document{}).Where("id IN ?", validIDs).Updates(safeUpdates).Error; err != nil {
+			tx.Rollback()
+			http.Error(w, "failed to update documents: "+err.Error(), http.StatusInternalServerError)
+			return
 		}
+	}
 
-		// Apply updates
-		if status, ok := req.Updates["status"].(string); ok {
-			document.Status = models.DocumentStatus(status)
-		}
-		if categoryID, ok := req.Updates["category_id"].(string); ok {
-			cid, err := uuid.Parse(categoryID)
-			if err == nil {
-				document.CategoryID = &cid
-			}
-		}
-
-		if err := tx.Save(&document).Error; err != nil {
-			continue
-		}
-
-		// Log audit
-		auditLog := models.DocumentAuditLog{
-			DocumentID: document.ID,
+	// Batch audit logs
+	auditLogs := make([]models.DocumentAuditLog, len(documents))
+	for i, doc := range documents {
+		auditLogs[i] = models.DocumentAuditLog{
+			DocumentID: doc.ID,
 			UserID:     &userID,
 			Action:     models.DocumentAuditActionEdit,
 			Details:    models.DocumentMetadata{"bulk_update": true, "updates": req.Updates},
 			IPAddress:  r.RemoteAddr,
 			UserAgent:  r.UserAgent(),
 		}
-		tx.Create(&auditLog)
-
-		updatedCount++
+	}
+	if err := tx.CreateInBatches(auditLogs, 100).Error; err != nil {
+		tx.Rollback()
+		http.Error(w, "failed to log audit: "+err.Error(), http.StatusInternalServerError)
+		return
 	}
 
 	if err := tx.Commit().Error; err != nil {
 		http.Error(w, "failed to update documents: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	updatedCount := len(documents)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -325,9 +368,14 @@ func GetDocumentStatisticsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	recentUploadsQuery.Order("created_at DESC").Limit(10).Find(&stats.RecentUploads)
 
-	// Total downloads and views
-	scopedDocuments().Select("COALESCE(SUM(download_count), 0)").Scan(&stats.TotalDownloads)
-	scopedDocuments().Select("COALESCE(SUM(view_count), 0)").Scan(&stats.TotalViews)
+	// Total downloads and views — single aggregate query
+	var downloadViewTotals struct {
+		TotalDownloads int64
+		TotalViews     int64
+	}
+	scopedDocuments().Select("COALESCE(SUM(download_count), 0) as total_downloads, COALESCE(SUM(view_count), 0) as total_views").Scan(&downloadViewTotals)
+	stats.TotalDownloads = downloadViewTotals.TotalDownloads
+	stats.TotalViews = downloadViewTotals.TotalViews
 
 	// Top categories
 	var categoryStats []struct {
@@ -384,42 +432,70 @@ func BulkAddTagsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get or create tags
-	var tags []models.DocumentTag
-	for _, tagName := range req.TagNames {
-		var tag models.DocumentTag
-		if err := config.DB.Where("name = ?", tagName).First(&tag).Error; err == gorm.ErrRecordNotFound {
-			tag = models.DocumentTag{Name: tagName}
-			config.DB.Create(&tag)
-		}
-		tags = append(tags, tag)
+	// Batch find existing tags, then create missing ones
+	var existingTags []models.DocumentTag
+	config.DB.Where("name IN ?", req.TagNames).Find(&existingTags)
+
+	existingByName := make(map[string]models.DocumentTag, len(existingTags))
+	for _, t := range existingTags {
+		existingByName[t.Name] = t
 	}
 
-	// Add tags to documents
-	updatedCount := 0
-	for _, docID := range req.DocumentIDs {
-		var document models.Document
-		if err := config.DB.First(&document, "id = ?", docID).Error; err != nil {
-			continue
+	var newTags []models.DocumentTag
+	for _, name := range req.TagNames {
+		if _, ok := existingByName[name]; !ok {
+			newTags = append(newTags, models.DocumentTag{Name: name})
 		}
-
-		if err := config.DB.Model(&document).Association("Tags").Append(tags); err != nil {
-			continue
+	}
+	if len(newTags) > 0 {
+		config.DB.CreateInBatches(newTags, 100)
+		for _, t := range newTags {
+			existingByName[t.Name] = t
 		}
+	}
 
-		// Log audit
-		auditLog := models.DocumentAuditLog{
-			DocumentID: document.ID,
+	tags := make([]models.DocumentTag, 0, len(req.TagNames))
+	for _, name := range req.TagNames {
+		if t, ok := existingByName[name]; ok {
+			tags = append(tags, t)
+		}
+	}
+
+	// Batch fetch documents
+	var documents []models.Document
+	config.DB.Select("id").Where("id IN ?", req.DocumentIDs).Find(&documents)
+	if len(documents) == 0 {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"message": "Tags added successfully", "updated": 0, "total": len(req.DocumentIDs)})
+		return
+	}
+
+	// Batch insert junction records (ON CONFLICT DO NOTHING for idempotency)
+	links := make([]docTagLink, 0, len(documents)*len(tags))
+	for _, doc := range documents {
+		for _, tag := range tags {
+			links = append(links, docTagLink{DocumentID: doc.ID, DocumentTagID: tag.ID})
+		}
+	}
+	if len(links) > 0 {
+		config.DB.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(links, 200)
+	}
+
+	// Batch audit logs
+	auditLogs := make([]models.DocumentAuditLog, len(documents))
+	for i, doc := range documents {
+		auditLogs[i] = models.DocumentAuditLog{
+			DocumentID: doc.ID,
 			UserID:     &userID,
 			Action:     models.DocumentAuditActionEdit,
 			Details:    models.DocumentMetadata{"bulk_add_tags": true, "tags": req.TagNames},
 			IPAddress:  r.RemoteAddr,
 			UserAgent:  r.UserAgent(),
 		}
-		config.DB.Create(&auditLog)
-
-		updatedCount++
 	}
+	config.DB.CreateInBatches(auditLogs, 100)
+
+	updatedCount := len(documents)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{

@@ -111,16 +111,14 @@ func GetFormsForVertical(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("📋 Fetching forms for vertical: %s, user: %s", verticalCode, claims.UserID)
 
-	// Get the user to check permissions
-	var user models.User
-	if err := config.DB.
-		Preload("RoleModel.Permissions").
-		Preload("UserBusinessRoles.BusinessRole.Permissions").
-		Preload("UserBusinessRoles.BusinessRole.BusinessVertical").
-		First(&user, "id = ?", claims.UserID).Error; err != nil {
+	// Reuse auth-service cache to avoid repeated role/permission graph queries.
+	authService := middleware.NewAuthService()
+	userCtx, err := authService.LoadUserContext(r)
+	if err != nil {
 		http.Error(w, "user not found", http.StatusUnauthorized)
 		return
 	}
+	user := userCtx.User
 
 	// Resolve business vertical so we can match both code and UUID in accessible_verticals.
 	candidateTokens := map[string]struct{}{
@@ -286,16 +284,14 @@ func GetFormByCode(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("📋 Fetching form: %s for vertical: %s", formCode, verticalCode)
 
-	// Get the user to check permissions
-	var user models.User
-	if err := config.DB.
-		Preload("RoleModel.Permissions").
-		Preload("UserBusinessRoles.BusinessRole.Permissions").
-		Preload("UserBusinessRoles.BusinessRole.BusinessVertical").
-		First(&user, "id = ?", claims.UserID).Error; err != nil {
+	// Reuse auth-service cache to avoid repeated role/permission graph queries.
+	authService := middleware.NewAuthService()
+	userCtx, err := authService.LoadUserContext(r)
+	if err != nil {
 		http.Error(w, "user not found", http.StatusUnauthorized)
 		return
 	}
+	user := userCtx.User
 
 	// Get the form
 	var form models.AppForm
@@ -455,18 +451,6 @@ func UpdateFormVerticalAccess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if user is admin
-	var user models.User
-	if err := config.DB.First(&user, "id = ?", claims.UserID).Error; err != nil {
-		http.Error(w, "user not found", http.StatusUnauthorized)
-		return
-	}
-
-	if !user.HasPermission("admin_all") || !user.HasPermission("super_admin") {
-		http.Error(w, "forbidden - admin access required", http.StatusForbidden)
-		return
-	}
-
 	vars := mux.Vars(r)
 	formCode := vars["formCode"]
 
@@ -510,16 +494,8 @@ func UpdateFormVerticalAccess(w http.ResponseWriter, r *http.Request) {
 // POST /api/v1/admin/forms
 func CreateForm(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetClaims(r)
-	fmt.Println(claims)
 	if claims == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-
-	// Check if user is admin
-	var user models.User
-	if err := config.DB.First(&user, "id = ?", claims.UserID).Error; err != nil {
-		http.Error(w, "user not found", http.StatusUnauthorized)
 		return
 	}
 
@@ -668,12 +644,6 @@ func ToggleFormStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var user models.User
-	if err := config.DB.First(&user, "id = ?", claims.UserID).Error; err != nil {
-		http.Error(w, "user not found", http.StatusUnauthorized)
-		return
-	}
-
 	vars := mux.Vars(r)
 	formCode := vars["formCode"]
 
@@ -741,13 +711,6 @@ func UpdateForm(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetClaims(r)
 	if claims == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-
-	// Check if user is admin
-	var user models.User
-	if err := config.DB.First(&user, "id = ?", claims.UserID).Error; err != nil {
-		http.Error(w, "user not found", http.StatusUnauthorized)
 		return
 	}
 

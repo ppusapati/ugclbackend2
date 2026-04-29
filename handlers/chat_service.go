@@ -211,8 +211,16 @@ func (s *ChatService) GetConversation(conversationID uuid.UUID, userID string) (
 		return nil, err
 	}
 
-	// Verify user is a participant
-	if !s.IsParticipant(conversationID, userID) {
+	// Verify user is a participant from the already preloaded participants.
+	isParticipant := false
+	for i := range conversation.Participants {
+		participant := conversation.Participants[i]
+		if participant.UserID == userID && participant.LeftAt == nil {
+			isParticipant = true
+			break
+		}
+	}
+	if !isParticipant {
 		return nil, errors.New("user is not a participant in this conversation")
 	}
 
@@ -293,17 +301,55 @@ func (s *ChatService) ListUserConversations(userID string, page, pageSize int, i
 		return nil, 0, err
 	}
 
-	// Manually load LastMessage for each conversation (since it's not a GORM relation)
-	for i := range conversations {
-		if conversations[i].LastMessageID != nil {
-			var lastMsg models.ChatMessage
-			if err := config.DB.First(&lastMsg, "id = ?", conversations[i].LastMessageID).Error; err == nil {
-				conversations[i].LastMessage = &lastMsg
-			}
-		}
+	// Batch-load last messages to avoid N+1 queries on conversation lists.
+	if err := s.attachLastMessages(conversations); err != nil {
+		return nil, 0, err
 	}
 
 	return conversations, totalCount, nil
+}
+
+func (s *ChatService) attachLastMessages(conversations []models.Conversation) error {
+	messageIDs := make([]uuid.UUID, 0, len(conversations))
+	seen := make(map[uuid.UUID]struct{}, len(conversations))
+
+	for i := range conversations {
+		if conversations[i].LastMessageID == nil {
+			continue
+		}
+		id := *conversations[i].LastMessageID
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		messageIDs = append(messageIDs, id)
+	}
+
+	if len(messageIDs) == 0 {
+		return nil
+	}
+
+	var lastMessages []models.ChatMessage
+	if err := s.db.Where("id IN ?", messageIDs).Find(&lastMessages).Error; err != nil {
+		return err
+	}
+
+	messageByID := make(map[uuid.UUID]models.ChatMessage, len(lastMessages))
+	for i := range lastMessages {
+		messageByID[lastMessages[i].ID] = lastMessages[i]
+	}
+
+	for i := range conversations {
+		if conversations[i].LastMessageID == nil {
+			continue
+		}
+		if msg, ok := messageByID[*conversations[i].LastMessageID]; ok {
+			msgCopy := msg
+			conversations[i].LastMessage = &msgCopy
+		}
+	}
+
+	return nil
 }
 
 // UpdateConversation updates a conversation

@@ -21,22 +21,29 @@ type cachedUser struct {
 var userCache = &userContextCache{entries: make(map[string]cachedUser)}
 
 type userContextCache struct {
-	mu      sync.Mutex
+	mu      sync.RWMutex
 	entries map[string]cachedUser
 }
 
 // get returns the cached user if present and not expired.
-// Expired entries are deleted on detection to prevent unbounded map growth.
+// Uses RLock so concurrent reads from multiple goroutines do not serialise.
+// Expired entries are lazily removed under a full write-lock.
 func (c *userContextCache) get(userID string) (models.User, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
+	c.mu.RLock()
 	entry, ok := c.entries[userID]
+	c.mu.RUnlock()
+
 	if !ok {
 		return models.User{}, false
 	}
 	if time.Now().After(entry.expiresAt) {
-		delete(c.entries, userID)
+		// Upgrade to write-lock to evict the stale entry.
+		c.mu.Lock()
+		// Re-check: another goroutine may have refreshed the entry between RUnlock and Lock.
+		if e, still := c.entries[userID]; still && time.Now().After(e.expiresAt) {
+			delete(c.entries, userID)
+		}
+		c.mu.Unlock()
 		return models.User{}, false
 	}
 	return entry.user, true

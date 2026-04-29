@@ -19,6 +19,7 @@ import (
 // RegisterRoutes sets up all application routes
 func RegisterRoutes() http.Handler {
 	r := mux.NewRouter()
+	r.Use(middleware.RequestObservabilityMiddleware)
 
 	// =====================================================
 	// Public Routes (no authentication)
