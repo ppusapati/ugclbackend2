@@ -759,7 +759,7 @@ func Migrations(db *gorm.DB) error {
 		//   Existing single-column index cannot satisfy the ORDER BY without a sort.
 		//
 		// report_executions:
-		//   - History: WHERE report_id = ? ORDER BY executed_at DESC
+		//   - History: WHERE report_id = ? ORDER BY started_at DESC
 		//   Existing single-column index on report_id requires an extra sort pass.
 		//
 		// dashboards:
@@ -814,7 +814,7 @@ func Migrations(db *gorm.DB) error {
 
 					// ── report_executions ──────────────────────────────────────────────
 					// Execution history ordered newest-first per report
-					"CREATE INDEX IF NOT EXISTS idx_report_executions_report_executed ON report_executions(report_id, executed_at DESC)",
+					"CREATE INDEX IF NOT EXISTS idx_report_executions_report_started ON report_executions(report_id, started_at DESC)",
 
 					// ── dashboards ─────────────────────────────────────────────────────
 					// Listing active dashboards per business vertical
