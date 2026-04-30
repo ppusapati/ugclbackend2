@@ -185,8 +185,8 @@ func AssignBusinessRole(w http.ResponseWriter, r *http.Request) {
 
 		// Evict the affected user from the auth cache.
 		middleware.InvalidateUserCache(userID)
-		invalidateAdminUsersCache()
-		invalidateUnifiedRolesCache()
+		InvalidateAdminUsersCache()
+		InvalidateUnifiedRolesCache()
 
 		response := map[string]interface{}{
 			"success":            true,
@@ -248,8 +248,8 @@ func AssignBusinessRole(w http.ResponseWriter, r *http.Request) {
 
 	// Evict the newly assigned user from the auth cache.
 	middleware.InvalidateUserCache(userID)
-	invalidateAdminUsersCache()
-	invalidateUnifiedRolesCache()
+	InvalidateAdminUsersCache()
+	InvalidateUnifiedRolesCache()
 
 	response := map[string]interface{}{
 		"success":            true,
@@ -324,8 +324,8 @@ func RemoveBusinessRole(w http.ResponseWriter, r *http.Request) {
 
 	// Evict the affected user from the auth cache so the next request re-fetches updated permissions.
 	middleware.InvalidateUserCache(userID)
-	invalidateAdminUsersCache()
-	invalidateUnifiedRolesCache()
+	InvalidateAdminUsersCache()
+	InvalidateUnifiedRolesCache()
 
 	response := map[string]interface{}{
 		"success": true,

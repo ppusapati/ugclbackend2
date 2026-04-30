@@ -93,7 +93,7 @@ func (c *unifiedRolesCacheStore) set(key string, payload []byte) {
 	c.mu.Unlock()
 }
 
-func invalidateUnifiedRolesCache() {
+func InvalidateUnifiedRolesCache() {
 	unifiedRolesCache.mu.Lock()
 	clear(unifiedRolesCache.entries)
 	unifiedRolesCache.mu.Unlock()
@@ -110,10 +110,10 @@ type roleResponse struct {
 	Name        string               `json:"name"`
 	Description string               `json:"description"`
 	IsActive    bool                 `json:"is_active"`
-	Permissions []permissionResponse `json:"permissions"`
+	Permissions []PermissionResponse `json:"permissions"`
 }
 
-type permissionResponse struct {
+type PermissionResponse struct {
 	ID          uuid.UUID `json:"id"`
 	Name        string    `json:"name"`
 	Description string    `json:"description"`
@@ -160,9 +160,9 @@ func GetAllRoles(w http.ResponseWriter, r *http.Request) {
 	// Convert to response format
 	roleResponses := make([]roleResponse, len(roles))
 	for i, role := range roles {
-		permissions := make([]permissionResponse, len(role.Permissions))
+		permissions := make([]PermissionResponse, len(role.Permissions))
 		for j, perm := range role.Permissions {
-			permissions[j] = permissionResponse{
+			permissions[j] = PermissionResponse{
 				ID:          perm.ID,
 				Name:        perm.Name,
 				Description: perm.Description,
@@ -209,9 +209,9 @@ func GetAllPermissions(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Convert to response format
-		permResponses := make([]permissionResponse, len(permissions))
+		permResponses := make([]PermissionResponse, len(permissions))
 		for i, perm := range permissions {
-			permResponses[i] = permissionResponse{
+			permResponses[i] = PermissionResponse{
 				ID:          perm.ID,
 				Name:        perm.Name,
 				Description: perm.Description,
@@ -270,7 +270,7 @@ func CreateRole(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to create role: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	invalidateUnifiedRolesCache()
+	InvalidateUnifiedRolesCache()
 
 	// Assign permissions
 	for _, permName := range req.Permissions {
@@ -285,9 +285,9 @@ func CreateRole(w http.ResponseWriter, r *http.Request) {
 	config.DB.Preload("Permissions").First(&role, role.ID)
 
 	// Convert to response format
-	permissions := make([]permissionResponse, len(role.Permissions))
+	permissions := make([]PermissionResponse, len(role.Permissions))
 	for i, perm := range role.Permissions {
-		permissions[i] = permissionResponse{
+		permissions[i] = PermissionResponse{
 			ID:          perm.ID,
 			Name:        perm.Name,
 			Description: perm.Description,
@@ -358,9 +358,9 @@ func UpdateRole(w http.ResponseWriter, r *http.Request) {
 	config.DB.Preload("Permissions").First(&role, role.ID)
 
 	// Convert to response format
-	permissions := make([]permissionResponse, len(role.Permissions))
+	permissions := make([]PermissionResponse, len(role.Permissions))
 	for i, perm := range role.Permissions {
-		permissions[i] = permissionResponse{
+		permissions[i] = PermissionResponse{
 			ID:          perm.ID,
 			Name:        perm.Name,
 			Description: perm.Description,
@@ -384,8 +384,8 @@ func UpdateRole(w http.ResponseWriter, r *http.Request) {
 	for _, uid := range affectedUserIDs {
 		middleware.InvalidateUserCache(uid.String())
 	}
-	invalidateAdminUsersCache()
-	invalidateUnifiedRolesCache()
+	InvalidateAdminUsersCache()
+	InvalidateUnifiedRolesCache()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
@@ -422,8 +422,8 @@ func DeleteRole(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to delete role: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	invalidateAdminUsersCache()
-	invalidateUnifiedRolesCache()
+	InvalidateAdminUsersCache()
+	InvalidateUnifiedRolesCache()
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -439,7 +439,7 @@ type UnifiedRoleResponse struct {
 	IsGlobal           bool                  `json:"is_global"`
 	BusinessVerticalID *uuid.UUID            `json:"business_vertical_id,omitempty"`
 	BusinessVertical   *BusinessVerticalInfo `json:"business_vertical,omitempty"`
-	Permissions        []permissionResponse  `json:"permissions"`
+	Permissions        []PermissionResponse  `json:"permissions"`
 	UserCount          int64                 `json:"user_count"`
 }
 
@@ -505,9 +505,9 @@ func GetAllRolesUnified(w http.ResponseWriter, r *http.Request) {
 
 		// Convert global roles to unified format
 		for _, role := range globalRoles {
-			permissions := make([]permissionResponse, len(role.Permissions))
+			permissions := make([]PermissionResponse, len(role.Permissions))
 			for j, perm := range role.Permissions {
-				permissions[j] = permissionResponse{
+				permissions[j] = PermissionResponse{
 					ID:          perm.ID,
 					Name:        perm.Name,
 					Description: perm.Description,
@@ -574,9 +574,9 @@ func GetAllRolesUnified(w http.ResponseWriter, r *http.Request) {
 
 			// Convert business roles to unified format
 			for _, role := range businessRoles {
-				permissions := make([]permissionResponse, len(role.Permissions))
+				permissions := make([]PermissionResponse, len(role.Permissions))
 				for j, perm := range role.Permissions {
-					permissions[j] = permissionResponse{
+					permissions[j] = PermissionResponse{
 						ID:          perm.ID,
 						Name:        perm.Name,
 						Description: perm.Description,

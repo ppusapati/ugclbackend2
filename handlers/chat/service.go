@@ -1,4 +1,4 @@
-package handlers
+package chat
 
 import (
 	"errors"
@@ -10,6 +10,7 @@ import (
 	"gorm.io/gorm"
 	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/models"
+	"p9e.in/ugcl/handlers"
 )
 
 // ChatService handles chat business logic
@@ -1224,7 +1225,7 @@ func (s *ChatService) SendChatNotifications(message *models.ChatMessage, senderN
 
 	// Create notifications for each participant
 	now := time.Now()
-	notificationService := NewNotificationService()
+	notificationService := handlers.NewNotificationService()
 	for _, participant := range participants {
 		// Check if user has muted this conversation
 		if participant.IsMuted {

@@ -1,4 +1,4 @@
-package handlers
+package business
 
 import (
 	"encoding/json"
@@ -12,12 +12,16 @@ import (
 	"github.com/gorilla/mux"
 	"golang.org/x/sync/singleflight"
 	"p9e.in/ugcl/config"
+	"p9e.in/ugcl/handlers"
 	"p9e.in/ugcl/middleware"
 	"p9e.in/ugcl/models"
 )
 
 // businessVerticalsCacheTTL is how long the paginated business verticals list response is cached.
 const businessVerticalsCacheTTL = 10 * time.Minute
+
+// authSvc is a package-level AuthService used by business handlers.
+var authSvc = middleware.NewAuthService()
 
 type businessVerticalsResponseCache struct {
 	mu      sync.Mutex // get() deletes expired entries so always needs the write lock; Mutex is correct.
@@ -54,6 +58,15 @@ func (c *businessVerticalsResponseCache) invalidate() {
 	c.mu.Lock()
 	clear(c.entries)
 	c.mu.Unlock()
+}
+
+// permissionResponse is a local DTO for permission information in responses
+type permissionResponse struct {
+	ID          uuid.UUID `json:"id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	Resource    string    `json:"resource"`
+	Action      string    `json:"action"`
 }
 
 var businessVerticalsCache = &businessVerticalsResponseCache{entries: make(map[string]businessVerticalsResponseEntry)}
@@ -326,7 +339,7 @@ func CreateBusinessVertical(w http.ResponseWriter, r *http.Request) {
 	}
 	middleware.InvalidateAccessibleBusinessVerticalsCache()
 	middleware.InvalidateBusinessIdentifierCache()
-	invalidateAdminUsersCache()
+	handlers.InvalidateAdminUsersCache()
 	businessVerticalsCache.invalidate()
 
 	// Create default roles for this business
@@ -390,7 +403,7 @@ func UpdateBusinessVertical(w http.ResponseWriter, r *http.Request) {
 
 	middleware.InvalidateAccessibleBusinessVerticalsCache()
 	middleware.InvalidateBusinessIdentifierCache()
-	invalidateAdminUsersCache()
+	handlers.InvalidateAdminUsersCache()
 	businessVerticalsCache.invalidate()
 
 	response := businessResponse{
@@ -436,7 +449,7 @@ func DeleteBusinessVertical(w http.ResponseWriter, r *http.Request) {
 
 	middleware.InvalidateAccessibleBusinessVerticalsCache()
 	middleware.InvalidateBusinessIdentifierCache()
-	invalidateAdminUsersCache()
+	handlers.InvalidateAdminUsersCache()
 	businessVerticalsCache.invalidate()
 
 	w.Header().Set("Content-Type", "application/json")
@@ -541,7 +554,7 @@ func CreateBusinessRole(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to create role: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	invalidateUnifiedRolesCache()
+	handlers.InvalidateUnifiedRolesCache()
 
 	permissionIDs, err := resolveRolePermissionIDs(req)
 	if err != nil {
@@ -676,7 +689,7 @@ func UpdateBusinessRole(w http.ResponseWriter, r *http.Request) {
 	for _, uid := range affectedUserIDs {
 		middleware.InvalidateUserCache(uid.String())
 	}
-	invalidateUnifiedRolesCache()
+	handlers.InvalidateUnifiedRolesCache()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
@@ -726,8 +739,8 @@ func DeleteBusinessRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	invalidateUnifiedRolesCache()
-	invalidateAdminUsersCache()
+	handlers.InvalidateUnifiedRolesCache()
+	handlers.InvalidateAdminUsersCache()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"message": "role deleted successfully"})
@@ -800,8 +813,8 @@ func AssignUserToBusinessRole(w http.ResponseWriter, r *http.Request) {
 
 	// Evict auth cache so assigned permissions are reflected immediately.
 	middleware.InvalidateUserCache(userID.String())
-	invalidateAdminUsersCache()
-	invalidateUnifiedRolesCache()
+	handlers.InvalidateAdminUsersCache()
+	handlers.InvalidateUnifiedRolesCache()
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"message": "user assigned to role successfully"})

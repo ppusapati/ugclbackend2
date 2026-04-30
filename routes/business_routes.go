@@ -6,6 +6,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"p9e.in/ugcl/handlers"
+	biz "p9e.in/ugcl/handlers/business"
 	"p9e.in/ugcl/handlers/masters"
 	"p9e.in/ugcl/middleware"
 )
@@ -28,7 +29,7 @@ func RegisterBusinessRoutes(r *mux.Router) {
 	api.Use(middleware.SecurityMiddleware)
 	api.Use(middleware.JWTMiddleware)
 
-	api.HandleFunc("/my-businesses", handlers.GetUserBusinessAccess).Methods("GET")
+	api.HandleFunc("/my-businesses", biz.GetUserBusinessAccess).Methods("GET")
 	api.HandleFunc("/modules", masters.GetModules).Methods("GET")
 
 	// Role assignment routes
@@ -60,17 +61,17 @@ func RegisterBusinessRoutes(r *mux.Router) {
 func registerGlobalAdminRoutes(admin *mux.Router) {
 	// Business vertical management
 	admin.Handle("/businesses", middleware.RequirePermission("manage_businesses")(
-		http.HandlerFunc(handlers.GetAllBusinessVerticals))).Methods("GET")
+		http.HandlerFunc(biz.GetAllBusinessVerticals))).Methods("GET")
 	admin.Handle("/businesses", middleware.RequirePermission("manage_businesses")(
-		http.HandlerFunc(handlers.CreateBusinessVertical))).Methods("POST")
+		http.HandlerFunc(biz.CreateBusinessVertical))).Methods("POST")
 	admin.Handle("/businesses/{id}", middleware.RequirePermission("manage_businesses")(
-		http.HandlerFunc(handlers.UpdateBusinessVertical))).Methods("PUT")
+		http.HandlerFunc(biz.UpdateBusinessVertical))).Methods("PUT")
 	admin.Handle("/businesses/{id}", middleware.RequirePermission("manage_businesses")(
-		http.HandlerFunc(handlers.DeleteBusinessVertical))).Methods("DELETE")
+		http.HandlerFunc(biz.DeleteBusinessVertical))).Methods("DELETE")
 
 	// Super admin dashboard
 	admin.Handle("/dashboard", middleware.RequirePermission("admin_all")(
-		http.HandlerFunc(handlers.GetSuperAdminDashboard))).Methods("GET")
+		http.HandlerFunc(biz.GetSuperAdminDashboard))).Methods("GET")
 
 	// Site management (all sites across all business verticals)
 	admin.Handle("/sites", middleware.RequirePermission("admin_all")(
@@ -117,19 +118,19 @@ func registerGlobalAdminRoutes(admin *mux.Router) {
 func registerBusinessRoleRoutes(business *mux.Router) {
 	// Business role management
 	business.Handle("/roles", middleware.RequireBusinessPermission("business_manage_roles")(
-		http.HandlerFunc(handlers.GetBusinessRoles))).Methods("GET")
+		http.HandlerFunc(biz.GetBusinessRoles))).Methods("GET")
 	business.Handle("/roles", middleware.RequireBusinessPermission("business_manage_roles")(
-		http.HandlerFunc(handlers.CreateBusinessRole))).Methods("POST")
+		http.HandlerFunc(biz.CreateBusinessRole))).Methods("POST")
 	business.Handle("/roles/{roleId}", middleware.RequireBusinessPermission("business_manage_roles")(
-		http.HandlerFunc(handlers.UpdateBusinessRole))).Methods("PUT")
+		http.HandlerFunc(biz.UpdateBusinessRole))).Methods("PUT")
 	business.Handle("/roles/{roleId}", middleware.RequireBusinessPermission("business_manage_roles")(
-		http.HandlerFunc(handlers.DeleteBusinessRole))).Methods("DELETE")
+		http.HandlerFunc(biz.DeleteBusinessRole))).Methods("DELETE")
 
 	// Business user management
 	business.Handle("/users", middleware.RequireBusinessPermission("business_manage_users")(
-		http.HandlerFunc(handlers.GetBusinessUsers))).Methods("GET")
+		http.HandlerFunc(biz.GetBusinessUsers))).Methods("GET")
 	business.Handle("/users/assign", middleware.RequireBusinessPermission("business_manage_users")(
-		http.HandlerFunc(handlers.AssignUserToBusinessRole))).Methods("POST")
+		http.HandlerFunc(biz.AssignUserToBusinessRole))).Methods("POST")
 }
 
 // registerBusinessReportRoutes registers business-specific report routes
@@ -150,7 +151,7 @@ func registerBusinessReportRoutes(business *mux.Router) {
 		http.HandlerFunc(handlers.GetBusinessAnalytics))).Methods("GET")
 
 	// Business info and context endpoints
-	business.HandleFunc("/info", handlers.GetBusinessInfo).Methods("GET")
+	business.HandleFunc("/info", biz.GetBusinessInfo).Methods("GET")
 	business.HandleFunc("/context", func(w http.ResponseWriter, r *http.Request) {
 		context := middleware.GetUserBusinessContext(r)
 		if context == nil {

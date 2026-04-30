@@ -236,7 +236,7 @@ func UpdateUser(w http.ResponseWriter, r *http.Request) {
 
 	// Evict the updated user from the auth cache so permissions reflect immediately.
 	middleware.InvalidateUserCache(userID)
-	invalidateAdminUsersCache()
+	InvalidateAdminUsersCache()
 
 	if err := config.DB.
 		Preload("RoleModel").
@@ -287,7 +287,7 @@ func DeleteUser(w http.ResponseWriter, r *http.Request) {
 	// Evict the deactivated user immediately so they cannot continue to access
 	// protected resources via a still-valid JWT during the cache TTL window.
 	middleware.InvalidateUserCache(userID)
-	invalidateAdminUsersCache()
+	InvalidateAdminUsersCache()
 
 	w.WriteHeader(http.StatusNoContent)
 }

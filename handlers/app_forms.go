@@ -15,6 +15,7 @@ import (
 	"github.com/gorilla/mux"
 	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/middleware"
+	"p9e.in/ugcl/handlers/reports"
 	"p9e.in/ugcl/models"
 )
 
@@ -556,7 +557,7 @@ func CreateForm(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if form.IsActive {
-		if _, err := EnsureReportFormViewForForm(tx, form); err != nil {
+		if _, err := reports.EnsureReportFormViewForForm(tx, form); err != nil {
 			tx.Rollback()
 			log.Printf("❌ Error creating report view for form %s: %v", form.Code, err)
 			http.Error(w, "failed to create reporting view for form", http.StatusInternalServerError)
@@ -670,7 +671,7 @@ func ToggleFormStatus(w http.ResponseWriter, r *http.Request) {
 
 	form.IsActive = body.IsActive
 	if body.IsActive {
-		if _, err := EnsureReportFormViewForForm(tx, form); err != nil {
+		if _, err := reports.EnsureReportFormViewForForm(tx, form); err != nil {
 			tx.Rollback()
 			log.Printf("❌ Error creating report view while activating form %s: %v", form.Code, err)
 			http.Error(w, "failed to activate form reporting view", http.StatusInternalServerError)
@@ -805,7 +806,7 @@ func UpdateForm(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if existingForm.IsActive {
-		if _, err := EnsureReportFormViewForForm(tx, existingForm); err != nil {
+		if _, err := reports.EnsureReportFormViewForForm(tx, existingForm); err != nil {
 			tx.Rollback()
 			log.Printf("❌ Error syncing report view for form %s: %v", existingForm.Code, err)
 			http.Error(w, "failed to sync reporting view for form", http.StatusInternalServerError)

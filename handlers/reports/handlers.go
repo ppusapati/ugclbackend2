@@ -1,4 +1,4 @@
-package handlers
+package reports
 
 import (
 	"encoding/json"
@@ -1033,6 +1033,14 @@ func buildFormFieldList(form models.AppForm) []map[string]interface{} {
 		}
 		if name, ok := field["name"].(string); ok && name != "" {
 			entry["name"] = name
+		}
+		// Preserve apiEndpoint for dropdown fields so the report builder UI can
+		// display the resolution source and the view generator can resolve UUIDs.
+		if ep, ok := field["apiEndpoint"].(string); ok && ep != "" {
+			entry["apiEndpoint"] = ep
+		}
+		if df, ok := field["displayField"].(string); ok && df != "" {
+			entry["displayField"] = df
 		}
 		fieldList = append(fieldList, entry)
 		appendNestedFields(field, source, visitField)

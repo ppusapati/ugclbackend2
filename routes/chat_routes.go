@@ -4,7 +4,7 @@ import (
 	"net/http"
 
 	"github.com/gorilla/mux"
-	"p9e.in/ugcl/handlers"
+	"p9e.in/ugcl/handlers/chat"
 	"p9e.in/ugcl/middleware"
 )
 
@@ -13,7 +13,7 @@ import (
 // The service layer checks if the user is a participant in the conversation.
 // Admin-only operations (like creating groups) still require specific permissions.
 func RegisterChatRoutes(api *mux.Router) {
-	chatHandler := &handlers.ChatHandler{}
+	chatHandler := &chat.ChatHandler{}
 
 	// Chat routes - all require authentication
 	// Base path: /api/v1/chat

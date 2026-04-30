@@ -62,7 +62,7 @@ func (c *adminUsersCacheStore) set(key string, payload []byte) {
 	c.mu.Unlock()
 }
 
-func invalidateAdminUsersCache() {
+func InvalidateAdminUsersCache() {
 	adminUsersCache.mu.Lock()
 	clear(adminUsersCache.entries)
 	adminUsersCache.mu.Unlock()

@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"p9e.in/ugcl/config"
-	"p9e.in/ugcl/handlers"
+	"p9e.in/ugcl/handlers/reports"
 	"p9e.in/ugcl/middleware"
 	"p9e.in/ugcl/routes"
 )
@@ -103,7 +103,7 @@ func main() {
 	} else {
 		safeGo("report-view-autosync", func() {
 			reportViewAutosyncOnce.Do(func() {
-				synced, err := handlers.EnsureAllActiveFormReportViews(config.DB)
+				synced, err := reports.EnsureAllActiveFormReportViews(config.DB)
 				if err != nil {
 					slog.Error("report view autosync failed", "synced_forms", synced, "error", err)
 					return
