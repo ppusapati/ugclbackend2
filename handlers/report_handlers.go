@@ -16,7 +16,16 @@ import (
 	"p9e.in/ugcl/models"
 )
 
-func buildSystemFields(tableName string, title string, fields []map[string]interface{}) map[string]interface{} {
+type FieldDef struct {
+	ID         string `json:"id"`
+	Label      string `json:"label"`
+	Type       string `json:"type"`
+	DataType   string `json:"dataType"`
+	Source     string `json:"source"`
+	ColumnName string `json:"column_name"`
+}
+
+func buildSystemFields(tableName string, title string, fields []FieldDef) map[string]interface{} {
 	return map[string]interface{}{
 		"table_name":  tableName,
 		"form_title":  title,
@@ -26,70 +35,70 @@ func buildSystemFields(tableName string, title string, fields []map[string]inter
 	}
 }
 
-func getDMSDocumentFields() []map[string]interface{} {
-	return []map[string]interface{}{
-		{"id": "id", "label": "Document ID", "type": "text", "dataType": "text", "source": "system", "column_name": "id"},
-		{"id": "title", "label": "Title", "type": "text", "dataType": "text", "source": "system", "column_name": "title"},
-		{"id": "description", "label": "Description", "type": "text", "dataType": "text", "source": "system", "column_name": "description"},
-		{"id": "file_name", "label": "File Name", "type": "text", "dataType": "text", "source": "system", "column_name": "file_name"},
-		{"id": "file_type", "label": "File Type", "type": "text", "dataType": "text", "source": "system", "column_name": "file_type"},
-		{"id": "file_size", "label": "File Size", "type": "number", "dataType": "number", "source": "system", "column_name": "file_size"},
-		{"id": "status", "label": "Status", "type": "text", "dataType": "text", "source": "system", "column_name": "status"},
-		{"id": "current_state", "label": "Workflow State", "type": "text", "dataType": "text", "source": "system", "column_name": "current_state"},
-		{"id": "business_vertical_id", "label": "Business Vertical ID", "type": "text", "dataType": "text", "source": "system", "column_name": "business_vertical_id"},
-		{"id": "project_id", "label": "Project ID", "type": "text", "dataType": "text", "source": "system", "column_name": "project_id"},
-		{"id": "task_id", "label": "Task ID", "type": "text", "dataType": "text", "source": "system", "column_name": "task_id"},
-		{"id": "uploaded_by_id", "label": "Uploaded By ID", "type": "text", "dataType": "text", "source": "system", "column_name": "uploaded_by_id"},
-		{"id": "download_count", "label": "Download Count", "type": "number", "dataType": "number", "source": "system", "column_name": "download_count"},
-		{"id": "view_count", "label": "View Count", "type": "number", "dataType": "number", "source": "system", "column_name": "view_count"},
-		{"id": "is_public", "label": "Is Public", "type": "boolean", "dataType": "boolean", "source": "system", "column_name": "is_public"},
-		{"id": "created_at", "label": "Created At", "type": "datetime", "dataType": "datetime", "source": "system", "column_name": "created_at"},
-		{"id": "updated_at", "label": "Updated At", "type": "datetime", "dataType": "datetime", "source": "system", "column_name": "updated_at"},
+func getDMSDocumentFields() []FieldDef {
+	return []FieldDef{
+		{ID: "id", Label: "Document ID", Type: "text", DataType: "text", Source: "system", ColumnName: "id"},
+		{ID: "title", Label: "Title", Type: "text", DataType: "text", Source: "system", ColumnName: "title"},
+		{ID: "description", Label: "Description", Type: "text", DataType: "text", Source: "system", ColumnName: "description"},
+		{ID: "file_name", Label: "File Name", Type: "text", DataType: "text", Source: "system", ColumnName: "file_name"},
+		{ID: "file_type", Label: "File Type", Type: "text", DataType: "text", Source: "system", ColumnName: "file_type"},
+		{ID: "file_size", Label: "File Size", Type: "number", DataType: "number", Source: "system", ColumnName: "file_size"},
+		{ID: "status", Label: "Status", Type: "text", DataType: "text", Source: "system", ColumnName: "status"},
+		{ID: "current_state", Label: "Workflow State", Type: "text", DataType: "text", Source: "system", ColumnName: "current_state"},
+		{ID: "business_vertical_id", Label: "Business Vertical ID", Type: "text", DataType: "text", Source: "system", ColumnName: "business_vertical_id"},
+		{ID: "project_id", Label: "Project ID", Type: "text", DataType: "text", Source: "system", ColumnName: "project_id"},
+		{ID: "task_id", Label: "Task ID", Type: "text", DataType: "text", Source: "system", ColumnName: "task_id"},
+		{ID: "uploaded_by_id", Label: "Uploaded By ID", Type: "text", DataType: "text", Source: "system", ColumnName: "uploaded_by_id"},
+		{ID: "download_count", Label: "Download Count", Type: "number", DataType: "number", Source: "system", ColumnName: "download_count"},
+		{ID: "view_count", Label: "View Count", Type: "number", DataType: "number", Source: "system", ColumnName: "view_count"},
+		{ID: "is_public", Label: "Is Public", Type: "boolean", DataType: "boolean", Source: "system", ColumnName: "is_public"},
+		{ID: "created_at", Label: "Created At", Type: "datetime", DataType: "datetime", Source: "system", ColumnName: "created_at"},
+		{ID: "updated_at", Label: "Updated At", Type: "datetime", DataType: "datetime", Source: "system", ColumnName: "updated_at"},
 	}
 }
 
-func getPMSProjectFields() []map[string]interface{} {
-	return []map[string]interface{}{
-		{"id": "id", "label": "Project ID", "type": "text", "dataType": "text", "source": "system", "column_name": "id"},
-		{"id": "code", "label": "Project Code", "type": "text", "dataType": "text", "source": "system", "column_name": "code"},
-		{"id": "name", "label": "Project Name", "type": "text", "dataType": "text", "source": "system", "column_name": "name"},
-		{"id": "description", "label": "Description", "type": "text", "dataType": "text", "source": "system", "column_name": "description"},
-		{"id": "business_vertical_id", "label": "Business Vertical ID", "type": "text", "dataType": "text", "source": "system", "column_name": "business_vertical_id"},
-		{"id": "status", "label": "Status", "type": "text", "dataType": "text", "source": "system", "column_name": "status"},
-		{"id": "progress", "label": "Progress", "type": "number", "dataType": "number", "source": "system", "column_name": "progress"},
-		{"id": "total_budget", "label": "Total Budget", "type": "number", "dataType": "number", "source": "system", "column_name": "total_budget"},
-		{"id": "allocated_budget", "label": "Allocated Budget", "type": "number", "dataType": "number", "source": "system", "column_name": "allocated_budget"},
-		{"id": "spent_budget", "label": "Spent Budget", "type": "number", "dataType": "number", "source": "system", "column_name": "spent_budget"},
-		{"id": "start_date", "label": "Start Date", "type": "datetime", "dataType": "datetime", "source": "system", "column_name": "start_date"},
-		{"id": "end_date", "label": "End Date", "type": "datetime", "dataType": "datetime", "source": "system", "column_name": "end_date"},
-		{"id": "created_by", "label": "Created By", "type": "text", "dataType": "text", "source": "system", "column_name": "created_by"},
-		{"id": "created_at", "label": "Created At", "type": "datetime", "dataType": "datetime", "source": "system", "column_name": "created_at"},
-		{"id": "updated_at", "label": "Updated At", "type": "datetime", "dataType": "datetime", "source": "system", "column_name": "updated_at"},
+func getPMSProjectFields() []FieldDef {
+	return []FieldDef{
+		{ID: "id", Label: "Project ID", Type: "text", DataType: "text", Source: "system", ColumnName: "id"},
+		{ID: "code", Label: "Project Code", Type: "text", DataType: "text", Source: "system", ColumnName: "code"},
+		{ID: "name", Label: "Project Name", Type: "text", DataType: "text", Source: "system", ColumnName: "name"},
+		{ID: "description", Label: "Description", Type: "text", DataType: "text", Source: "system", ColumnName: "description"},
+		{ID: "business_vertical_id", Label: "Business Vertical ID", Type: "text", DataType: "text", Source: "system", ColumnName: "business_vertical_id"},
+		{ID: "status", Label: "Status", Type: "text", DataType: "text", Source: "system", ColumnName: "status"},
+		{ID: "progress", Label: "Progress", Type: "number", DataType: "number", Source: "system", ColumnName: "progress"},
+		{ID: "total_budget", Label: "Total Budget", Type: "number", DataType: "number", Source: "system", ColumnName: "total_budget"},
+		{ID: "allocated_budget", Label: "Allocated Budget", Type: "number", DataType: "number", Source: "system", ColumnName: "allocated_budget"},
+		{ID: "spent_budget", Label: "Spent Budget", Type: "number", DataType: "number", Source: "system", ColumnName: "spent_budget"},
+		{ID: "start_date", Label: "Start Date", Type: "datetime", DataType: "datetime", Source: "system", ColumnName: "start_date"},
+		{ID: "end_date", Label: "End Date", Type: "datetime", DataType: "datetime", Source: "system", ColumnName: "end_date"},
+		{ID: "created_by", Label: "Created By", Type: "text", DataType: "text", Source: "system", ColumnName: "created_by"},
+		{ID: "created_at", Label: "Created At", Type: "datetime", DataType: "datetime", Source: "system", ColumnName: "created_at"},
+		{ID: "updated_at", Label: "Updated At", Type: "datetime", DataType: "datetime", Source: "system", ColumnName: "updated_at"},
 	}
 }
 
-func getPMSTaskFields() []map[string]interface{} {
-	return []map[string]interface{}{
-		{"id": "id", "label": "Task ID", "type": "text", "dataType": "text", "source": "system", "column_name": "id"},
-		{"id": "code", "label": "Task Code", "type": "text", "dataType": "text", "source": "system", "column_name": "code"},
-		{"id": "title", "label": "Task Title", "type": "text", "dataType": "text", "source": "system", "column_name": "title"},
-		{"id": "project_id", "label": "Project ID", "type": "text", "dataType": "text", "source": "system", "column_name": "project_id"},
-		{"id": "zone_id", "label": "Zone ID", "type": "text", "dataType": "text", "source": "system", "column_name": "zone_id"},
-		{"id": "start_node_id", "label": "Start Node ID", "type": "text", "dataType": "text", "source": "system", "column_name": "start_node_id"},
-		{"id": "stop_node_id", "label": "Stop Node ID", "type": "text", "dataType": "text", "source": "system", "column_name": "stop_node_id"},
-		{"id": "status", "label": "Task Status", "type": "text", "dataType": "text", "source": "system", "column_name": "status"},
-		{"id": "current_state", "label": "Workflow State", "type": "text", "dataType": "text", "source": "system", "column_name": "current_state"},
-		{"id": "priority", "label": "Priority", "type": "text", "dataType": "text", "source": "system", "column_name": "priority"},
-		{"id": "progress", "label": "Progress", "type": "number", "dataType": "number", "source": "system", "column_name": "progress"},
-		{"id": "allocated_budget", "label": "Allocated Budget", "type": "number", "dataType": "number", "source": "system", "column_name": "allocated_budget"},
-		{"id": "total_cost", "label": "Total Cost", "type": "number", "dataType": "number", "source": "system", "column_name": "total_cost"},
-		{"id": "planned_start_date", "label": "Planned Start", "type": "datetime", "dataType": "datetime", "source": "system", "column_name": "planned_start_date"},
-		{"id": "planned_end_date", "label": "Planned End", "type": "datetime", "dataType": "datetime", "source": "system", "column_name": "planned_end_date"},
-		{"id": "actual_start_date", "label": "Actual Start", "type": "datetime", "dataType": "datetime", "source": "system", "column_name": "actual_start_date"},
-		{"id": "actual_end_date", "label": "Actual End", "type": "datetime", "dataType": "datetime", "source": "system", "column_name": "actual_end_date"},
-		{"id": "created_by", "label": "Created By", "type": "text", "dataType": "text", "source": "system", "column_name": "created_by"},
-		{"id": "created_at", "label": "Created At", "type": "datetime", "dataType": "datetime", "source": "system", "column_name": "created_at"},
-		{"id": "updated_at", "label": "Updated At", "type": "datetime", "dataType": "datetime", "source": "system", "column_name": "updated_at"},
+func getPMSTaskFields() []FieldDef {
+	return []FieldDef{
+		{ID: "id", Label: "Task ID", Type: "text", DataType: "text", Source: "system", ColumnName: "id"},
+		{ID: "code", Label: "Task Code", Type: "text", DataType: "text", Source: "system", ColumnName: "code"},
+		{ID: "title", Label: "Task Title", Type: "text", DataType: "text", Source: "system", ColumnName: "title"},
+		{ID: "project_id", Label: "Project ID", Type: "text", DataType: "text", Source: "system", ColumnName: "project_id"},
+		{ID: "zone_id", Label: "Zone ID", Type: "text", DataType: "text", Source: "system", ColumnName: "zone_id"},
+		{ID: "start_node_id", Label: "Start Node ID", Type: "text", DataType: "text", Source: "system", ColumnName: "start_node_id"},
+		{ID: "stop_node_id", Label: "Stop Node ID", Type: "text", DataType: "text", Source: "system", ColumnName: "stop_node_id"},
+		{ID: "status", Label: "Task Status", Type: "text", DataType: "text", Source: "system", ColumnName: "status"},
+		{ID: "current_state", Label: "Workflow State", Type: "text", DataType: "text", Source: "system", ColumnName: "current_state"},
+		{ID: "priority", Label: "Priority", Type: "text", DataType: "text", Source: "system", ColumnName: "priority"},
+		{ID: "progress", Label: "Progress", Type: "number", DataType: "number", Source: "system", ColumnName: "progress"},
+		{ID: "allocated_budget", Label: "Allocated Budget", Type: "number", DataType: "number", Source: "system", ColumnName: "allocated_budget"},
+		{ID: "total_cost", Label: "Total Cost", Type: "number", DataType: "number", Source: "system", ColumnName: "total_cost"},
+		{ID: "planned_start_date", Label: "Planned Start", Type: "datetime", DataType: "datetime", Source: "system", ColumnName: "planned_start_date"},
+		{ID: "planned_end_date", Label: "Planned End", Type: "datetime", DataType: "datetime", Source: "system", ColumnName: "planned_end_date"},
+		{ID: "actual_start_date", Label: "Actual Start", Type: "datetime", DataType: "datetime", Source: "system", ColumnName: "actual_start_date"},
+		{ID: "actual_end_date", Label: "Actual End", Type: "datetime", DataType: "datetime", Source: "system", ColumnName: "actual_end_date"},
+		{ID: "created_by", Label: "Created By", Type: "text", DataType: "text", Source: "system", ColumnName: "created_by"},
+		{ID: "created_at", Label: "Created At", Type: "datetime", DataType: "datetime", Source: "system", ColumnName: "created_at"},
+		{ID: "updated_at", Label: "Updated At", Type: "datetime", DataType: "datetime", Source: "system", ColumnName: "updated_at"},
 	}
 }
 
@@ -451,7 +460,7 @@ func GetReportDefinitions(w http.ResponseWriter, r *http.Request) {
 	// fields, filters, groupings) are not transferred for every row during the filter pass.
 	aclCols := "id, code, name, description, report_type, chart_type, category, " +
 		"business_vertical_id, is_public, allowed_roles, created_by, is_active, " +
-		"is_favorited, favorited_by, deleted_at, created_at, updated_at"
+		"is_favorite, deleted_at, created_at, updated_at"
 
 	query := config.DB.Select(aclCols).Where("deleted_at IS NULL")
 

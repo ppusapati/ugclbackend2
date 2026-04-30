@@ -237,7 +237,7 @@ func GetUserAccessibleVerticals(userID uuid.UUID) []uuid.UUID {
 func loadUserWithAuthGraph(userID uuid.UUID) (models.User, error) {
 	cacheKey := userID.String()
 	if cachedUser, ok := userCache.get(cacheKey); ok {
-		return cachedUser, nil
+		return *cachedUser, nil
 	}
 
 	loaded, err, _ := userContextLoadGroup.Do(cacheKey, func() (interface{}, error) {
@@ -257,11 +257,15 @@ func loadUserWithAuthGraph(userID uuid.UUID) (models.User, error) {
 		}
 
 		userCache.set(cacheKey, freshUser)
-		return freshUser, nil
+		cachedUser, ok := userCache.get(cacheKey)
+		if !ok {
+			return nil, ErrUserNotFound
+		}
+		return cachedUser, nil
 	})
 	if err != nil {
 		return models.User{}, err
 	}
 
-	return loaded.(models.User), nil
+	return *loaded.(*models.User), nil
 }

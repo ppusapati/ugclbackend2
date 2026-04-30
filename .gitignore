@@ -3,3 +3,16 @@ go.sum
 nul
 *.exe
 ugcl.exe
+
+# Local environment files
+.env
+.env.*
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+
+# Local runtime/temp artifacts
+tmp/
+uploads/
+*.log

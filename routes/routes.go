@@ -3,6 +3,7 @@ package routes
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -14,6 +15,7 @@ import (
 	"p9e.in/ugcl/handlers/masters"
 	"p9e.in/ugcl/middleware"
 	"p9e.in/ugcl/models"
+	"p9e.in/ugcl/utils"
 )
 
 // RegisterRoutes sets up all application routes
@@ -25,7 +27,7 @@ func RegisterRoutes() http.Handler {
 	// Public Routes (no authentication)
 	// =====================================================
 	r.HandleFunc("/register", handlers.Register).Methods("POST")
-	r.HandleFunc("/api/v1/login", handlers.Login).Methods("POST")
+	r.Handle("/api/v1/login", middleware.LoginRateLimit(http.HandlerFunc(handlers.Login))).Methods("POST")
 	r.PathPrefix("/uploads/").Handler(
 		http.StripPrefix("/uploads/", http.FileServer(http.Dir("./uploads"))),
 	)
@@ -39,6 +41,7 @@ func RegisterRoutes() http.Handler {
 
 	// User profile endpoint
 	api.HandleFunc("/profile", handleProfile).Methods("GET")
+	api.HandleFunc("/profile/logins", handleProfileLogins).Methods("GET")
 	api.HandleFunc("/profile", handleUpdateProfile).Methods("PUT")
 	api.HandleFunc("/token", handlers.GetCurrentUser).Methods("GET")
 	api.HandleFunc("/context/business", handlers.GetActiveBusinessContext).Methods("GET")
@@ -137,17 +140,54 @@ func handleProfile(w http.ResponseWriter, r *http.Request) {
 		accessScope = "business_roles"
 	}
 
+	response := map[string]interface{}{
+		"userID":           claims.UserID,
+		"name":             user.Name,
+		"email":            user.Email,
+		"phone":            user.Phone,
+		"role_id":          user.RoleID,
+		"global_role":      globalRoleName,
+		"is_super_admin":   userCtx.IsSuperAdmin,
+		"is_active":        user.IsActive,
+		"created_at":       user.CreatedAt,
+		"updated_at":       user.UpdatedAt,
+		"permissions":      permissions,
+		"business_roles":   businessRoles,
+		"access_scope":     accessScope,
+		"permission_count": len(permissions),
+		"recent_logins":    []map[string]interface{}{},
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func handleProfileLogins(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetClaims(r)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
 	userID, parseErr := uuid.Parse(claims.UserID)
 	if parseErr != nil {
 		http.Error(w, "invalid user id", http.StatusBadRequest)
 		return
 	}
 
+	limit := 20
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil {
+			if parsed > 0 && parsed <= 100 {
+				limit = parsed
+			}
+		}
+	}
+
 	var loginEvents []models.UserLoginEvent
 	if err := config.DB.
 		Where("user_id = ?", userID).
 		Order("login_at DESC").
-		Limit(5).
+		Limit(limit).
 		Find(&loginEvents).Error; err != nil {
 		http.Error(w, "failed to load login history", http.StatusInternalServerError)
 		return
@@ -164,25 +204,12 @@ func handleProfile(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	response := map[string]interface{}{
-		"userID":           claims.UserID,
-		"name":             user.Name,
-		"email":            user.Email,
-		"phone":            user.Phone,
-		"role_id":          user.RoleID,
-		"global_role":      globalRoleName,
-		"is_super_admin":   userCtx.IsSuperAdmin,
-		"is_active":        user.IsActive,
-		"created_at":       user.CreatedAt,
-		"updated_at":       user.UpdatedAt,
-		"permissions":      permissions,
-		"business_roles":   businessRoles,
-		"access_scope":     accessScope,
-		"permission_count": len(permissions),
-		"recent_logins":    recentLogins,
-	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"user_id": claims.UserID,
+		"count":   len(recentLogins),
+		"logins":  recentLogins,
+	})
 }
 
 type updateProfileRequest struct {
@@ -238,7 +265,7 @@ func handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 	user.Phone = req.Phone
 
 	if err := config.DB.Save(&user).Error; err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "duplicate") {
+		if utils.IsUniqueViolation(err) {
 			http.Error(w, "email or phone already in use", http.StatusConflict)
 			return
 		}

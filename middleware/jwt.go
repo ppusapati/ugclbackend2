@@ -2,13 +2,17 @@
 package middleware
 
 import (
+	"container/list"
 	"context"
+	"fmt"
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -18,8 +22,15 @@ import (
 	"p9e.in/ugcl/models"
 )
 
-// Grab your secret from env (or config)
-var jwtKey = []byte(os.Getenv("JWT_SECRET"))
+var jwtKey []byte
+
+func init() {
+	jwtKey = []byte(strings.TrimSpace(config.JWTSecret))
+	if len(jwtKey) == 0 {
+		log.Fatal("JWT_SECRET is required")
+	}
+	startThirdPartyAccessBatcher()
+}
 
 // Claims are the custom payload in your JWT
 type Claims struct {
@@ -76,10 +87,12 @@ func JWTMiddleware(next http.Handler) http.Handler {
 			tokenStr = parts[1]
 		} else {
 			// EventSource cannot set custom Authorization headers.
-			// Allow token query fallback for SSE/auth-constrained clients.
-			tokenStr = strings.TrimSpace(r.URL.Query().Get("token"))
-			if tokenStr == "" {
-				tokenStr = strings.TrimSpace(r.URL.Query().Get("access_token"))
+			// Allow token query fallback only for SSE endpoints to reduce token-leak surface.
+			if isSSETokenQueryAllowed(r) {
+				tokenStr = strings.TrimSpace(r.URL.Query().Get("token"))
+				if tokenStr == "" {
+					tokenStr = strings.TrimSpace(r.URL.Query().Get("access_token"))
+				}
 			}
 			if tokenStr == "" {
 				http.Error(w, "missing Authorization header", http.StatusUnauthorized)
@@ -88,6 +101,9 @@ func JWTMiddleware(next http.Handler) http.Handler {
 		}
 
 		token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, func(t *jwt.Token) (interface{}, error) {
+			if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+			}
 			return jwtKey, nil
 		})
 		if err != nil || !token.Valid {
@@ -168,7 +184,7 @@ func GetUser(r *http.Request) models.User {
 	if c := GetClaims(r); c != nil {
 		// Fast path: auth middleware has already loaded and cached the full user.
 		if cached, ok := userCache.get(c.UserID); ok {
-			return cached
+			return *cached
 		}
 		// Slow path: cache miss (e.g. test/debug endpoints bypassing auth middleware).
 		// Load from DB but do NOT write to cache — the partial preload here lacks
@@ -201,7 +217,149 @@ type APIClientConfig struct {
 	Integration    *thirdPartyRequestContext
 }
 
+const (
+	thirdPartyLookupCacheTTL         = 5 * time.Minute
+	thirdPartyLookupNegativeCacheTTL = 10 * time.Second
+	thirdPartyLookupCacheSize        = 1024
+	thirdPartyAccessFlushInterval    = 10 * time.Second
+	thirdPartyAccessQueueSize        = 8192
+)
+
+type thirdPartyLookupCacheEntry struct {
+	apiKey    string
+	config    APIClientConfig
+	ok        bool
+	expiresAt time.Time
+}
+
+type thirdPartyLookupCache struct {
+	mu         sync.Mutex
+	ttl        time.Duration
+	maxEntries int
+	ll         *list.List
+	entries    map[string]*list.Element
+}
+
+func newThirdPartyLookupCache(maxEntries int, ttl time.Duration) *thirdPartyLookupCache {
+	return &thirdPartyLookupCache{
+		ttl:        ttl,
+		maxEntries: maxEntries,
+		ll:         list.New(),
+		entries:    make(map[string]*list.Element, maxEntries),
+	}
+}
+
+func (c *thirdPartyLookupCache) get(apiKey string) (APIClientConfig, bool, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	elem, ok := c.entries[apiKey]
+	if !ok {
+		return APIClientConfig{}, false, false
+	}
+
+	entry := elem.Value.(*thirdPartyLookupCacheEntry)
+	if time.Now().After(entry.expiresAt) {
+		c.ll.Remove(elem)
+		delete(c.entries, apiKey)
+		return APIClientConfig{}, false, false
+	}
+
+	c.ll.MoveToFront(elem)
+	return entry.config, entry.ok, true
+}
+
+func (c *thirdPartyLookupCache) set(apiKey string, cfg APIClientConfig, valid bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if elem, exists := c.entries[apiKey]; exists {
+		entry := elem.Value.(*thirdPartyLookupCacheEntry)
+		entry.config = cfg
+		entry.ok = valid
+		if valid {
+			entry.expiresAt = time.Now().Add(c.ttl)
+		} else {
+			entry.expiresAt = time.Now().Add(thirdPartyLookupNegativeCacheTTL)
+		}
+		c.ll.MoveToFront(elem)
+		return
+	}
+
+	expiresAt := time.Now().Add(thirdPartyLookupNegativeCacheTTL)
+	if valid {
+		expiresAt = time.Now().Add(c.ttl)
+	}
+
+	elem := c.ll.PushFront(&thirdPartyLookupCacheEntry{
+		apiKey:    apiKey,
+		config:    cfg,
+		ok:        valid,
+		expiresAt: expiresAt,
+	})
+	c.entries[apiKey] = elem
+
+	if c.maxEntries > 0 && c.ll.Len() > c.maxEntries {
+		oldest := c.ll.Back()
+		if oldest != nil {
+			c.ll.Remove(oldest)
+			oldestEntry := oldest.Value.(*thirdPartyLookupCacheEntry)
+			delete(c.entries, oldestEntry.apiKey)
+		}
+	}
+}
+
 var apiKeyConfigs = loadAPIKeyConfigs()
+var thirdPartyAPIKeyLookupCache = newThirdPartyLookupCache(thirdPartyLookupCacheSize, thirdPartyLookupCacheTTL)
+var trustedProxyNetworks = loadTrustedProxyNetworks()
+var thirdPartyIntegrationAccessQueue = make(chan string, thirdPartyAccessQueueSize)
+
+func startThirdPartyAccessBatcher() {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("integration access batcher panic", "panic", r)
+			}
+		}()
+
+		pending := make(map[string]int64)
+		ticker := time.NewTicker(thirdPartyAccessFlushInterval)
+		defer ticker.Stop()
+
+		flush := func() {
+			if len(pending) == 0 {
+				return
+			}
+			now := time.Now().UTC()
+			for id, count := range pending {
+				if count <= 0 {
+					delete(pending, id)
+					continue
+				}
+				if err := config.DB.Model(&models.ThirdPartyIntegration{}).
+					Where("id = ?", id).
+					Updates(map[string]interface{}{
+						"last_access_at": now,
+						"access_count":   gorm.Expr("access_count + ?", count),
+					}).Error; err != nil {
+					slog.Error("failed to batch record integration access", "integration_id", id, "error", err)
+				}
+				delete(pending, id)
+			}
+		}
+
+		for {
+			select {
+			case id := <-thirdPartyIntegrationAccessQueue:
+				if strings.TrimSpace(id) != "" {
+					pending[id]++
+				}
+			case <-ticker.C:
+				flush()
+			}
+		}
+	}()
+}
 
 // Define fixed IP whitelist for server-to-server apps (skip for mobile)
 var defaultWhitelistedIPs = map[string]bool{
@@ -323,6 +481,18 @@ func buildAllowedIPsFromEnv(envName string) map[string]bool {
 }
 
 func lookupThirdPartyIntegrationConfig(apiKey string) (APIClientConfig, bool) {
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return APIClientConfig{}, false
+	}
+
+	if cfg, valid, cached := thirdPartyAPIKeyLookupCache.get(apiKey); cached {
+		if valid {
+			return cfg, true
+		}
+		return APIClientConfig{}, false
+	}
+
 	var items []models.ThirdPartyIntegration
 	if err := config.DB.Where("status = ?", models.IntegrationStatusActive).Find(&items).Error; err != nil {
 		log.Printf("[SECURITY] failed to load third-party integrations: %v", err)
@@ -349,7 +519,7 @@ func lookupThirdPartyIntegrationConfig(apiKey string) (APIClientConfig, bool) {
 			allowedURLs[value] = true
 		}
 
-		return APIClientConfig{
+		cfg := APIClientConfig{
 			AppName:      item.Name,
 			AllowedPaths: []string{"/api/v1/partner/*", "/api/v1/integrations/*"},
 			AllowedMethods: map[string]bool{
@@ -363,8 +533,13 @@ func lookupThirdPartyIntegrationConfig(apiKey string) (APIClientConfig, bool) {
 				Scopes:        scopes,
 				AllowedURLs:   allowedURLs,
 			},
-		}, true
+		}
+
+		thirdPartyAPIKeyLookupCache.set(apiKey, cfg, true)
+		return cfg, true
 	}
+
+	thirdPartyAPIKeyLookupCache.set(apiKey, APIClientConfig{}, false)
 
 	return APIClientConfig{}, false
 }
@@ -415,23 +590,36 @@ func RequireIntegrationScope(scope string) func(http.Handler) http.Handler {
 	}
 }
 
-func recordThirdPartyIntegrationAccess(id string) {
+func enqueueThirdPartyIntegrationAccess(id string) {
 	if strings.TrimSpace(id) == "" {
 		return
 	}
-	if err := config.DB.Model(&models.ThirdPartyIntegration{}).
-		Where("id = ?", id).
-		Updates(map[string]interface{}{
-			"last_access_at": time.Now().UTC(),
-			"access_count":   gorm.Expr("access_count + 1"),
-		}).Error; err != nil {
-		log.Printf("[SECURITY] failed to record integration access: %v", err)
+	select {
+	case thirdPartyIntegrationAccessQueue <- id:
+	default:
+		slog.Warn("integration access queue full; dropping event", "integration_id", id)
 	}
 }
 
 // SecurityMiddleware enforces API key, IP filtering, and logging
 func SecurityMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestID := GetRequestID(r)
+
+		// Browser EventSource clients cannot send custom x-api-key headers.
+		// For approved SSE endpoints, rely on JWT auth (token/access_token query) in JWTMiddleware.
+		if isSSETokenQueryAllowed(r) {
+			token := strings.TrimSpace(r.URL.Query().Get("token"))
+			if token == "" {
+				token = strings.TrimSpace(r.URL.Query().Get("access_token"))
+			}
+			if token != "" {
+				slog.Info("security api-key bypass for approved SSE endpoint", "request_id", requestID, "path", r.URL.Path)
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
+
 		apiKey := r.Header.Get("x-api-key")
 		clientConfig, ok := apiKeyConfigs[apiKey]
 		if !ok && strings.TrimSpace(apiKey) != "" {
@@ -439,7 +627,7 @@ func SecurityMiddleware(next http.Handler) http.Handler {
 		}
 		if !ok {
 			http.Error(w, "Invalid or missing API key", http.StatusUnauthorized)
-			log.Printf("[SECURITY] 🔒 Blocked - Invalid API key. IP=%s Path=%s", getClientIP(r), r.URL.Path)
+			slog.Warn("blocked invalid API key", "request_id", requestID, "ip", getClientIP(r), "path", r.URL.Path)
 			return
 		}
 
@@ -452,7 +640,7 @@ func SecurityMiddleware(next http.Handler) http.Handler {
 
 			if !ipAllowed(clientIP, allowedIPs) {
 				http.Error(w, "Access from this IP is not allowed", http.StatusForbidden)
-				log.Printf("[SECURITY] 🚫 Blocked - IP not whitelisted. App=%s IP=%s Path=%s", clientConfig.AppName, clientIP, r.URL.Path)
+				slog.Warn("blocked non-whitelisted IP", "request_id", requestID, "app", clientConfig.AppName, "ip", clientIP, "path", r.URL.Path)
 				return
 			}
 		}
@@ -473,14 +661,14 @@ func SecurityMiddleware(next http.Handler) http.Handler {
 		}
 		if !pathAllowed {
 			http.Error(w, "Access to this endpoint is not allowed for this app", http.StatusForbidden)
-			log.Printf("[SECURITY] ⛔️ Denied - Path not allowed. App=%s IP=%s Path=%s", clientConfig.AppName, clientIP, r.URL.Path)
+			slog.Warn("denied disallowed path", "request_id", requestID, "app", clientConfig.AppName, "ip", clientIP, "path", r.URL.Path)
 			return
 		}
 
 		// ✅ Method-based access check
 		if !clientConfig.AllowedMethods[r.Method] {
 			http.Error(w, "This HTTP method is not allowed for this app", http.StatusMethodNotAllowed)
-			log.Printf("[SECURITY] ⛔️ Denied - Method not allowed. App=%s Method=%s Path=%s", clientConfig.AppName, r.Method, r.URL.Path)
+			slog.Warn("denied disallowed method", "request_id", requestID, "app", clientConfig.AppName, "method", r.Method, "path", r.URL.Path)
 			return
 		}
 
@@ -493,32 +681,111 @@ func SecurityMiddleware(next http.Handler) http.Handler {
 			userName = claims.Name
 		}
 
-		log.Printf("[SECURITY] ✅ Allowed - App=%s UserID=%s Name=%s Role=%s IP=%s Path=%s Method=%s Time=%s",
-			clientConfig.AppName, userID, userName, userRole,
-			clientIP, r.URL.Path, r.Method, time.Now().Format(time.RFC3339))
+		slog.Info("security request allowed",
+			"request_id", requestID,
+			"app", clientConfig.AppName,
+			"user_id", userID,
+			"user_name", userName,
+			"role", userRole,
+			"ip", clientIP,
+			"path", r.URL.Path,
+			"method", r.Method,
+			"timestamp", time.Now().Format(time.RFC3339),
+		)
 
 		if clientConfig.Integration != nil {
 			ctx := context.WithValue(r.Context(), thirdPartyIntegrationKey, clientConfig.Integration)
 			r = r.WithContext(ctx)
-			go recordThirdPartyIntegrationAccess(clientConfig.Integration.IntegrationID)
+			enqueueThirdPartyIntegrationAccess(clientConfig.Integration.IntegrationID)
 		}
 
 		next.ServeHTTP(w, r)
 	})
 }
 
+func isSSETokenQueryAllowed(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	if r.Method != http.MethodGet {
+		return false
+	}
+	path := strings.TrimSpace(r.URL.Path)
+	return path == "/api/v1/chat/events" || path == "/api/v1/notifications/stream"
+}
+
+func loadTrustedProxyNetworks() []*net.IPNet {
+	raw := strings.TrimSpace(os.Getenv("TRUSTED_PROXY_CIDRS"))
+	if raw == "" {
+		return nil
+	}
+
+	networks := make([]*net.IPNet, 0)
+	for _, part := range strings.Split(raw, ",") {
+		candidate := strings.TrimSpace(part)
+		if candidate == "" {
+			continue
+		}
+		_, network, err := net.ParseCIDR(candidate)
+		if err != nil {
+			slog.Warn("invalid TRUSTED_PROXY_CIDRS entry ignored", "value", candidate)
+			continue
+		}
+		networks = append(networks, network)
+	}
+
+	return networks
+}
+
+func ipInTrustedProxyNetworks(ip net.IP) bool {
+	if ip == nil || len(trustedProxyNetworks) == 0 {
+		return false
+	}
+	for _, network := range trustedProxyNetworks {
+		if network.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
 // Extracts client IP from headers or remote addr
 func getClientIP(r *http.Request) string {
-	// Priority: X-Forwarded-For → X-Real-IP → RemoteAddr
-	if ip := r.Header.Get("X-Forwarded-For"); ip != "" {
-		return strings.Split(ip, ",")[0]
-	}
-	if ip := r.Header.Get("X-Real-IP"); ip != "" {
-		return ip
-	}
-	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	remoteHost, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
 	if err != nil {
-		return r.RemoteAddr
+		remoteHost = strings.TrimSpace(r.RemoteAddr)
 	}
-	return ip
+	remoteIP := net.ParseIP(remoteHost)
+
+	// Only trust forwarding headers when the direct peer is in TRUSTED_PROXY_CIDRS.
+	if ipInTrustedProxyNetworks(remoteIP) {
+		if xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); xff != "" {
+			parts := strings.Split(xff, ",")
+			for i := len(parts) - 1; i >= 0; i-- {
+				candidate := net.ParseIP(strings.TrimSpace(parts[i]))
+				if candidate == nil {
+					continue
+				}
+				if ipInTrustedProxyNetworks(candidate) {
+					continue
+				}
+				return candidate.String()
+			}
+			for i := 0; i < len(parts); i++ {
+				candidate := net.ParseIP(strings.TrimSpace(parts[i]))
+				if candidate != nil {
+					return candidate.String()
+				}
+			}
+		}
+
+		if xRealIP := net.ParseIP(strings.TrimSpace(r.Header.Get("X-Real-IP"))); xRealIP != nil {
+			return xRealIP.String()
+		}
+	}
+
+	if remoteIP != nil {
+		return remoteIP.String()
+	}
+	return remoteHost
 }

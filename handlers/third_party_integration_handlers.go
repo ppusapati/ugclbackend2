@@ -96,6 +96,8 @@ var allowedIntegrationScopes = map[string]struct{}{
 	models.IntegrationScopeDocumentAIUse:         {},
 }
 
+const integrationAPIKeyBcryptCost = 12
+
 // ─── helpers ────────────────────────────────────────────────────────────────
 
 func generateAPIKey() (string, error) {
@@ -107,7 +109,7 @@ func generateAPIKey() (string, error) {
 }
 
 func hashAPIKey(key string) (string, error) {
-	h, err := bcrypt.GenerateFromPassword([]byte(key), bcrypt.DefaultCost)
+	h, err := bcrypt.GenerateFromPassword([]byte(key), integrationAPIKeyBcryptCost)
 	if err != nil {
 		return "", err
 	}

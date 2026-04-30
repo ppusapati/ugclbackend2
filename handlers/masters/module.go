@@ -82,7 +82,7 @@ func GetModules(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get user's accessible verticals
-	userVerticals := getUserVerticalCodes(&user)
+	userVerticals := getUserVerticalCodes(user)
 
 	// If specific vertical requested, use that; otherwise use user's verticals
 	var targetVerticals []string

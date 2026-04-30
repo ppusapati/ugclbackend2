@@ -3,9 +3,9 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,9 +18,11 @@ import (
 	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/middleware"
 	"p9e.in/ugcl/models"
+	"p9e.in/ugcl/utils"
 )
 
 const adminUsersCacheTTL = 10 * time.Minute
+const userRegistrationBcryptCost = 12
 
 type adminUsersCacheEntry struct {
 	payload   []byte
@@ -86,7 +88,7 @@ func Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// hash pw
-	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), userRegistrationBcryptCost)
 	if err != nil {
 		http.Error(w, "error hashing password", http.StatusInternalServerError)
 		return
@@ -99,7 +101,7 @@ func Register(w http.ResponseWriter, r *http.Request) {
 		RoleID:       req.RoleID,
 	}
 	if err := config.DB.Create(&u).Error; err != nil {
-		if strings.Contains(err.Error(), "duplicate key") {
+		if utils.IsUniqueViolation(err) {
 			http.Error(w, "username already taken", http.StatusConflict)
 		} else {
 			http.Error(w, "db error: "+err.Error(), http.StatusInternalServerError)
@@ -226,8 +228,11 @@ func GetCurrentUser(w http.ResponseWriter, r *http.Request) {
 	tokenString := strings.TrimPrefix(auth, "Bearer ")
 
 	// 2) Parse & validate
-	secret := []byte(os.Getenv("JWT_SECRET"))
+	secret := []byte(config.JWTSecret)
 	token, err := jwt.ParseWithClaims(tokenString, &models.JWTClaims{}, func(t *jwt.Token) (interface{}, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+		}
 		return secret, nil
 	})
 	if err != nil || !token.Valid {

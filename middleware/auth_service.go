@@ -3,6 +3,7 @@ package middleware
 import (
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -91,10 +92,11 @@ func NewAuthService() *AuthService {
 
 // UserContext contains all user authorization information
 type UserContext struct {
-	User              models.User
+	User              *models.User
 	Claims            *Claims
 	IsSuperAdmin      bool
 	GlobalPermissions []string
+	globalPermSet     map[string]struct{}
 	BusinessContext   *BusinessContext
 	SiteContext       *SiteAccessContext
 }
@@ -104,6 +106,7 @@ type BusinessContext struct {
 	BusinessID      uuid.UUID
 	BusinessRoles   []models.UserBusinessRole
 	Permissions     []string
+	permissionSet   map[string]struct{}
 	IsBusinessAdmin bool
 }
 
@@ -121,13 +124,18 @@ func (s *AuthService) LoadUserContext(r *http.Request) (*UserContext, error) {
 		return nil, ErrInvalidUserID
 	}
 
+	type authLoadResult struct {
+		user              *models.User
+		globalPermissions []string
+	}
+
 	// Try cache first — avoids 3 DB round-trips on every authenticated request.
-	user, cached := userCache.get(claims.UserID)
+	user, globalPermissions, cached := userCache.getAuthData(claims.UserID)
 	if !cached {
 		// Deduplicate concurrent misses for the same user to avoid DB stampedes.
 		loaded, loadErr, _ := userContextLoadGroup.Do(claims.UserID, func() (interface{}, error) {
-			if cachedUser, ok := userCache.get(claims.UserID); ok {
-				return cachedUser, nil
+			if cachedUser, cachedPermissions, ok := userCache.getAuthData(claims.UserID); ok {
+				return authLoadResult{user: cachedUser, globalPermissions: cachedPermissions}, nil
 			}
 
 			var freshUser models.User
@@ -142,26 +150,36 @@ func (s *AuthService) LoadUserContext(r *http.Request) (*UserContext, error) {
 			}
 
 			userCache.set(claims.UserID, freshUser)
-			return freshUser, nil
+			cachedUser, cachedPermissions, ok := userCache.getAuthData(claims.UserID)
+			if !ok {
+				return nil, ErrUserNotFound
+			}
+			return authLoadResult{user: cachedUser, globalPermissions: cachedPermissions}, nil
 		})
 		if loadErr != nil {
 			return nil, ErrUserNotFound
 		}
-		user = loaded.(models.User)
+		resolved := loaded.(authLoadResult)
+		user = resolved.user
+		globalPermissions = resolved.globalPermissions
 	}
 
 	ctx := &UserContext{
 		User:         user,
 		Claims:       claims,
-		IsSuperAdmin: s.IsSuperAdmin(user),
+		IsSuperAdmin: s.IsSuperAdmin(*user),
 	}
 
 	// Load global permissions
-	ctx.GlobalPermissions = s.GetGlobalPermissions(user)
+	ctx.GlobalPermissions = globalPermissions
+	ctx.globalPermSet = make(map[string]struct{}, len(ctx.GlobalPermissions))
+	for _, permission := range ctx.GlobalPermissions {
+		ctx.globalPermSet[permission] = struct{}{}
+	}
 
 	// Load business context from explicit request selector or stored active business context.
 	if businessID, resolveErr := ResolveEffectiveBusinessID(r, ctx); resolveErr == nil {
-		ctx.BusinessContext = s.LoadBusinessContext(user, businessID)
+		ctx.BusinessContext = s.LoadBusinessContext(*user, businessID)
 	} else if resolveErr != ErrBusinessNotSpecified {
 		return nil, resolveErr
 	}
@@ -191,14 +209,16 @@ func (s *AuthService) GetGlobalPermissions(user models.User) []string {
 // LoadBusinessContext loads business-specific context for user
 func (s *AuthService) LoadBusinessContext(user models.User, businessID uuid.UUID) *BusinessContext {
 	ctx := &BusinessContext{
-		BusinessID:  businessID,
-		Permissions: make([]string, 0),
+		BusinessID:    businessID,
+		Permissions:   make([]string, 0),
+		permissionSet: make(map[string]struct{}),
 	}
 
 	// Super admins have all permissions (wildcard)
 	// Instead of hardcoding, we give them the wildcard permission which grants everything
 	if s.IsSuperAdmin(user) {
 		ctx.Permissions = []string{"*:*:*"} // Wildcard grants all permissions dynamically
+		ctx.permissionSet["*:*:*"] = struct{}{}
 		ctx.IsBusinessAdmin = true
 		return ctx
 	}
@@ -209,6 +229,7 @@ func (s *AuthService) LoadBusinessContext(user models.User, businessID uuid.UUID
 			ctx.BusinessRoles = append(ctx.BusinessRoles, ubr)
 			for _, perm := range ubr.BusinessRole.Permissions {
 				ctx.Permissions = append(ctx.Permissions, perm.Name)
+				ctx.permissionSet[perm.Name] = struct{}{}
 				if perm.Name == "business_admin" {
 					ctx.IsBusinessAdmin = true
 				}
@@ -225,7 +246,14 @@ func (s *AuthService) HasPermission(ctx *UserContext, permission string) bool {
 		return true
 	}
 
+	if _, ok := ctx.globalPermSet[permission]; ok {
+		return true
+	}
+
 	for _, perm := range ctx.GlobalPermissions {
+		if perm == permission || !strings.Contains(perm, "*") {
+			continue
+		}
 		if utils.MatchesPermission(perm, permission) {
 			return true
 		}
@@ -241,7 +269,16 @@ func (s *AuthService) HasAnyPermission(ctx *UserContext, permissions []string) b
 	}
 
 	for _, permission := range permissions {
+		if _, ok := ctx.globalPermSet[permission]; ok {
+			return true
+		}
+	}
+
+	for _, permission := range permissions {
 		for _, userPerm := range ctx.GlobalPermissions {
+			if userPerm == permission || !strings.Contains(userPerm, "*") {
+				continue
+			}
 			if utils.MatchesPermission(userPerm, permission) {
 				return true
 			}
@@ -261,7 +298,14 @@ func (s *AuthService) HasBusinessPermission(ctx *UserContext, permission string)
 		return false
 	}
 
+	if _, ok := ctx.BusinessContext.permissionSet[permission]; ok {
+		return true
+	}
+
 	for _, perm := range ctx.BusinessContext.Permissions {
+		if perm == permission || !strings.Contains(perm, "*") {
+			continue
+		}
 		if utils.MatchesPermission(perm, permission) {
 			return true
 		}

@@ -135,7 +135,7 @@ func inferBusinessSource(userCtx *middleware.UserContext, businessID uuid.UUID) 
 		return "user_default"
 	}
 
-	accessible := middleware.NewAuthService().GetAccessibleBusinessVerticals(userCtx.User)
+	accessible := middleware.NewAuthService().GetAccessibleBusinessVerticals(*userCtx.User)
 	if len(accessible) == 1 && accessible[0] == businessID {
 		return "single_accessible_business"
 	}

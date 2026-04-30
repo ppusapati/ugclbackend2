@@ -34,25 +34,28 @@ var reportTableResolutionLoadGroup singleflight.Group
 var reportFormSchemaLoadGroup singleflight.Group
 
 var reportTableResolutionCache = struct {
-	mu      sync.Mutex
+	mu      sync.RWMutex
 	entries map[string]cachedResolvedTable
 }{entries: make(map[string]cachedResolvedTable)}
 
 var reportFormSchemaCache = struct {
-	mu      sync.Mutex
+	mu      sync.RWMutex
 	entries map[string]cachedFormSchema
 }{entries: make(map[string]cachedFormSchema)}
 
 func getCachedResolvedTable(key string) (string, bool) {
-	reportTableResolutionCache.mu.Lock()
-	defer reportTableResolutionCache.mu.Unlock()
-
+	reportTableResolutionCache.mu.RLock()
 	entry, ok := reportTableResolutionCache.entries[key]
+	reportTableResolutionCache.mu.RUnlock()
 	if !ok {
 		return "", false
 	}
 	if time.Now().After(entry.expiresAt) {
-		delete(reportTableResolutionCache.entries, key)
+		reportTableResolutionCache.mu.Lock()
+		if current, still := reportTableResolutionCache.entries[key]; still && time.Now().After(current.expiresAt) {
+			delete(reportTableResolutionCache.entries, key)
+		}
+		reportTableResolutionCache.mu.Unlock()
 		return "", false
 	}
 	return entry.qualified, true
@@ -65,15 +68,18 @@ func setCachedResolvedTable(key, qualified string) {
 }
 
 func getCachedFormSchema(key string) ([]map[string]interface{}, bool) {
-	reportFormSchemaCache.mu.Lock()
-	defer reportFormSchemaCache.mu.Unlock()
-
+	reportFormSchemaCache.mu.RLock()
 	entry, ok := reportFormSchemaCache.entries[key]
+	reportFormSchemaCache.mu.RUnlock()
 	if !ok {
 		return nil, false
 	}
 	if time.Now().After(entry.expiresAt) {
-		delete(reportFormSchemaCache.entries, key)
+		reportFormSchemaCache.mu.Lock()
+		if current, still := reportFormSchemaCache.entries[key]; still && time.Now().After(current.expiresAt) {
+			delete(reportFormSchemaCache.entries, key)
+		}
+		reportFormSchemaCache.mu.Unlock()
 		return nil, false
 	}
 

@@ -2,7 +2,7 @@ package middleware
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -76,14 +76,14 @@ func RequestObservabilityMiddleware(next http.Handler) http.Handler {
 			}
 		}
 
-		log.Printf("[HTTP] id=%s method=%s route=%s status=%d duration_ms=%d bytes=%d ip=%s",
-			requestID,
-			r.Method,
-			routePath,
-			recorder.statusCode,
-			duration.Milliseconds(),
-			recorder.bytes,
-			clientIP(r),
+		slog.Info("http request",
+			"request_id", requestID,
+			"method", r.Method,
+			"route", routePath,
+			"status", recorder.statusCode,
+			"duration_ms", duration.Milliseconds(),
+			"bytes", recorder.bytes,
+			"ip", clientIP(r),
 		)
 	})
 }
