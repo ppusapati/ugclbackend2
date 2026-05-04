@@ -37,6 +37,9 @@ func RegisterAdminIntegrationRoutes(admin *mux.Router) {
 	admin.Handle("/integrations/{id}/regenerate-key", middleware.RequirePermission("manage_integrations")(
 		http.HandlerFunc(handlers.RegenerateIntegrationKey))).Methods(http.MethodPost)
 
+	admin.Handle("/integrations/{id}/proxy", middleware.RequirePermission("view_forms")(
+		http.HandlerFunc(handlers.ProxyIntegrationDropdown))).Methods(http.MethodGet)
+
 	admin.Handle("/integrations/{id}", middleware.RequirePermission("manage_integrations")(
 		http.HandlerFunc(handlers.GetIntegration))).Methods(http.MethodGet)
 	admin.Handle("/integrations/{id}", middleware.RequirePermission("manage_integrations")(

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"p9e.in/ugcl/config"
+	"p9e.in/ugcl/handlers"
 	"p9e.in/ugcl/handlers/reports"
 	"p9e.in/ugcl/middleware"
 	"p9e.in/ugcl/routes"
@@ -74,6 +75,10 @@ func main() {
 	}
 
 	config.Connect()
+
+	// Auto-generate the integration secret encryption key on first run if not set.
+	handlers.EnsureIntegrationEncryptionKey()
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"

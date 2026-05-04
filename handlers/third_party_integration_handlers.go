@@ -4,6 +4,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -577,4 +579,121 @@ func RegenerateIntegrationKey(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"api_key": plainKey})
+}
+
+// ProxyIntegrationDropdown  GET /api/v1/admin/integrations/{id}/proxy?path=/api/v1/masters/projects
+//
+// Fetches a remote path on behalf of the caller using the stored secret for the
+// given integration.  Only integrations that have the
+// "integration.dropdown.proxy" scope and are "active" may be proxied.
+// The caller must be a valid JWT user — the stored secret is never exposed to
+// the browser.
+func ProxyIntegrationDropdown(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetClaims(r)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	id, err := parseUUIDParam(r, "id")
+	if err != nil {
+		http.Error(w, "invalid integration id", http.StatusBadRequest)
+		return
+	}
+
+	var item models.ThirdPartyIntegration
+	if err := config.DB.First(&item, "id = ? AND status = ?", id, models.IntegrationStatusActive).Error; err != nil {
+		http.Error(w, "integration not found or inactive", http.StatusNotFound)
+		return
+	}
+
+	// Scope check — integration must allow dropdown proxying
+	hasScope := false
+	for _, s := range item.DataScopes {
+		if s == models.IntegrationScopeDropdownProxyUse {
+			hasScope = true
+			break
+		}
+	}
+	if !hasScope {
+		http.Error(w, "integration does not have dropdown proxy scope", http.StatusForbidden)
+		return
+	}
+
+	// Validate & resolve the remote path query param
+	remotePath := strings.TrimSpace(r.URL.Query().Get("path"))
+	if remotePath == "" {
+		http.Error(w, "path query parameter is required", http.StatusBadRequest)
+		return
+	}
+	if !strings.HasPrefix(remotePath, "/") {
+		remotePath = "/" + remotePath
+	}
+
+	// Build the full target URL using the integration's endpoint_url as base
+	baseURL := strings.TrimRight(strings.TrimSpace(item.EndpointURL), "/")
+	if baseURL == "" {
+		http.Error(w, "integration has no endpoint_url configured", http.StatusBadRequest)
+		return
+	}
+	targetURL := baseURL + remotePath
+	if _, err := url.ParseRequestURI(targetURL); err != nil {
+		http.Error(w, "resolved target URL is invalid", http.StatusBadRequest)
+		return
+	}
+
+	// Decrypt the stored secret
+	if strings.TrimSpace(item.SecretCipher) == "" {
+		http.Error(w, "integration has no secret configured", http.StatusBadRequest)
+		return
+	}
+	plainSecret, err := decryptIntegrationSecret(item.SecretCipher)
+	if err != nil {
+		http.Error(w, "failed to decrypt integration secret", http.StatusInternalServerError)
+		return
+	}
+
+	// Build outbound request
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, targetURL, nil)
+	if err != nil {
+		http.Error(w, "failed to build proxy request", http.StatusInternalServerError)
+		return
+	}
+
+	authHeader := item.AuthHeader
+	if authHeader == "" {
+		authHeader = "Authorization"
+	}
+	authScheme := strings.TrimSpace(item.AuthScheme)
+	if authScheme == "" || strings.EqualFold(authScheme, "apikey") || strings.EqualFold(authScheme, "none") {
+		// Raw key — just set the header value directly (e.g. X-Api-Key: <key>)
+		req.Header.Set(authHeader, plainSecret)
+	} else {
+		// Scheme-prefixed (e.g. Bearer <token>)
+		req.Header.Set(authHeader, fmt.Sprintf("%s %s", authScheme, plainSecret))
+	}
+	req.Header.Set("Accept", "application/json")
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		http.Error(w, "upstream request failed: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		http.Error(w, "failed to read upstream response", http.StatusBadGateway)
+		return
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		http.Error(w, fmt.Sprintf("upstream returned %d", resp.StatusCode), http.StatusBadGateway)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(body) //nolint:errcheck
 }
