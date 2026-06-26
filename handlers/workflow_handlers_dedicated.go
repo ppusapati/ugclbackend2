@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
@@ -123,18 +124,67 @@ func GetFormSubmissionsDedicated(w http.ResponseWriter, r *http.Request) {
 		filters["created_by"] = claims.UserID
 	}
 
-	records, err := getWorkflowEngineDedicated().GetSubmissionsByFormDedicated(formCode, businessID, filters)
+	cursorRaw := strings.TrimSpace(r.URL.Query().Get("cursor"))
+	limitRaw := strings.TrimSpace(r.URL.Query().Get("limit"))
+	rawMode := r.URL.Query().Get("pagination")
+	rawLegacy := r.URL.Query().Get("legacy_pagination")
+	usePagination := shouldUseSubmissionCursorMode(rawMode, rawLegacy, cursorRaw, limitRaw)
+
+	var cursor *submissionsCursor
+	if usePagination {
+		var parseErr error
+		cursor, parseErr = decodeSubmissionsCursor(cursorRaw)
+		if parseErr != nil {
+			http.Error(w, "invalid cursor", http.StatusBadRequest)
+			return
+		}
+	}
+
+	pageSize := defaultSubmissionPageSize
+	if usePagination {
+		parsedLimit, parseErr := parseSubmissionPageSize(limitRaw)
+		if parseErr != nil {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
+		}
+		pageSize = parsedLimit
+	}
+
+	var records []*FormSubmissionRecord
+	var err error
+	if usePagination {
+		records, err = getWorkflowEngineDedicated().GetSubmissionsByFormDedicatedPage(formCode, businessID, filters, pageSize+1, cursor)
+	} else {
+		records, err = getWorkflowEngineDedicated().GetSubmissionsByFormDedicated(formCode, businessID, filters)
+	}
 	if err != nil {
 		log.Printf("❌ Error fetching submissions: %v", err)
 		http.Error(w, "failed to fetch submissions", http.StatusInternalServerError)
 		return
 	}
 
+	hasMore := false
+	nextCursor := ""
+	if usePagination && len(records) > pageSize {
+		hasMore = true
+		records = records[:pageSize]
+	}
+	if usePagination && hasMore && len(records) > 0 {
+		last := records[len(records)-1]
+		nextCursor = encodeSubmissionsCursor(last.CreatedAt, last.ID)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	response := map[string]interface{}{
 		"submissions": records,
 		"count":       len(records),
-	})
+	}
+	if usePagination {
+		response["limit"] = pageSize
+		response["has_more"] = hasMore
+		response["next_cursor"] = nextCursor
+	}
+	json.NewEncoder(w).Encode(response)
 }
 
 // GetFormSubmissionDedicated retrieves a single submission by ID from dedicated table

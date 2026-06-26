@@ -842,6 +842,57 @@ func Migrations(db *gorm.DB) error {
 				return nil
 			},
 		},
+		{
+			ID: "20260626_perf_indexes_latency_throughput",
+			Migrate: func(tx *gorm.DB) error {
+				queries := []string{
+					// Business users listing join path:
+					// user_business_roles -> business_roles filtered by business_vertical_id + is_active,
+					// then grouped/plucked by user_id.
+					"CREATE INDEX IF NOT EXISTS idx_business_roles_vertical_active_id ON business_roles(business_vertical_id, is_active, id)",
+					"CREATE INDEX IF NOT EXISTS idx_ubr_role_active_user ON user_business_roles(business_role_id, is_active, user_id)",
+
+					// Attendance APIs with business scope + optional site/user filters + recency order.
+					"CREATE INDEX IF NOT EXISTS idx_attendance_sessions_bv_site_status_lastseen ON attendance_sessions(business_vertical_id, site_id, status, last_seen_at DESC) WHERE deleted_at IS NULL",
+					"CREATE INDEX IF NOT EXISTS idx_attendance_sessions_bv_user_status_lastseen ON attendance_sessions(business_vertical_id, user_id, status, last_seen_at DESC) WHERE deleted_at IS NULL",
+
+					// Recent login history endpoint: WHERE user_id = ? ORDER BY login_at DESC LIMIT n.
+					"CREATE INDEX IF NOT EXISTS idx_user_login_events_user_login_at_desc ON user_login_events(user_id, login_at DESC)",
+				}
+
+				for _, q := range queries {
+					if err := tx.Exec(q).Error; err != nil {
+						return err
+					}
+				}
+
+				return nil
+			},
+		},
+		{
+			ID: "20260626_perf_indexes_jsonb_form_rendering",
+			Migrate: func(tx *gorm.DB) error {
+				queries := []string{
+					// Accelerate app form vertical/role JSONB membership checks.
+					"CREATE INDEX IF NOT EXISTS idx_app_forms_accessible_verticals_gin ON app_forms USING GIN (accessible_verticals)",
+					"CREATE INDEX IF NOT EXISTS idx_app_forms_allowed_roles_gin ON app_forms USING GIN (allowed_roles)",
+
+					// Accelerate active form list ordering path.
+					"CREATE INDEX IF NOT EXISTS idx_app_forms_active_display_title ON app_forms(is_active, display_order ASC, title ASC)",
+
+					// Keep module-level JSONB access checks fast if used by menu rendering.
+					"CREATE INDEX IF NOT EXISTS idx_modules_accessible_verticals_gin ON modules USING GIN (accessible_verticals)",
+				}
+
+				for _, q := range queries {
+					if err := tx.Exec(q).Error; err != nil {
+						return err
+					}
+				}
+
+				return nil
+			},
+		},
 	})
 
 	return m.Migrate()

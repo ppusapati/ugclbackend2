@@ -1,41 +1,67 @@
 package handlers
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"net/url"
-	"sort"
 	"strings"
+	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
+	"golang.org/x/sync/singleflight"
 	"p9e.in/ugcl/config"
-	"p9e.in/ugcl/middleware"
 	"p9e.in/ugcl/handlers/reports"
+	"p9e.in/ugcl/middleware"
 	"p9e.in/ugcl/models"
 )
 
 const (
-	formsListCacheTTL  = 10 * time.Minute
-	formByCodeCacheTTL = 30 * time.Second
+	formsListCacheTTL      = 10 * time.Minute
+	formByCodeCacheTTL     = 30 * time.Second
+	formsListStaleTTL      = 2 * time.Minute
+	formByCodeStaleTTL     = 2 * time.Minute
+	cacheHotThreshold      = 3
+	cacheHotRetention      = 10 * time.Minute
+	cacheStateHit          = "HIT"
+	cacheStateMiss         = "MISS"
+	cacheStateStale        = "STALE"
+	cacheStateBypass       = "BYPASS"
+	cacheLookupStateFresh  = "fresh"
+	cacheLookupStateStale  = "stale"
+	cacheLookupStateAbsent = "absent"
 )
 
 type cachedJSONResponse struct {
-	payload   []byte
-	expiresAt time.Time
+	payload    []byte
+	expiresAt  time.Time
+	staleUntil time.Time
+	hitCount   int
+	hotUntil   time.Time
 }
 
 var (
 	formsListCache   = make(map[string]cachedJSONResponse)
 	formsListCacheMu sync.RWMutex
+	formsListVersion atomic.Uint64
+	formsListLoad    singleflight.Group
 
 	formByCodeCache   = make(map[string]cachedJSONResponse)
 	formByCodeCacheMu sync.RWMutex
+	formByCodeVersion atomic.Uint64
+	formByCodeLoad    singleflight.Group
 )
+
+func init() {
+	formsListVersion.Store(1)
+	formByCodeVersion.Store(1)
+}
 
 func isPublicFormPermission(permission string) bool {
 	switch strings.TrimSpace(permission) {
@@ -46,25 +72,58 @@ func isPublicFormPermission(permission string) bool {
 	}
 }
 
-func getCachedJSON(cache map[string]cachedJSONResponse, mu *sync.RWMutex, key string) ([]byte, bool) {
-	mu.RLock()
+func getCachedJSONState(cache map[string]cachedJSONResponse, mu *sync.RWMutex, key string) ([]byte, string) {
+	mu.Lock()
+	defer mu.Unlock()
+
 	entry, ok := cache[key]
-	mu.RUnlock()
-	if !ok || time.Now().After(entry.expiresAt) {
-		if ok {
-			mu.Lock()
-			delete(cache, key)
-			mu.Unlock()
-		}
-		return nil, false
+	if !ok {
+		return nil, cacheLookupStateAbsent
 	}
-	return entry.payload, true
+
+	now := time.Now()
+	if now.After(entry.staleUntil) {
+		delete(cache, key)
+		return nil, cacheLookupStateAbsent
+	}
+
+	entry.hitCount++
+	if entry.hitCount >= cacheHotThreshold {
+		entry.hotUntil = now.Add(cacheHotRetention)
+	}
+	cache[key] = entry
+
+	if !now.After(entry.expiresAt) {
+		return entry.payload, cacheLookupStateFresh
+	}
+
+	if !now.After(entry.hotUntil) {
+		return entry.payload, cacheLookupStateStale
+	}
+
+	delete(cache, key)
+	return nil, cacheLookupStateAbsent
 }
 
-func setCachedJSON(cache map[string]cachedJSONResponse, mu *sync.RWMutex, key string, payload []byte, ttl time.Duration) {
+func setCachedJSON(cache map[string]cachedJSONResponse, mu *sync.RWMutex, key string, payload []byte, ttl time.Duration, staleTTL time.Duration) {
 	mu.Lock()
-	cache[key] = cachedJSONResponse{payload: payload, expiresAt: time.Now().Add(ttl)}
+	now := time.Now()
+	cache[key] = cachedJSONResponse{
+		payload:    payload,
+		expiresAt:  now.Add(ttl),
+		staleUntil: now.Add(ttl + staleTTL),
+		hitCount:   0,
+		hotUntil:   time.Time{},
+	}
 	mu.Unlock()
+}
+
+func versionedFormsListCacheKey(rawKey string) string {
+	return fmt.Sprintf("forms:list:v%d:%s", formsListVersion.Load(), rawKey)
+}
+
+func versionedFormByCodeCacheKey(rawKey string) string {
+	return fmt.Sprintf("forms:by_code:v%d:%s", formByCodeVersion.Load(), rawKey)
 }
 
 func writeJSONBytes(w http.ResponseWriter, payload []byte) {
@@ -73,9 +132,45 @@ func writeJSONBytes(w http.ResponseWriter, payload []byte) {
 	_, _ = w.Write(payload)
 }
 
+func writeJSONBytesWithETag(w http.ResponseWriter, r *http.Request, payload []byte) {
+	checksum := sha256.Sum256(payload)
+	etag := fmt.Sprintf(`W/"%x"`, checksum)
+	if matchesIfNoneMatch(r.Header.Get("If-None-Match"), etag) {
+		w.Header().Set("ETag", etag)
+		w.Header().Set("Cache-Control", "private, max-age=30")
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+
+	w.Header().Set("ETag", etag)
+	writeJSONBytes(w, payload)
+}
+
+func matchesIfNoneMatch(headerValue string, etag string) bool {
+	trimmed := strings.TrimSpace(headerValue)
+	if trimmed == "" {
+		return false
+	}
+
+	for _, candidate := range strings.Split(trimmed, ",") {
+		value := strings.TrimSpace(candidate)
+		if value == "*" || value == etag {
+			return true
+		}
+		if strings.HasPrefix(value, "W/") && strings.TrimPrefix(value, "W/") == etag {
+			return true
+		}
+	}
+
+	return false
+}
+
 // invalidateFormsCache clears all entries from the admin forms list cache and
 // any per-vertical list caches so mutating operations are immediately visible.
 func invalidateFormsCache() {
+	formsListVersion.Add(1)
+	formByCodeVersion.Add(1)
+
 	formsListCacheMu.Lock()
 	formsListCache = make(map[string]cachedJSONResponse)
 	formsListCacheMu.Unlock()
@@ -104,11 +199,17 @@ func GetFormsForVertical(w http.ResponseWriter, r *http.Request) {
 
 	isMobileClient := strings.Contains(r.Header.Get("User-Agent"), "Dart")
 	normalizedVertical := strings.ToUpper(strings.TrimSpace(verticalCode))
-	formsListCacheKey := strings.Join([]string{claims.UserID, normalizedVertical, fmt.Sprintf("mobile:%t", isMobileClient)}, "|")
-	if payload, ok := getCachedJSON(formsListCache, &formsListCacheMu, formsListCacheKey); ok {
-		writeJSONBytes(w, payload)
+	formsListCacheKey := versionedFormsListCacheKey(strings.Join([]string{claims.UserID, normalizedVertical, fmt.Sprintf("mobile:%t", isMobileClient)}, "|"))
+	if payload, state := getCachedJSONState(formsListCache, &formsListCacheMu, formsListCacheKey); state == cacheLookupStateFresh {
+		w.Header().Set("X-App-Forms-Cache", cacheStateHit)
+		writeJSONBytesWithETag(w, r, payload)
+		return
+	} else if state == cacheLookupStateStale {
+		w.Header().Set("X-App-Forms-Cache", cacheStateStale)
+		writeJSONBytesWithETag(w, r, payload)
 		return
 	}
+	w.Header().Set("X-App-Forms-Cache", cacheStateMiss)
 
 	log.Printf("📋 Fetching forms for vertical: %s, user: %s", verticalCode, claims.UserID)
 
@@ -149,20 +250,26 @@ func GetFormsForVertical(w http.ResponseWriter, r *http.Request) {
 	// Get forms for this vertical using JSONB contains operator.
 	// Include forms with empty accessible_verticals (globally accessible forms).
 	var forms []models.AppForm
-	filterConditions := []string{"accessible_verticals = '[]'::jsonb"}
 	filterArgs := make([]interface{}, 0, len(candidateTokens))
+	arrayPlaceholders := make([]string, 0, len(candidateTokens))
 	for token := range candidateTokens {
 		if strings.TrimSpace(token) == "" {
 			continue
 		}
-		filterConditions = append(filterConditions, "accessible_verticals @> ?")
-		filterArgs = append(filterArgs, `["`+token+`"]`)
+		arrayPlaceholders = append(arrayPlaceholders, "?")
+		filterArgs = append(filterArgs, token)
+	}
+
+	filterCondition := "accessible_verticals = '[]'::jsonb"
+	if len(arrayPlaceholders) > 0 {
+		// JSONB ?| checks whether any candidate token exists in top-level array values.
+		filterCondition = filterCondition + " OR accessible_verticals ?| ARRAY[" + strings.Join(arrayPlaceholders, ",") + "]"
 	}
 
 	query := config.DB.
 		Select("id, code, title, description, module_id, route, icon, display_order, required_permission, accessible_verticals, is_active").
 		Preload("Module").
-		Where(strings.Join(filterConditions, " OR "), filterArgs...).
+		Where(filterCondition, filterArgs...).
 		Order("display_order ASC, title ASC")
 
 	if filterInactive {
@@ -255,8 +362,15 @@ func GetFormsForVertical(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	setCachedJSON(formsListCache, &formsListCacheMu, formsListCacheKey, payload, formsListCacheTTL)
-	writeJSONBytes(w, payload)
+	loaded, loadErr, _ := formsListLoad.Do(formsListCacheKey, func() (interface{}, error) {
+		setCachedJSON(formsListCache, &formsListCacheMu, formsListCacheKey, payload, formsListCacheTTL, formsListStaleTTL)
+		return payload, nil
+	})
+	if loadErr != nil {
+		http.Error(w, "failed to cache forms response", http.StatusInternalServerError)
+		return
+	}
+	writeJSONBytes(w, loaded.([]byte))
 }
 
 // GetFormByCode returns a specific form by its code with full schema
@@ -272,11 +386,17 @@ func GetFormByCode(w http.ResponseWriter, r *http.Request) {
 	verticalCode := vars["businessCode"]
 	formCode := vars["code"]
 
-	formByCodeCacheKey := strings.Join([]string{claims.UserID, strings.ToUpper(strings.TrimSpace(verticalCode)), strings.TrimSpace(formCode)}, "|")
-	if payload, ok := getCachedJSON(formByCodeCache, &formByCodeCacheMu, formByCodeCacheKey); ok {
-		writeJSONBytes(w, payload)
+	formByCodeCacheKey := versionedFormByCodeCacheKey(strings.Join([]string{claims.UserID, strings.ToUpper(strings.TrimSpace(verticalCode)), strings.TrimSpace(formCode)}, "|"))
+	if payload, state := getCachedJSONState(formByCodeCache, &formByCodeCacheMu, formByCodeCacheKey); state == cacheLookupStateFresh {
+		w.Header().Set("X-App-Form-Cache", cacheStateHit)
+		writeJSONBytesWithETag(w, r, payload)
+		return
+	} else if state == cacheLookupStateStale {
+		w.Header().Set("X-App-Form-Cache", cacheStateStale)
+		writeJSONBytesWithETag(w, r, payload)
 		return
 	}
+	w.Header().Set("X-App-Form-Cache", cacheStateMiss)
 
 	// if verticalCode == "" || formCode == "" {
 	// 	http.Error(w, "vertical code and form code are required", http.StatusBadRequest)
@@ -351,8 +471,15 @@ func GetFormByCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	setCachedJSON(formByCodeCache, &formByCodeCacheMu, formByCodeCacheKey, payload, formByCodeCacheTTL)
-	writeJSONBytes(w, payload)
+	loaded, loadErr, _ := formByCodeLoad.Do(formByCodeCacheKey, func() (interface{}, error) {
+		setCachedJSON(formByCodeCache, &formByCodeCacheMu, formByCodeCacheKey, payload, formByCodeCacheTTL, formByCodeStaleTTL)
+		return payload, nil
+	})
+	if loadErr != nil {
+		http.Error(w, "failed to cache form response", http.StatusInternalServerError)
+		return
+	}
+	writeJSONBytes(w, loaded.([]byte))
 }
 
 func rewriteAbsoluteDropdownEndpoints(node interface{}, businessCode string) {
@@ -398,9 +525,12 @@ func GetAllAppForms(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	const allAdminFormsCacheKey = "admin:all"
-	if payload, ok := getCachedJSON(formsListCache, &formsListCacheMu, allAdminFormsCacheKey); ok {
-		writeJSONBytes(w, payload)
+	allAdminFormsCacheKey := versionedFormsListCacheKey("admin:all")
+	if payload, state := getCachedJSONState(formsListCache, &formsListCacheMu, allAdminFormsCacheKey); state == cacheLookupStateFresh {
+		writeJSONBytesWithETag(w, r, payload)
+		return
+	} else if state == cacheLookupStateStale {
+		writeJSONBytesWithETag(w, r, payload)
 		return
 	}
 
@@ -433,8 +563,15 @@ func GetAllAppForms(w http.ResponseWriter, r *http.Request) {
 		"forms": formDTOs,
 		"count": len(formDTOs),
 	}); err == nil {
-		setCachedJSON(formsListCache, &formsListCacheMu, allAdminFormsCacheKey, payload, formsListCacheTTL)
-		writeJSONBytes(w, payload)
+		loaded, loadErr, _ := formsListLoad.Do(allAdminFormsCacheKey, func() (interface{}, error) {
+			setCachedJSON(formsListCache, &formsListCacheMu, allAdminFormsCacheKey, payload, formsListCacheTTL, formsListStaleTTL)
+			return payload, nil
+		})
+		if loadErr != nil {
+			http.Error(w, "failed to cache forms response", http.StatusInternalServerError)
+			return
+		}
+		writeJSONBytesWithETag(w, r, loaded.([]byte))
 	} else {
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"forms": formDTOs,

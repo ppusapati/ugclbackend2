@@ -273,11 +273,54 @@ func GetFormSubmissions(w http.ResponseWriter, r *http.Request) {
 		filters["submitted_by"] = claims.UserID
 	}
 
-	submissions, err := getWorkflowEngine().GetSubmissionsByForm(formCode, businessID, filters)
+	cursorRaw := strings.TrimSpace(r.URL.Query().Get("cursor"))
+	limitRaw := strings.TrimSpace(r.URL.Query().Get("limit"))
+	rawMode := r.URL.Query().Get("pagination")
+	rawLegacy := r.URL.Query().Get("legacy_pagination")
+	usePagination := shouldUseSubmissionCursorMode(rawMode, rawLegacy, cursorRaw, limitRaw)
+
+	var cursor *submissionsCursor
+	if usePagination {
+		var parseErr error
+		cursor, parseErr = decodeSubmissionsCursor(cursorRaw)
+		if parseErr != nil {
+			http.Error(w, "invalid cursor", http.StatusBadRequest)
+			return
+		}
+	}
+
+	pageSize := defaultSubmissionPageSize
+	if usePagination {
+		parsedLimit, parseErr := parseSubmissionPageSize(limitRaw)
+		if parseErr != nil {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
+		}
+		pageSize = parsedLimit
+	}
+
+	var submissions []models.FormSubmission
+	var err error
+	if usePagination {
+		submissions, err = getWorkflowEngine().GetSubmissionsByFormPage(formCode, businessID, filters, pageSize+1, cursor)
+	} else {
+		submissions, err = getWorkflowEngine().GetSubmissionsByForm(formCode, businessID, filters)
+	}
 	if err != nil {
 		log.Printf("❌ Error fetching submissions: %v", err)
 		http.Error(w, "failed to fetch submissions", http.StatusInternalServerError)
 		return
+	}
+
+	hasMore := false
+	nextCursor := ""
+	if usePagination && len(submissions) > pageSize {
+		hasMore = true
+		submissions = submissions[:pageSize]
+	}
+	if usePagination && hasMore && len(submissions) > 0 {
+		last := submissions[len(submissions)-1]
+		nextCursor = encodeSubmissionsCursor(last.SubmittedAt, last.ID)
 	}
 
 	// Convert to DTOs
@@ -300,6 +343,11 @@ func GetFormSubmissions(w http.ResponseWriter, r *http.Request) {
 	response := map[string]interface{}{
 		"submissions": dtos,
 		"count":       len(dtos),
+	}
+	if usePagination {
+		response["limit"] = pageSize
+		response["has_more"] = hasMore
+		response["next_cursor"] = nextCursor
 	}
 	if includeResolved {
 		response["resolved_submissions"] = resolvedItems

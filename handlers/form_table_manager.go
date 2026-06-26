@@ -663,6 +663,95 @@ func (ftm *FormTableManager) GetFormDataListInSchema(
 	return results, nil
 }
 
+// GetFormDataListPage retrieves paginated form submissions from a dedicated table.
+func (ftm *FormTableManager) GetFormDataListPage(
+	tableName string,
+	businessVerticalID uuid.UUID,
+	filters map[string]interface{},
+	limit int,
+	cursor *submissionsCursor,
+) ([]map[string]interface{}, error) {
+	return ftm.GetFormDataListPageInSchema("", tableName, businessVerticalID, filters, limit, cursor)
+}
+
+// GetFormDataListPageInSchema retrieves paginated form submissions from a dedicated table within a specific schema.
+func (ftm *FormTableManager) GetFormDataListPageInSchema(
+	schemaName string,
+	tableName string,
+	businessVerticalID uuid.UUID,
+	filters map[string]interface{},
+	limit int,
+	cursor *submissionsCursor,
+) ([]map[string]interface{}, error) {
+	if limit <= 0 {
+		limit = defaultSubmissionPageSize
+	}
+
+	fullTableName := ftm.schemaManager.GetFullTableName(schemaName, tableName)
+
+	var whereClauses []string
+	var values []interface{}
+	idx := 1
+
+	whereClauses = append(whereClauses, fmt.Sprintf("business_vertical_id = $%d", idx))
+	values = append(values, businessVerticalID)
+	idx++
+
+	whereClauses = append(whereClauses, "deleted_at IS NULL")
+
+	for key, val := range filters {
+		if !lookupIdentifierPattern.MatchString(key) {
+			return nil, fmt.Errorf("invalid filter key: %s", key)
+		}
+		whereClauses = append(whereClauses, fmt.Sprintf("%s = $%d", key, idx))
+		values = append(values, val)
+		idx++
+	}
+
+	if cursor != nil {
+		whereClauses = append(whereClauses, fmt.Sprintf("(created_at < $%d OR (created_at = $%d AND id < $%d))", idx, idx, idx+1))
+		values = append(values, cursor.Timestamp.UTC(), cursor.ID)
+		idx += 2
+	}
+
+	sql := fmt.Sprintf(
+		"SELECT * FROM %s WHERE %s ORDER BY created_at DESC, id DESC LIMIT $%d",
+		fullTableName,
+		strings.Join(whereClauses, " AND "),
+		idx,
+	)
+	values = append(values, limit)
+
+	rows, err := ftm.db.Raw(sql, values...).Rows()
+	if err != nil {
+		return nil, fmt.Errorf("failed to query form data: %v", err)
+	}
+	defer rows.Close()
+
+	columns, _ := rows.Columns()
+	results := make([]map[string]interface{}, 0, limit)
+
+	for rows.Next() {
+		rowValues := make([]interface{}, len(columns))
+		valuePtrs := make([]interface{}, len(columns))
+		for i := range rowValues {
+			valuePtrs[i] = &rowValues[i]
+		}
+
+		if err := rows.Scan(valuePtrs...); err != nil {
+			continue
+		}
+
+		result := make(map[string]interface{}, len(columns))
+		for i, col := range columns {
+			result[col] = rowValues[i]
+		}
+		results = append(results, result)
+	}
+
+	return results, nil
+}
+
 // SoftDeleteFormData soft deletes a record in the dedicated table
 func (ftm *FormTableManager) SoftDeleteFormData(tableName string, recordID uuid.UUID, userID string) error {
 	return ftm.SoftDeleteFormDataInSchema("", tableName, recordID, userID)

@@ -3,7 +3,6 @@ package handlers
 
 import (
 	"encoding/json"
-	"fmt"
 	"net"
 	"net/http"
 	"strconv"
@@ -11,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/sync/singleflight"
@@ -219,80 +217,60 @@ func clientIPFromRequest(r *http.Request) string {
 }
 
 func GetCurrentUser(w http.ResponseWriter, r *http.Request) {
-	// 1) Extract token
-	auth := r.Header.Get("Authorization")
-	if !strings.HasPrefix(auth, "Bearer ") {
-		http.Error(w, "Missing Bearer token", http.StatusUnauthorized)
+	claims := middleware.GetClaims(r)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	tokenString := strings.TrimPrefix(auth, "Bearer ")
 
-	// 2) Parse & validate
-	secret := []byte(config.JWTSecret)
-	token, err := jwt.ParseWithClaims(tokenString, &models.JWTClaims{}, func(t *jwt.Token) (interface{}, error) {
-		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
-		}
-		return secret, nil
-	})
-	if err != nil || !token.Valid {
-		http.Error(w, "Invalid token", http.StatusUnauthorized)
-		return
-	}
-	claims := token.Claims.(*models.JWTClaims)
-
-	// 3) Load user with all relationships
-	var user models.User
-	if err := config.DB.
-		Preload("RoleModel.Permissions").
-		Preload("UserBusinessRoles.BusinessRole.Permissions").
-		Preload("UserBusinessRoles.BusinessRole.BusinessVertical").
-		First(&user, "id = ?", claims.UserID).Error; err != nil {
+	authService := middleware.NewAuthService()
+	userCtx, err := authService.LoadUserContext(r)
+	if err != nil || userCtx == nil || userCtx.User == nil {
 		http.Error(w, "User not found", http.StatusNotFound)
 		return
 	}
 
-	// 4) Collect permissions from all sources
+	user := userCtx.User
+
+	// Build effective permission list without triggering a second auth context load.
 	permissions := []string{}
+	permissionSet := make(map[string]struct{})
+	appendPermission := func(permission string) {
+		if permission == "" {
+			return
+		}
+		if _, exists := permissionSet[permission]; exists {
+			return
+		}
+		permissionSet[permission] = struct{}{}
+		permissions = append(permissions, permission)
+	}
+
+	for _, perm := range userCtx.GlobalPermissions {
+		appendPermission(perm)
+	}
+
+	if userCtx.BusinessContext != nil {
+		for _, perm := range userCtx.BusinessContext.Permissions {
+			appendPermission(perm)
+		}
+	}
+
+	if userCtx.IsSuperAdmin {
+		appendPermission("*:*:*")
+	}
+
 	businessRoles := []map[string]interface{}{}
-
-	// Check for Super Admin wildcard first
-	if user.RoleModel != nil && user.RoleModel.Name == "super_admin" {
-		permissions = append(permissions, "*:*:*")
-	} else {
-		// Collect from global role
-		if user.RoleModel != nil {
-			for _, perm := range user.RoleModel.Permissions {
-				permissions = append(permissions, perm.Name)
-			}
-		}
-
-		// Collect from business roles
-		permMap := make(map[string]bool) // To avoid duplicates
-		for _, p := range permissions {
-			permMap[p] = true
-		}
-
-		for _, ubr := range user.UserBusinessRoles {
-			if ubr.IsActive && ubr.BusinessRole.ID != uuid.Nil {
-				// Add permissions from this business role
-				for _, perm := range ubr.BusinessRole.Permissions {
-					if !permMap[perm.Name] {
-						permissions = append(permissions, perm.Name)
-						permMap[perm.Name] = true
-					}
-				}
-
-				// Build business role info for frontend
-				businessRoles = append(businessRoles, map[string]interface{}{
-					"role_id":       ubr.BusinessRole.ID,
-					"role_name":     ubr.BusinessRole.DisplayName,
-					"vertical_id":   ubr.BusinessRole.BusinessVerticalID,
-					"vertical_name": ubr.BusinessRole.BusinessVertical.Name,
-					"vertical_code": ubr.BusinessRole.BusinessVertical.Code,
-					"level":         ubr.BusinessRole.Level,
-				})
-			}
+	for _, ubr := range user.UserBusinessRoles {
+		if ubr.IsActive && ubr.BusinessRole.ID != uuid.Nil {
+			businessRoles = append(businessRoles, map[string]interface{}{
+				"role_id":       ubr.BusinessRole.ID,
+				"role_name":     ubr.BusinessRole.DisplayName,
+				"vertical_id":   ubr.BusinessRole.BusinessVerticalID,
+				"vertical_name": ubr.BusinessRole.BusinessVertical.Name,
+				"vertical_code": ubr.BusinessRole.BusinessVertical.Code,
+				"level":         ubr.BusinessRole.Level,
+			})
 		}
 	}
 

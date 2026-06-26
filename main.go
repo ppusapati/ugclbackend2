@@ -122,7 +122,11 @@ func main() {
 	srv := &http.Server{
 		Addr:              ":" + port,
 		Handler:           handlerWithCORS,
-		ReadHeaderTimeout: 10 * time.Second,
+		ReadHeaderTimeout: getDurationFromEnv("API_READ_HEADER_TIMEOUT", 10*time.Second),
+		ReadTimeout:       getDurationFromEnv("API_READ_TIMEOUT", 30*time.Second),
+		WriteTimeout:      getDurationFromEnv("API_WRITE_TIMEOUT", 60*time.Second),
+		IdleTimeout:       getDurationFromEnv("API_IDLE_TIMEOUT", 120*time.Second),
+		MaxHeaderBytes:    getIntFromEnv("API_MAX_HEADER_BYTES", 1<<20),
 	}
 
 	shutdownCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -193,4 +197,32 @@ func buildAllowedOrigins(raw string) map[string]bool {
 		allowed[origin] = true
 	}
 	return allowed
+}
+
+func getDurationFromEnv(key string, defaultVal time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return defaultVal
+	}
+
+	parsed, err := time.ParseDuration(raw)
+	if err != nil {
+		return defaultVal
+	}
+
+	return parsed
+}
+
+func getIntFromEnv(key string, defaultVal int) int {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return defaultVal
+	}
+
+	parsed, err := strconv.Atoi(raw)
+	if err != nil {
+		return defaultVal
+	}
+
+	return parsed
 }

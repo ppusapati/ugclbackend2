@@ -664,6 +664,68 @@ func (we *WorkflowEngineDedicated) GetSubmissionsByFormDedicated(
 	return records, nil
 }
 
+// GetSubmissionsByFormDedicatedPage retrieves submissions for a form from dedicated table using keyset pagination.
+func (we *WorkflowEngineDedicated) GetSubmissionsByFormDedicatedPage(
+	formCode string,
+	businessVerticalID uuid.UUID,
+	filters map[string]interface{},
+	limit int,
+	cursor *submissionsCursor,
+) ([]*FormSubmissionRecord, error) {
+	var form models.AppForm
+	if err := we.db.Where("code = ? AND is_active = ?", formCode, true).First(&form).Error; err != nil {
+		return nil, fmt.Errorf("form not found: %w", err)
+	}
+
+	if form.DBTableName == "" {
+		return nil, fmt.Errorf("form %s does not have a dedicated table configured", formCode)
+	}
+
+	dataList, err := we.tableManager.GetFormDataListPage(form.DBTableName, businessVerticalID, filters, limit, cursor)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch submissions: %w", err)
+	}
+
+	records := make([]*FormSubmissionRecord, 0, len(dataList))
+	for _, data := range dataList {
+		record := &FormSubmissionRecord{FormData: make(map[string]interface{})}
+
+		if id, ok := data["id"].([]byte); ok {
+			record.ID, _ = uuid.FromBytes(id)
+		} else if idStr, ok := data["id"].(string); ok {
+			if parsedID, parseErr := uuid.Parse(idStr); parseErr == nil {
+				record.ID = parsedID
+			}
+		}
+		if createdAt, ok := data["created_at"].(time.Time); ok {
+			record.CreatedAt = createdAt
+		}
+		if formCodeVal, ok := data["form_code"].(string); ok {
+			record.FormCode = formCodeVal
+		}
+		if state, ok := data["current_state"].(string); ok {
+			record.CurrentState = state
+		}
+
+		baseFields := map[string]bool{
+			"id": true, "form_id": true, "form_code": true, "business_vertical_id": true,
+			"site_id": true, "workflow_id": true, "current_state": true,
+			"created_by": true, "created_at": true, "updated_by": true, "updated_at": true,
+			"deleted_by": true, "deleted_at": true,
+		}
+
+		for key, val := range data {
+			if !baseFields[key] {
+				record.FormData[key] = val
+			}
+		}
+
+		records = append(records, record)
+	}
+
+	return records, nil
+}
+
 // DeleteSubmissionDedicated soft deletes a submission from the dedicated table
 func (we *WorkflowEngineDedicated) DeleteSubmissionDedicated(
 	formCode string,

@@ -309,6 +309,47 @@ func (we *WorkflowEngine) GetSubmissionsByForm(
 	return submissions, nil
 }
 
+// GetSubmissionsByFormPage retrieves submissions for a form using keyset pagination.
+func (we *WorkflowEngine) GetSubmissionsByFormPage(
+	formCode string,
+	businessVerticalID uuid.UUID,
+	filters map[string]interface{},
+	limit int,
+	cursor *submissionsCursor,
+) ([]models.FormSubmission, error) {
+	if limit <= 0 {
+		limit = defaultSubmissionPageSize
+	}
+
+	query := we.db.
+		Preload("Form").
+		Preload("Workflow").
+		Where("form_code = ? AND business_vertical_id = ?", formCode, businessVerticalID)
+
+	if state, ok := filters["state"].(string); ok && state != "" {
+		query = query.Where("current_state = ?", state)
+	}
+
+	if siteID, ok := filters["site_id"].(uuid.UUID); ok {
+		query = query.Where("site_id = ?", siteID)
+	}
+
+	if userID, ok := filters["submitted_by"].(string); ok && userID != "" {
+		query = query.Where("submitted_by = ?", userID)
+	}
+
+	if cursor != nil {
+		query = query.Where("(submitted_at, id) < (?, ?)", cursor.Timestamp.UTC(), cursor.ID)
+	}
+
+	var submissions []models.FormSubmission
+	if err := query.Order("submitted_at DESC, id DESC").Limit(limit).Find(&submissions).Error; err != nil {
+		return nil, fmt.Errorf("failed to fetch submissions: %w", err)
+	}
+
+	return submissions, nil
+}
+
 // GetWorkflowHistory retrieves the complete transition history for a submission
 func (we *WorkflowEngine) GetWorkflowHistory(submissionID uuid.UUID) ([]models.WorkflowTransition, error) {
 	var transitions []models.WorkflowTransition
