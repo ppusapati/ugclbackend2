@@ -38,6 +38,8 @@ func RunAllSeeding() error {
 	// Step 5: Seed default workflows
 	log.Println("\n[5/7] Seeding Workflows...")
 	SeedWorkflows()
+	log.Println("\n[5.1/7] Seeding Finance Modules and Forms...")
+	SeedFinanceModulesAndForms()
 
 	// Step 6: Seed default users
 	log.Println("\n[6/7] Seeding Default Users...")
@@ -102,6 +104,40 @@ func SeedPermissions() {
 		{ID: uuid.New(), Name: "finance:read", Resource: "finance", Action: "read", Description: "View financial records"},
 		{ID: uuid.New(), Name: "finance:update", Resource: "finance", Action: "update", Description: "Edit financial record"},
 		{ID: uuid.New(), Name: "finance:approve", Resource: "finance", Action: "approve", Description: "Approve transactions"},
+
+		// Bank Guarantee
+		{ID: uuid.New(), Name: "bg:create", Resource: "bg", Action: "create", Description: "Create bank guarantee"},
+		{ID: uuid.New(), Name: "bg:read", Resource: "bg", Action: "read", Description: "View bank guarantees"},
+		{ID: uuid.New(), Name: "bg:update", Resource: "bg", Action: "update", Description: "Update bank guarantee"},
+		{ID: uuid.New(), Name: "bg:approve", Resource: "bg", Action: "approve", Description: "Approve bank guarantee"},
+		{ID: uuid.New(), Name: "bg:claim", Resource: "bg", Action: "claim", Description: "Invoke or claim bank guarantee"},
+		{ID: uuid.New(), Name: "bg:release", Resource: "bg", Action: "release", Description: "Release bank guarantee"},
+		{ID: uuid.New(), Name: "bg:renew", Resource: "bg", Action: "renew", Description: "Renew bank guarantee"},
+		{ID: uuid.New(), Name: "bg:extend", Resource: "bg", Action: "extend", Description: "Extend bank guarantee"},
+
+		// Letter of Credit
+		{ID: uuid.New(), Name: "lc:create", Resource: "lc", Action: "create", Description: "Create letter of credit"},
+		{ID: uuid.New(), Name: "lc:read", Resource: "lc", Action: "read", Description: "View letters of credit"},
+		{ID: uuid.New(), Name: "lc:update", Resource: "lc", Action: "update", Description: "Update letter of credit"},
+		{ID: uuid.New(), Name: "lc:issue", Resource: "lc", Action: "issue", Description: "Issue letter of credit"},
+		{ID: uuid.New(), Name: "lc:amendment", Resource: "lc", Action: "amendment", Description: "Amend letter of credit"},
+		{ID: uuid.New(), Name: "lc:claim", Resource: "lc", Action: "claim", Description: "Claim against letter of credit"},
+		{ID: uuid.New(), Name: "lc:negotiation", Resource: "lc", Action: "negotiation", Description: "Negotiate letter of credit documents"},
+
+		// Insurance
+		{ID: uuid.New(), Name: "insurance:create", Resource: "insurance", Action: "create", Description: "Create insurance policy"},
+		{ID: uuid.New(), Name: "insurance:read", Resource: "insurance", Action: "read", Description: "View insurance policies and claims"},
+		{ID: uuid.New(), Name: "insurance:update", Resource: "insurance", Action: "update", Description: "Update insurance policy"},
+		{ID: uuid.New(), Name: "insurance:renew", Resource: "insurance", Action: "renew", Description: "Renew insurance policy"},
+		{ID: uuid.New(), Name: "insurance:file_claim", Resource: "insurance", Action: "file_claim", Description: "File insurance claim"},
+		{ID: uuid.New(), Name: "insurance:approve_claim", Resource: "insurance", Action: "approve_claim", Description: "Approve insurance claim"},
+		{ID: uuid.New(), Name: "insurance:manage_providers", Resource: "insurance", Action: "manage_providers", Description: "Manage insurance providers"},
+
+		// Risk & Compliance
+		{ID: uuid.New(), Name: "risk:assess", Resource: "risk", Action: "assess", Description: "Assess financial risk"},
+		{ID: uuid.New(), Name: "risk:read", Resource: "risk", Action: "read", Description: "View risk assessments"},
+		{ID: uuid.New(), Name: "risk:update", Resource: "risk", Action: "update", Description: "Update risk assessments"},
+		{ID: uuid.New(), Name: "risk:approve", Resource: "risk", Action: "approve", Description: "Approve risk assessments"},
 
 		// Documents / DMS
 		{ID: uuid.New(), Name: "document:upload", Resource: "document", Action: "create", Description: "Upload document"},
@@ -434,6 +470,13 @@ func getHORoles(businessID uuid.UUID) []models.BusinessRole {
 		{
 			Name: "HO_Admin", DisplayName: "Head Office Admin", Description: "Full access to HO modules",
 			BusinessVerticalID: businessID, Level: 1, IsActive: true,
+			Permissions: []models.Permission{
+				{Name: "finance:create"}, {Name: "finance:read"}, {Name: "finance:update"}, {Name: "finance:approve"},
+				{Name: "bg:create"}, {Name: "bg:read"}, {Name: "bg:update"}, {Name: "bg:approve"}, {Name: "bg:claim"}, {Name: "bg:release"}, {Name: "bg:renew"},
+				{Name: "lc:create"}, {Name: "lc:read"}, {Name: "lc:update"}, {Name: "lc:issue"}, {Name: "lc:amendment"}, {Name: "lc:negotiation"}, {Name: "lc:claim"},
+				{Name: "insurance:create"}, {Name: "insurance:read"}, {Name: "insurance:update"}, {Name: "insurance:renew"}, {Name: "insurance:file_claim"}, {Name: "insurance:approve_claim"},
+				{Name: "risk:assess"}, {Name: "risk:read"}, {Name: "risk:update"}, {Name: "risk:approve"},
+			},
 		},
 		{
 			Name: "HO_Manager", DisplayName: "Head Office Manager", Description: "Manage projects, purchase, planning, reports",
@@ -443,6 +486,10 @@ func getHORoles(businessID uuid.UUID) []models.BusinessRole {
 				{Name: "planning:read"}, {Name: "planning:update"}, {Name: "planning:approve"},
 				{Name: "purchase:read"}, {Name: "purchase:update"}, {Name: "purchase:approve"},
 				{Name: "inventory:read"}, {Name: "inventory:update"}, {Name: "inventory:approve"},
+				{Name: "finance:read"}, {Name: "finance:update"},
+				{Name: "bg:read"}, {Name: "bg:update"}, {Name: "bg:approve"},
+				{Name: "lc:read"}, {Name: "lc:update"}, {Name: "lc:issue"}, {Name: "lc:amendment"},
+				{Name: "insurance:read"}, {Name: "insurance:update"}, {Name: "insurance:approve_claim"},
 				{Name: "report:read"}, {Name: "report:export"},
 			},
 		},
@@ -477,6 +524,11 @@ func getWaterRoles(businessID uuid.UUID) []models.BusinessRole {
 				{Name: "planning:create"}, {Name: "planning:read"}, {Name: "planning:update"}, {Name: "planning:approve"},
 				{Name: "purchase:create"}, {Name: "purchase:read"}, {Name: "purchase:update"}, {Name: "purchase:approve"}, {Name: "purchase:delete"},
 				{Name: "inventory:create"}, {Name: "inventory:read"}, {Name: "inventory:update"}, {Name: "inventory:delete"}, {Name: "inventory:approve"},
+				{Name: "finance:create"}, {Name: "finance:read"}, {Name: "finance:update"}, {Name: "finance:approve"},
+				{Name: "bg:create"}, {Name: "bg:read"}, {Name: "bg:update"}, {Name: "bg:approve"}, {Name: "bg:claim"}, {Name: "bg:release"}, {Name: "bg:renew"},
+				{Name: "lc:create"}, {Name: "lc:read"}, {Name: "lc:update"}, {Name: "lc:issue"}, {Name: "lc:amendment"}, {Name: "lc:negotiation"}, {Name: "lc:claim"},
+				{Name: "insurance:create"}, {Name: "insurance:read"}, {Name: "insurance:update"}, {Name: "insurance:renew"}, {Name: "insurance:file_claim"}, {Name: "insurance:approve_claim"},
+				{Name: "risk:assess"}, {Name: "risk:read"}, {Name: "risk:update"}, {Name: "risk:approve"},
 				{Name: "water:read_consumption"}, {Name: "water:manage_supply"}, {Name: "water:quality_control"},
 				{Name: "report:read"}, {Name: "report:export"},
 				{Name: "document:upload"}, {Name: "document:read"}, {Name: "document:update"}, {Name: "document:delete"},
@@ -540,6 +592,11 @@ func getSolarRoles(businessID uuid.UUID) []models.BusinessRole {
 				{Name: "planning:create"}, {Name: "planning:read"}, {Name: "planning:update"}, {Name: "planning:approve"},
 				{Name: "purchase:create"}, {Name: "purchase:read"}, {Name: "purchase:update"}, {Name: "purchase:approve"}, {Name: "purchase:delete"},
 				{Name: "inventory:create"}, {Name: "inventory:read"}, {Name: "inventory:update"}, {Name: "inventory:delete"}, {Name: "inventory:approve"},
+				{Name: "finance:create"}, {Name: "finance:read"}, {Name: "finance:update"}, {Name: "finance:approve"},
+				{Name: "bg:create"}, {Name: "bg:read"}, {Name: "bg:update"}, {Name: "bg:approve"}, {Name: "bg:claim"}, {Name: "bg:release"}, {Name: "bg:renew"},
+				{Name: "lc:create"}, {Name: "lc:read"}, {Name: "lc:update"}, {Name: "lc:issue"}, {Name: "lc:amendment"}, {Name: "lc:negotiation"}, {Name: "lc:claim"},
+				{Name: "insurance:create"}, {Name: "insurance:read"}, {Name: "insurance:update"}, {Name: "insurance:renew"}, {Name: "insurance:file_claim"}, {Name: "insurance:approve_claim"},
+				{Name: "risk:assess"}, {Name: "risk:read"}, {Name: "risk:update"}, {Name: "risk:approve"},
 				{Name: "solar:read_generation"}, {Name: "solar:manage_panels"}, {Name: "solar:maintenance"},
 				{Name: "report:read"}, {Name: "report:export"},
 				{Name: "document:upload"}, {Name: "document:read"}, {Name: "document:update"}, {Name: "document:delete"},
@@ -670,7 +727,107 @@ func SeedWorkflows() {
 		IsActive: true,
 	}
 
-	workflows := []models.WorkflowDefinition{approvalWorkflow, multiLevelWorkflow, taskWorkflow}
+	bgWorkflow := models.WorkflowDefinition{
+		Code:         "bg_lifecycle",
+		Name:         "Bank Guarantee Lifecycle",
+		Description:  "Workflow for bank guarantee issue and post-issue actions",
+		Version:      "1.0.0",
+		InitialState: "draft",
+		States: []byte(`[
+			{"code": "draft", "name": "Draft", "is_final": false},
+			{"code": "submitted", "name": "Submitted", "is_final": false},
+			{"code": "approved", "name": "Approved", "is_final": false},
+			{"code": "active", "name": "Active", "is_final": false},
+			{"code": "renewed", "name": "Renewed", "is_final": false},
+			{"code": "claimed", "name": "Claimed", "is_final": true},
+			{"code": "released", "name": "Released", "is_final": true}
+		]`),
+		Transitions: []byte(`[
+			{"from": "draft", "to": "submitted", "action": "submit", "permission": "bg:create"},
+			{"from": "submitted", "to": "approved", "action": "approve", "permission": "bg:approve"},
+			{"from": "approved", "to": "active", "action": "activate", "permission": "bg:approve"},
+			{"from": "active", "to": "renewed", "action": "renew", "permission": "bg:renew"},
+			{"from": "active", "to": "claimed", "action": "claim", "permission": "bg:claim"},
+			{"from": "active", "to": "released", "action": "release", "permission": "bg:release"}
+		]`),
+		IsActive: true,
+	}
+
+	lcWorkflow := models.WorkflowDefinition{
+		Code:         "lc_lifecycle",
+		Name:         "Letter of Credit Lifecycle",
+		Description:  "Workflow for LC issue, amendment, negotiation, and claim",
+		Version:      "1.0.0",
+		InitialState: "draft",
+		States: []byte(`[
+			{"code": "draft", "name": "Draft", "is_final": false},
+			{"code": "submitted", "name": "Submitted", "is_final": false},
+			{"code": "issued", "name": "Issued", "is_final": false},
+			{"code": "amended", "name": "Amended", "is_final": false},
+			{"code": "negotiation", "name": "Negotiation", "is_final": false},
+			{"code": "claimed", "name": "Claimed", "is_final": true}
+		]`),
+		Transitions: []byte(`[
+			{"from": "draft", "to": "submitted", "action": "submit", "permission": "lc:create"},
+			{"from": "submitted", "to": "issued", "action": "issue", "permission": "lc:issue"},
+			{"from": "issued", "to": "amended", "action": "amendment", "permission": "lc:amendment"},
+			{"from": "issued", "to": "negotiation", "action": "negotiation", "permission": "lc:negotiation"},
+			{"from": "amended", "to": "negotiation", "action": "negotiation", "permission": "lc:negotiation"},
+			{"from": "negotiation", "to": "claimed", "action": "claim", "permission": "lc:claim"}
+		]`),
+		IsActive: true,
+	}
+
+	insurancePolicyWorkflow := models.WorkflowDefinition{
+		Code:         "insurance_policy_lifecycle",
+		Name:         "Insurance Policy Lifecycle",
+		Description:  "Workflow for insurance policy issue and renewals",
+		Version:      "1.0.0",
+		InitialState: "draft",
+		States: []byte(`[
+			{"code": "draft", "name": "Draft", "is_final": false},
+			{"code": "active", "name": "Active", "is_final": false},
+			{"code": "renewed", "name": "Renewed", "is_final": false},
+			{"code": "expired", "name": "Expired", "is_final": true}
+		]`),
+		Transitions: []byte(`[
+			{"from": "draft", "to": "active", "action": "activate", "permission": "insurance:create"},
+			{"from": "active", "to": "renewed", "action": "renew", "permission": "insurance:renew"},
+			{"from": "active", "to": "expired", "action": "expire", "permission": "insurance:update"},
+			{"from": "renewed", "to": "expired", "action": "expire", "permission": "insurance:update"}
+		]`),
+		IsActive: true,
+	}
+
+	insuranceClaimWorkflow := models.WorkflowDefinition{
+		Code:         "insurance_claim_lifecycle",
+		Name:         "Insurance Claim Lifecycle",
+		Description:  "Workflow for insurance claim approval and settlement",
+		Version:      "1.0.0",
+		InitialState: "filed",
+		States: []byte(`[
+			{"code": "filed", "name": "Filed", "is_final": false},
+			{"code": "approved", "name": "Approved", "is_final": false},
+			{"code": "settled", "name": "Settled", "is_final": true},
+			{"code": "rejected", "name": "Rejected", "is_final": true}
+		]`),
+		Transitions: []byte(`[
+			{"from": "filed", "to": "approved", "action": "approve", "permission": "insurance:approve_claim"},
+			{"from": "filed", "to": "rejected", "action": "reject", "permission": "insurance:approve_claim"},
+			{"from": "approved", "to": "settled", "action": "settle", "permission": "insurance:approve_claim"}
+		]`),
+		IsActive: true,
+	}
+
+	workflows := []models.WorkflowDefinition{
+		approvalWorkflow,
+		multiLevelWorkflow,
+		taskWorkflow,
+		bgWorkflow,
+		lcWorkflow,
+		insurancePolicyWorkflow,
+		insuranceClaimWorkflow,
+	}
 
 	log.Printf("Attempting to seed %d workflows...", len(workflows))
 
@@ -718,6 +875,373 @@ func SeedWorkflows() {
 	log.Printf("Total workflows in database after seeding: %d", count)
 
 	log.Println("Workflow seeding completed")
+}
+
+func SeedFinanceModulesAndForms() {
+	log.Println("Seeding finance module and forms...")
+
+	financeModule := models.Module{
+		Code:               "finance",
+		Name:               "Finance",
+		Description:        "Financial operations including BG, LC, and Insurance",
+		Icon:               "account_balance",
+		Route:              "/finance",
+		DisplayOrder:       40,
+		IsActive:           true,
+		RequiredPermission: "finance:read",
+		AccessibleVerticals: models.StringArray{
+			"HO", "WATER", "SOLAR", "CONTRACTORS",
+		},
+	}
+
+	var existingModule models.Module
+	if err := DB.Where("code = ?", financeModule.Code).First(&existingModule).Error; err != nil {
+		if err := DB.Create(&financeModule).Error; err != nil {
+			log.Printf("❌ Error creating finance module: %v", err)
+			return
+		}
+		existingModule = financeModule
+		log.Printf("✅ Created finance module: %s", existingModule.Code)
+	} else {
+		updates := map[string]interface{}{
+			"name":                 financeModule.Name,
+			"description":          financeModule.Description,
+			"icon":                 financeModule.Icon,
+			"route":                financeModule.Route,
+			"display_order":        financeModule.DisplayOrder,
+			"required_permission":  financeModule.RequiredPermission,
+			"accessible_verticals": financeModule.AccessibleVerticals,
+			"is_active":            true,
+		}
+		if err := DB.Model(&existingModule).Updates(updates).Error; err != nil {
+			log.Printf("⚠️ Failed to refresh finance module metadata: %v", err)
+		}
+	}
+
+	workflowMap := map[string]*uuid.UUID{}
+	for _, code := range []string{"bg_lifecycle", "lc_lifecycle", "insurance_policy_lifecycle", "insurance_claim_lifecycle"} {
+		var wf models.WorkflowDefinition
+		if err := DB.Where("code = ?", code).First(&wf).Error; err == nil {
+			workflowMap[code] = &wf.ID
+		}
+	}
+
+	type financeFormSeed struct {
+		Code               string
+		Title              string
+		Description        string
+		Route              string
+		Icon               string
+		DisplayOrder       int
+		RequiredPermission string
+		WorkflowCode       string
+		InitialState       string
+		Steps              string
+	}
+
+	forms := []financeFormSeed{
+		{
+			Code:               "bg_application_form",
+			Title:              "BG",
+			Description:        "Master form for bank guarantees",
+			Route:              "/form/bg_application_form",
+			Icon:               "shield",
+			DisplayOrder:       1,
+			RequiredPermission: "bg:create",
+			WorkflowCode:       "bg_lifecycle",
+			InitialState:       "draft",
+			Steps:              `[
+				{
+					"id": "bg_general_information",
+					"title": "General Information",
+					"fields": [
+						{"id": "bg_number", "type": "text", "label": "BG Number", "required": true, "placeholder": "Enter BG number"},
+						{"id": "bg_type", "type": "dropdown", "label": "BG Type", "required": true, "options": [
+							{"label": "Performance", "value": "performance"},
+							{"label": "Financial", "value": "financial"},
+							{"label": "Bid Bond", "value": "bid_bond"},
+							{"label": "Advance", "value": "advance"},
+							{"label": "Retention", "value": "retention"}
+						]},
+						{"id": "bg_date", "type": "date", "label": "BG Date", "required": true},
+						{"id": "effective_date", "type": "date", "label": "Effective Date", "required": true},
+						{"id": "expiry_date", "type": "date", "label": "Expiry Date", "required": true}
+					]
+				},
+				{
+					"id": "bg_financial_information",
+					"title": "Financial Information",
+					"fields": [
+						{"id": "claim_expiry_date", "type": "date", "label": "Claim Expiry Date", "required": true},
+						{"id": "status", "type": "dropdown", "label": "Status", "required": true, "options": [
+							{"label": "Draft", "value": "draft"},
+							{"label": "Submitted", "value": "submitted"},
+							{"label": "Approved", "value": "approved"},
+							{"label": "Active", "value": "active"},
+							{"label": "Claimed", "value": "claimed"},
+							{"label": "Released", "value": "released"},
+							{"label": "Expired", "value": "expired"}
+						]},
+						{"id": "currency", "type": "dropdown", "label": "Currency", "required": true, "defaultValue": "INR", "options": [
+							{"label": "INR", "value": "INR"},
+							{"label": "USD", "value": "USD"},
+							{"label": "EUR", "value": "EUR"},
+							{"label": "GBP", "value": "GBP"}
+						]},
+						{"id": "bg_amount", "type": "number", "label": "BG Amount", "required": true, "min": 0, "step": 0.01, "prefix": "Amount"}
+					]
+				}
+			]`,
+		},
+		{
+			Code:               "bg_claims_form",
+			Title:              "BG Claims",
+			Description:        "Child form to track multiple claims against one BG",
+			Route:              "/form/bg_claims_form",
+			Icon:               "assignment_late",
+			DisplayOrder:       2,
+			RequiredPermission: "bg:claim",
+			WorkflowCode:       "",
+			InitialState:       "draft",
+			Steps:              `[
+				{
+					"id": "bg_claim_reference",
+					"title": "Claim Reference",
+					"fields": [
+						{
+							"id": "bg_number",
+							"type": "dropdown",
+							"label": "BG Number",
+							"required": true,
+							"dataSource": "api",
+							"apiEndpoint": "business/{vertical}/forms/bg_application_form/lookup",
+							"displayField": "bg_number",
+							"valueField": "id"
+						},
+						{"id": "claim_number", "type": "text", "label": "Claim Number", "required": true, "placeholder": "Enter or paste claim reference"},
+						{"id": "claim_date", "type": "date", "label": "Claim Date", "required": true},
+						{"id": "claim_amount", "type": "number", "label": "Claim Amount", "required": true, "min": 0, "step": 0.01},
+						{"id": "claim_type", "type": "dropdown", "label": "Claim Type", "options": [
+							{"label": "Full Claim", "value": "full"},
+							{"label": "Partial Claim", "value": "partial"},
+							{"label": "Invocation", "value": "invocation"},
+							{"label": "Recovery", "value": "recovery"}
+						]}
+					]
+				},
+				{
+					"id": "bg_claim_settlement",
+					"title": "Review and Settlement",
+					"fields": [
+						{"id": "claim_reason", "type": "textarea", "label": "Claim Reason", "rows": 4},
+						{"id": "claim_reference_no", "type": "text", "label": "Claim Reference No"},
+						{"id": "claim_status", "type": "dropdown", "label": "Claim Status", "options": [
+							{"label": "Filed", "value": "filed"},
+							{"label": "Under Review", "value": "under_review"},
+							{"label": "Approved", "value": "approved"},
+							{"label": "Rejected", "value": "rejected"},
+							{"label": "Settled", "value": "settled"}
+						]},
+						{"id": "approved_amount", "type": "number", "label": "Approved Amount", "min": 0, "step": 0.01, "visible": {"field": "claim_status", "operator": "not_equals", "value": "filed"}},
+						{"id": "settlement_date", "type": "date", "label": "Settlement Date", "visible": {"field": "claim_status", "operator": "equals", "value": "settled"}},
+						{"id": "settlement_amount", "type": "number", "label": "Settlement Amount", "min": 0, "step": 0.01, "visible": {"field": "claim_status", "operator": "equals", "value": "settled"}},
+						{"id": "bank_reference", "type": "text", "label": "Bank Reference"},
+						{"id": "remarks", "type": "textarea", "label": "Remarks", "rows": 4},
+						{"id": "attachment", "type": "file_upload", "label": "Attachment", "accept": ".pdf,image/*", "maxFiles": 3, "maxSizePerFile": 10485760}
+					]
+				}
+			]`,
+		},
+		{
+			Code:               "lc_application_form",
+			Title:              "LC",
+			Description:        "Master form for letters of credit",
+			Route:              "/form/lc_application_form",
+			Icon:               "receipt_long",
+			DisplayOrder:       3,
+			RequiredPermission: "lc:create",
+			WorkflowCode:       "lc_lifecycle",
+			InitialState:       "draft",
+			Steps:              `[
+				{
+					"id": "lc_general_information",
+					"title": "General Information",
+					"fields": [
+						{"id": "lc_number", "type": "text", "label": "LC Number", "required": true, "placeholder": "Enter LC number"},
+						{"id": "lc_type", "type": "dropdown", "label": "LC Type", "required": true, "options": [
+							{"label": "Sight", "value": "sight"},
+							{"label": "Usance", "value": "usance"},
+							{"label": "Standby", "value": "standby"},
+							{"label": "Revolving", "value": "revolving"}
+						]},
+						{"id": "lc_date", "type": "date", "label": "LC Date", "required": true},
+						{"id": "effective_date", "type": "date", "label": "Effective Date", "required": true},
+						{"id": "expiry_date", "type": "date", "label": "Expiry Date", "required": true}
+					]
+				},
+				{
+					"id": "lc_financial_information",
+					"title": "Financial Information",
+					"fields": [
+						{"id": "currency", "type": "dropdown", "label": "Currency", "required": true, "defaultValue": "INR", "options": [
+							{"label": "INR", "value": "INR"},
+							{"label": "USD", "value": "USD"},
+							{"label": "EUR", "value": "EUR"},
+							{"label": "GBP", "value": "GBP"}
+						]},
+						{"id": "lc_amount", "type": "number", "label": "LC Amount", "required": true, "min": 0, "step": 0.01},
+						{"id": "status", "type": "dropdown", "label": "Status", "required": true, "options": [
+							{"label": "Draft", "value": "draft"},
+							{"label": "Submitted", "value": "submitted"},
+							{"label": "Issued", "value": "issued"},
+							{"label": "Negotiated", "value": "negotiated"},
+							{"label": "Utilized", "value": "utilized"},
+							{"label": "Closed", "value": "closed"},
+							{"label": "Expired", "value": "expired"}
+						]}
+					]
+				}
+			]`,
+		},
+		{
+			Code:               "lc_utilizations_form",
+			Title:              "LC Utilizations",
+			Description:        "Child form to capture utilization entries against one LC",
+			Route:              "/form/lc_utilizations_form",
+			Icon:               "payments",
+			DisplayOrder:       4,
+			RequiredPermission: "lc:create",
+			WorkflowCode:       "",
+			InitialState:       "draft",
+			Steps:              `[
+				{
+					"id": "lc_utilization_reference",
+					"title": "LC Reference",
+					"fields": [
+						{
+							"id": "lc_number",
+							"type": "dropdown",
+							"label": "LC Number",
+							"required": true,
+							"dataSource": "api",
+							"apiEndpoint": "business/{vertical}/forms/lc_application_form/lookup",
+							"displayField": "lc_number",
+							"valueField": "id"
+						},
+						{"id": "utilization_no", "type": "text", "label": "Utilization No", "required": true, "placeholder": "Enter or paste utilization reference"},
+						{"id": "invoice_number", "type": "text", "label": "Invoice Number", "required": true},
+						{"id": "invoice_date", "type": "date", "label": "Invoice Date"},
+						{"id": "bill_reference", "type": "text", "label": "Bill Reference"},
+						{"id": "shipment_date", "type": "date", "label": "Shipment Date"}
+					]
+				},
+				{
+					"id": "lc_utilization_financials",
+					"title": "Financial and Document Tracking",
+					"fields": [
+						{"id": "bill_amount", "type": "number", "label": "Bill Amount", "required": true, "min": 0, "step": 0.01},
+						{"id": "utilized_amount", "type": "number", "label": "Utilized Amount", "required": true, "min": 0, "step": 0.01},
+						{"id": "balance_lc_amount", "type": "number", "label": "Balance LC Amount", "min": 0, "step": 0.01},
+						{"id": "payment_due_date", "type": "date", "label": "Payment Due Date"},
+						{"id": "payment_status", "type": "dropdown", "label": "Payment Status", "options": [
+							{"label": "Pending", "value": "pending"},
+							{"label": "Partially Paid", "value": "partially_paid"},
+							{"label": "Paid", "value": "paid"},
+							{"label": "Overdue", "value": "overdue"}
+						]},
+						{"id": "payment_date", "type": "date", "label": "Payment Date", "visible": {"field": "payment_status", "operator": "equals", "value": "paid"}},
+						{"id": "document_status", "type": "dropdown", "label": "Document Status", "options": [
+							{"label": "Pending", "value": "pending"},
+							{"label": "Received", "value": "received"},
+							{"label": "Discrepant", "value": "discrepant"},
+							{"label": "Accepted", "value": "accepted"}
+						]},
+						{"id": "bank_reference", "type": "text", "label": "Bank Reference"},
+						{"id": "remarks", "type": "textarea", "label": "Remarks", "rows": 4},
+						{"id": "attachment", "type": "file_upload", "label": "Attachment", "accept": ".pdf,image/*", "maxFiles": 3, "maxSizePerFile": 10485760}
+					]
+				}
+			]`,
+		},
+	}
+
+	for _, f := range forms {
+		formSchema := json.RawMessage(fmt.Sprintf(`{"steps":%s}`, f.Steps))
+		steps := json.RawMessage(f.Steps)
+		wfID := workflowMap[f.WorkflowCode]
+		if f.WorkflowCode != "" && wfID == nil {
+			log.Printf("⚠️ Workflow %s not found for form %s", f.WorkflowCode, f.Code)
+		}
+
+		payload := models.AppForm{
+			Code:               f.Code,
+			Title:              f.Title,
+			Description:        f.Description,
+			Version:            "1.0.0",
+			ModuleID:           existingModule.ID,
+			Route:              f.Route,
+			Icon:               f.Icon,
+			DisplayOrder:       f.DisplayOrder,
+			RequiredPermission: f.RequiredPermission,
+			AccessibleVerticals: models.StringArray{
+				"HO", "WATER", "SOLAR", "CONTRACTORS",
+			},
+			FormSchema:    formSchema,
+			Steps:         steps,
+			CoreFields:    json.RawMessage(`[]`),
+			Validations:   json.RawMessage(`{}`),
+			Dependencies:  json.RawMessage(`[]`),
+			WorkflowID:    wfID,
+			InitialState:  f.InitialState,
+			DBTableName:   f.Code,
+			SchemaVersion: 1,
+			IsActive:      true,
+			Audit:         true,
+			CreatedBy:     "seeder",
+		}
+
+		var existing models.AppForm
+		if err := DB.Where("code = ?", f.Code).First(&existing).Error; err != nil {
+			if err := DB.Create(&payload).Error; err != nil {
+				log.Printf("❌ Error creating form %s: %v", f.Code, err)
+				continue
+			}
+			log.Printf("✅ Created finance form: %s", f.Code)
+			continue
+		}
+
+		updates := map[string]interface{}{
+			"title":                payload.Title,
+			"description":          payload.Description,
+			"module_id":            payload.ModuleID,
+			"route":                payload.Route,
+			"icon":                 payload.Icon,
+			"display_order":        payload.DisplayOrder,
+			"required_permission":  payload.RequiredPermission,
+			"accessible_verticals": payload.AccessibleVerticals,
+			"form_schema":          payload.FormSchema,
+			"steps":                payload.Steps,
+			"validations":          payload.Validations,
+			"dependencies":         payload.Dependencies,
+			"workflow_id":          payload.WorkflowID,
+			"initial_state":        payload.InitialState,
+			"db_table_name":        payload.DBTableName,
+			"is_active":            true,
+			"audit":                true,
+		}
+		if err := DB.Model(&existing).Updates(updates).Error; err != nil {
+			log.Printf("⚠️ Failed updating finance form %s: %v", f.Code, err)
+		}
+	}
+
+	legacyFormCodes := []string{"insurance_policy_form", "insurance_claim_form"}
+	if err := DB.Model(&models.AppForm{}).
+		Where("code IN ?", legacyFormCodes).
+		Updates(map[string]interface{}{"is_active": false}).Error; err != nil {
+		log.Printf("⚠️ Failed deactivating legacy finance forms: %v", err)
+	}
+
+	log.Println("Finance module/form seeding completed")
 }
 
 // =====================================================

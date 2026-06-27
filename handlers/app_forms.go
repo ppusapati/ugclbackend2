@@ -244,7 +244,9 @@ func GetFormsForVertical(w http.ResponseWriter, r *http.Request) {
 	// activate forms from mobile and inactive forms break the mobile UX.
 	// Web super admins see ALL forms (active + inactive) so they can manage them.
 	// Web regular users only see active forms.
-	isSuperAdmin := user.HasPermission("admin_all") || user.HasPermission("super_admin") || user.HasPermission("*:*:*")
+	// NOTE: use userCtx.IsSuperAdmin (checks RoleModel.Name) instead of HasPermission
+	// which only inspects stored permission records and misses the super_admin role.
+	isSuperAdmin := userCtx.IsSuperAdmin
 	filterInactive := isMobileClient || !isSuperAdmin
 
 	// Get forms for this vertical using JSONB contains operator.
@@ -260,10 +262,12 @@ func GetFormsForVertical(w http.ResponseWriter, r *http.Request) {
 		filterArgs = append(filterArgs, token)
 	}
 
-	filterCondition := "accessible_verticals = '[]'::jsonb"
+	// Cast to jsonb so the query is resilient if production has json/jsonb drift.
+	verticalsExpr := "COALESCE(accessible_verticals::jsonb, '[]'::jsonb)"
+	filterCondition := verticalsExpr + " = '[]'::jsonb"
 	if len(arrayPlaceholders) > 0 {
-		// JSONB ?| checks whether any candidate token exists in top-level array values.
-		filterCondition = filterCondition + " OR accessible_verticals ?| ARRAY[" + strings.Join(arrayPlaceholders, ",") + "]"
+		// jsonb_exists_any avoids placeholder collisions with the ?| operator in GORM raw SQL.
+		filterCondition = filterCondition + " OR jsonb_exists_any(" + verticalsExpr + ", ARRAY[" + strings.Join(arrayPlaceholders, ",") + "]::text[])"
 	}
 
 	query := config.DB.
@@ -320,7 +324,11 @@ func GetFormsForVertical(w http.ResponseWriter, r *http.Request) {
 
 	// userCanAccess returns true if the user holds the required permission via
 	// their global role OR via any business role in one of the matched verticals.
+	// Super admins bypass all permission checks (their role name grants everything).
 	userCanAccess := func(permission string) bool {
+		if isSuperAdmin {
+			return true
+		}
 		if user.HasPermission(permission) {
 			return true
 		}
@@ -578,6 +586,159 @@ func GetAllAppForms(w http.ResponseWriter, r *http.Request) {
 			"count": len(formDTOs),
 		})
 	}
+}
+
+func deriveReadPermission(permission string) string {
+	trimmed := strings.TrimSpace(permission)
+	parts := strings.SplitN(trimmed, ":", 2)
+	if len(parts) != 2 || parts[0] == "" {
+		return trimmed
+	}
+	return parts[0] + ":read"
+}
+
+func normalizeLookupFieldValue(value interface{}) interface{} {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		if name, ok := typed["name"]; ok && name != nil {
+			return fmt.Sprint(name)
+		}
+		if id, ok := typed["id"]; ok && id != nil {
+			return fmt.Sprint(id)
+		}
+		return typed
+	case []interface{}:
+		flattened := make([]interface{}, 0, len(typed))
+		for _, item := range typed {
+			flattened = append(flattened, normalizeLookupFieldValue(item))
+		}
+		return flattened
+	default:
+		return value
+	}
+}
+
+// GetFormLookupOptions exposes flattened dedicated-form submissions as dropdown options.
+// GET /api/v1/business/{businessCode}/forms/{formCode}/lookup
+func GetFormLookupOptions(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetClaims(r)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	vars := mux.Vars(r)
+	verticalCode := vars["businessCode"]
+	formCode := vars["formCode"]
+	if strings.TrimSpace(verticalCode) == "" || strings.TrimSpace(formCode) == "" {
+		http.Error(w, "business code and form code are required", http.StatusBadRequest)
+		return
+	}
+
+	context := middleware.GetUserBusinessContext(r)
+	if context == nil {
+		http.Error(w, "business context not found", http.StatusBadRequest)
+		return
+	}
+
+	businessID, ok := context["business_id"].(uuid.UUID)
+	if !ok {
+		http.Error(w, "invalid business context", http.StatusInternalServerError)
+		return
+	}
+
+	authService := middleware.NewAuthService()
+	userCtx, err := authService.LoadUserContext(r)
+	if err != nil {
+		http.Error(w, "user not found", http.StatusUnauthorized)
+		return
+	}
+	user := userCtx.User
+
+	var form models.AppForm
+	if err := config.DB.Preload("Module").Where("code = ? AND is_active = ?", formCode, true).First(&form).Error; err != nil {
+		http.Error(w, "form not found", http.StatusNotFound)
+		return
+	}
+
+	if !isPublicFormPermission(form.RequiredPermission) {
+		var verticals []models.BusinessVertical
+		_ = config.DB.Where("LOWER(code) = LOWER(?)", verticalCode).Find(&verticals)
+
+		requestedVertical := strings.ToLower(strings.TrimSpace(verticalCode))
+		verticalIDSet := make(map[uuid.UUID]struct{}, len(verticals)+len(user.UserBusinessRoles))
+		for _, v := range verticals {
+			verticalIDSet[v.ID] = struct{}{}
+		}
+		for _, ubr := range user.UserBusinessRoles {
+			if !ubr.IsActive || ubr.BusinessRole.ID == uuid.Nil {
+				continue
+			}
+			roleVerticalID := strings.ToLower(strings.TrimSpace(ubr.BusinessRole.BusinessVerticalID.String()))
+			roleVerticalCode := strings.ToLower(strings.TrimSpace(ubr.BusinessRole.BusinessVertical.Code))
+			if requestedVertical == roleVerticalID || requestedVertical == roleVerticalCode {
+				verticalIDSet[ubr.BusinessRole.BusinessVerticalID] = struct{}{}
+			}
+		}
+
+		fallbackReadPermission := deriveReadPermission(form.RequiredPermission)
+		hasAccess := user.HasPermission(form.RequiredPermission) || user.HasPermission(fallbackReadPermission)
+		if !hasAccess {
+			for vid := range verticalIDSet {
+				if user.HasPermissionInVertical(form.RequiredPermission, vid) || user.HasPermissionInVertical(fallbackReadPermission, vid) {
+					hasAccess = true
+					break
+				}
+			}
+		}
+		if !hasAccess {
+			http.Error(w, "forbidden - insufficient permissions", http.StatusForbidden)
+			return
+		}
+	}
+
+	filters := make(map[string]interface{})
+	if state := strings.TrimSpace(r.URL.Query().Get("state")); state != "" {
+		filters["current_state"] = state
+	}
+
+	records, err := getWorkflowEngineDedicated().GetSubmissionsByFormDedicated(formCode, businessID, filters)
+	if err != nil {
+		log.Printf("❌ Error fetching lookup options for form %s: %v", formCode, err)
+		http.Error(w, "failed to fetch lookup options", http.StatusInternalServerError)
+		return
+	}
+
+	labelField := strings.TrimSpace(r.URL.Query().Get("label_field"))
+	options := make([]map[string]interface{}, 0, len(records))
+	for _, record := range records {
+		item := map[string]interface{}{
+			"id":            record.ID.String(),
+			"value":         record.ID.String(),
+			"current_state": record.CurrentState,
+		}
+		for key, value := range record.FormData {
+			item[key] = normalizeLookupFieldValue(value)
+		}
+		if labelField != "" {
+			if value, exists := item[labelField]; exists {
+				item["label"] = fmt.Sprint(value)
+			}
+		}
+		options = append(options, item)
+	}
+
+	if labelField != "" {
+		sort.SliceStable(options, func(i, j int) bool {
+			return fmt.Sprint(options[i]["label"]) < fmt.Sprint(options[j]["label"])
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"data":  options,
+		"count": len(options),
+	})
 }
 
 // UpdateFormVerticalAccess updates which verticals have access to a form (admin only)

@@ -53,6 +53,7 @@ func RegisterBusinessRoutes(r *mux.Router) {
 	registerBusinessSiteRoutes(business)
 	registerBusinessIntegrationRoutes(business)
 	registerBusinessAttendanceRoutes(business)
+	registerBusinessFinanceRoutes(business)
 	registerSolarRoutes(business)
 	registerWaterRoutes(business)
 }
@@ -168,6 +169,7 @@ func registerBusinessFormRoutes(business *mux.Router) {
 	// Form configuration
 	business.HandleFunc("/forms", handlers.GetFormsForVertical).Methods("GET")
 	business.HandleFunc("/forms/{code}", handlers.GetFormByCode).Methods("GET")
+	business.HandleFunc("/forms/{formCode}/lookup", handlers.GetFormLookupOptions).Methods("GET")
 
 	// Generic table form submissions
 	business.HandleFunc("/forms/{formCode}/submissions", handlers.CreateFormSubmission).Methods("POST")
@@ -239,6 +241,97 @@ func registerBusinessAttendanceRoutes(business *mux.Router) {
 	business.Handle("/attendance/users/{userId}/timeline",
 		middleware.RequireBusinessPermission("attendance:read")(
 			http.HandlerFunc(handlers.GetEmployeeAttendanceTimeline))).Methods("GET")
+}
+
+func registerBusinessFinanceRoutes(business *mux.Router) {
+	// Bank Guarantees
+	business.Handle("/bank-guarantees",
+		middleware.RequireBusinessPermission("bg:read")(
+			http.HandlerFunc(handlers.ListBankGuarantees))).Methods("GET")
+	business.Handle("/bank-guarantees",
+		middleware.RequireBusinessPermission("bg:create")(
+			http.HandlerFunc(handlers.CreateBankGuarantee))).Methods("POST")
+	business.Handle("/bank-guarantees/{id}",
+		middleware.RequireBusinessPermission("bg:read")(
+			http.HandlerFunc(handlers.GetBankGuarantee))).Methods("GET")
+	business.Handle("/bank-guarantees/{id}",
+		middleware.RequireBusinessPermission("bg:update")(
+			http.HandlerFunc(handlers.UpdateBankGuarantee))).Methods("PUT")
+	business.Handle("/bank-guarantees/{id}/approve",
+		middleware.RequireBusinessPermission("bg:approve")(
+			http.HandlerFunc(handlers.ApproveBankGuarantee))).Methods("POST")
+	business.Handle("/bank-guarantees/{id}/claim",
+		middleware.RequireBusinessPermission("bg:claim")(
+			http.HandlerFunc(handlers.ClaimBankGuarantee))).Methods("POST")
+	business.Handle("/bank-guarantees/{id}/release",
+		middleware.RequireBusinessPermission("bg:release")(
+			http.HandlerFunc(handlers.ReleaseBankGuarantee))).Methods("POST")
+	business.Handle("/bank-guarantees/{id}/renew",
+		middleware.RequireBusinessPermission("bg:renew")(
+			http.HandlerFunc(handlers.RenewBankGuarantee))).Methods("POST")
+
+	// Letters of Credit
+	business.Handle("/letters-of-credit",
+		middleware.RequireBusinessPermission("lc:read")(
+			http.HandlerFunc(handlers.ListLettersOfCredit))).Methods("GET")
+	business.Handle("/letters-of-credit",
+		middleware.RequireBusinessPermission("lc:create")(
+			http.HandlerFunc(handlers.CreateLetterOfCredit))).Methods("POST")
+	business.Handle("/letters-of-credit/{id}",
+		middleware.RequireBusinessPermission("lc:read")(
+			http.HandlerFunc(handlers.GetLetterOfCredit))).Methods("GET")
+	business.Handle("/letters-of-credit/{id}",
+		middleware.RequireBusinessPermission("lc:update")(
+			http.HandlerFunc(handlers.UpdateLetterOfCredit))).Methods("PUT")
+	business.Handle("/letters-of-credit/{id}/issue",
+		middleware.RequireBusinessPermission("lc:issue")(
+			http.HandlerFunc(handlers.IssueLetterOfCredit))).Methods("POST")
+	business.Handle("/letters-of-credit/{id}/amendment",
+		middleware.RequireBusinessPermission("lc:amendment")(
+			http.HandlerFunc(handlers.AmendLetterOfCredit))).Methods("POST")
+	business.Handle("/letters-of-credit/{id}/negotiation",
+		middleware.RequireBusinessPermission("lc:negotiation")(
+			http.HandlerFunc(handlers.NegotiateLetterOfCredit))).Methods("POST")
+	business.Handle("/letters-of-credit/{id}/claim",
+		middleware.RequireBusinessPermission("lc:claim")(
+			http.HandlerFunc(handlers.ClaimLetterOfCredit))).Methods("POST")
+
+	// Insurance Policies
+	business.Handle("/insurance-policies",
+		middleware.RequireBusinessPermission("insurance:read")(
+			http.HandlerFunc(handlers.ListInsurancePolicies))).Methods("GET")
+	business.Handle("/insurance-policies",
+		middleware.RequireBusinessPermission("insurance:create")(
+			http.HandlerFunc(handlers.CreateInsurancePolicy))).Methods("POST")
+	business.Handle("/insurance-policies/{id}",
+		middleware.RequireBusinessPermission("insurance:read")(
+			http.HandlerFunc(handlers.GetInsurancePolicy))).Methods("GET")
+	business.Handle("/insurance-policies/{id}",
+		middleware.RequireBusinessPermission("insurance:update")(
+			http.HandlerFunc(handlers.UpdateInsurancePolicy))).Methods("PUT")
+	business.Handle("/insurance-policies/{id}/renew",
+		middleware.RequireBusinessPermission("insurance:renew")(
+			http.HandlerFunc(handlers.RenewInsurancePolicy))).Methods("POST")
+
+	// Insurance Claims
+	business.Handle("/insurance-claims",
+		middleware.RequireBusinessPermission("insurance:read")(
+			http.HandlerFunc(handlers.ListInsuranceClaims))).Methods("GET")
+	business.Handle("/insurance-claims",
+		middleware.RequireBusinessPermission("insurance:file_claim")(
+			http.HandlerFunc(handlers.CreateInsuranceClaim))).Methods("POST")
+	business.Handle("/insurance-claims/{id}",
+		middleware.RequireBusinessPermission("insurance:read")(
+			http.HandlerFunc(handlers.GetInsuranceClaim))).Methods("GET")
+	business.Handle("/insurance-claims/{id}",
+		middleware.RequireBusinessPermission("insurance:approve_claim")(
+			http.HandlerFunc(handlers.UpdateInsuranceClaim))).Methods("PUT")
+	business.Handle("/insurance-claims/{id}/approve",
+		middleware.RequireBusinessPermission("insurance:approve_claim")(
+			http.HandlerFunc(handlers.ApproveInsuranceClaim))).Methods("POST")
+	business.Handle("/insurance-claims/{id}/settle",
+		middleware.RequireBusinessPermission("insurance:approve_claim")(
+			http.HandlerFunc(handlers.SettleInsuranceClaim))).Methods("POST")
 }
 
 // registerSolarRoutes registers Solar Farm specific routes

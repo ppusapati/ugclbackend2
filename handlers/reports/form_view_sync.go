@@ -6,12 +6,18 @@ import (
 	"hash/fnv"
 	"regexp"
 	"strings"
+	"sync"
 
 	"gorm.io/gorm"
 	"p9e.in/ugcl/models"
 )
 
 var reportViewIdentifierPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+var (
+	reportViewSyncCacheMu sync.RWMutex
+	reportViewSyncCache   = map[string]uint32{}
+)
 
 // dropdownResolution describes how to resolve a dropdown UUID to its display label in SQL.
 type dropdownResolution struct {
@@ -42,6 +48,11 @@ func inferTableNameFromEndpointForView(endpoint string) string {
 func resolveDropdownEndpoint(apiEndpoint string) *dropdownResolution {
 	norm := strings.ToLower(strings.TrimSpace(apiEndpoint))
 	if norm == "" {
+		return nil
+	}
+	// Dynamic form lookup endpoints return synthesized payloads (id + form_data fields),
+	// not a physical SQL table with display columns. Skip SQL JOIN inference here.
+	if strings.Contains(norm, "/forms/") && strings.Contains(norm, "/lookup") {
 		return nil
 	}
 	if strings.Contains(norm, "/sites") {
@@ -199,25 +210,79 @@ func EnsureReportFormViewForForm(db *gorm.DB, form models.AppForm) (string, erro
 		return "", err
 	}
 
+	signature := reportFormSyncSignature(form)
+	if isReportViewSyncCached(viewName, signature) {
+		exists, err := reportViewExists(db, viewName)
+		if err == nil && exists {
+			return viewName, nil
+		}
+	}
+
 	sql, err := buildReportFormViewSQL(form, viewName)
 	if err != nil {
 		return "", err
 	}
 
-	// sql is two semicolon-separated statements: DROP VIEW IF EXISTS + CREATE VIEW.
-	// Execute them individually so GORM does not choke on the multi-statement string.
-	parts := strings.SplitN(sql, ";", 2)
-	for _, stmt := range parts {
-		stmt = strings.TrimSpace(stmt)
-		if stmt == "" {
-			continue
+	// Use a transaction-scoped advisory lock per view name to prevent concurrent
+	// dashboard/report requests from racing on DROP/CREATE and triggering 42P07.
+	err = db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec(`SELECT pg_advisory_xact_lock(hashtext(?), 0)`, viewName).Error; err != nil {
+			return fmt.Errorf("failed to lock report view %s for sync: %w", viewName, err)
 		}
-		if err := db.Exec(stmt).Error; err != nil {
-			return "", fmt.Errorf("failed to create/update report view %s: %w", viewName, err)
+
+		// sql is two semicolon-separated statements: DROP VIEW IF EXISTS + CREATE VIEW.
+		// Execute them individually so GORM does not choke on the multi-statement string.
+		parts := strings.SplitN(sql, ";", 2)
+		for _, stmt := range parts {
+			stmt = strings.TrimSpace(stmt)
+			if stmt == "" {
+				continue
+			}
+			if err := tx.Exec(stmt).Error; err != nil {
+				return fmt.Errorf("failed to create/update report view %s: %w", viewName, err)
+			}
 		}
+
+		return nil
+	})
+	if err != nil {
+		return "", err
 	}
 
+	setReportViewSyncCached(viewName, signature)
+
 	return viewName, nil
+}
+
+func reportFormSyncSignature(form models.AppForm) uint32 {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(strings.TrimSpace(strings.ToLower(form.Code))))
+	_, _ = h.Write(form.FormSchema)
+	_, _ = h.Write(form.Steps)
+	_, _ = h.Write(form.CoreFields)
+	return h.Sum32()
+}
+
+func isReportViewSyncCached(viewName string, signature uint32) bool {
+	reportViewSyncCacheMu.RLock()
+	defer reportViewSyncCacheMu.RUnlock()
+	v, ok := reportViewSyncCache[viewName]
+	return ok && v == signature
+}
+
+func setReportViewSyncCached(viewName string, signature uint32) {
+	reportViewSyncCacheMu.Lock()
+	defer reportViewSyncCacheMu.Unlock()
+	reportViewSyncCache[viewName] = signature
+}
+
+func reportViewExists(db *gorm.DB, viewName string) (bool, error) {
+	qualified := fmt.Sprintf("public.%s", quoteSQLIdentifier(viewName))
+	var exists bool
+	if err := db.Raw(`SELECT to_regclass(?) IS NOT NULL`, qualified).Scan(&exists).Error; err != nil {
+		return false, err
+	}
+	return exists, nil
 }
 
 // EnsureAllActiveFormReportViews creates or refreshes report views for all active forms.

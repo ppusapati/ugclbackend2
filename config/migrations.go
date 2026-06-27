@@ -173,6 +173,20 @@ func Migrations(db *gorm.DB) error {
 				}
 
 				// =====================================================
+				// Step 11.1: Finance Instrument Tables
+				// =====================================================
+				if err := tx.AutoMigrate(
+					&models.BankGuarantee{},
+					&models.LetterOfCredit{},
+					&models.InsurancePolicy{},
+					&models.InsuranceClaim{},
+					&models.FinanceApprovalRequest{},
+					&models.FinanceApproval{},
+				); err != nil {
+					return err
+				}
+
+				// =====================================================
 				// Step 12: Chat System Tables
 				// =====================================================
 				// Create Conversation first (no circular FK now)

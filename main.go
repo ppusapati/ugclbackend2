@@ -84,10 +84,9 @@ func main() {
 		port = "8080"
 	}
 
-	// // Run seeding (will skip if data already exists)
-	// if err := config.RunAllSeeding(); err != nil {
-	// 	log.Printf("Warning: seeding encountered issues: %v", err)
-	// }
+	// Keep finance workflows and dynamic forms synchronized with code-defined seeds.
+	config.SeedWorkflows()
+	config.SeedFinanceModulesAndForms()
 
 	handler := routes.RegisterRoutes()
 

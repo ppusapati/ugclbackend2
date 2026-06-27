@@ -288,6 +288,12 @@ func (we *WorkflowEngineDedicated) resolveReferenceValue(fieldDef map[string]int
 	safeValueField := sanitizeLookupIdentifier(valueField, "id")
 	normalizedEndpoint := strings.ToLower(strings.TrimSpace(apiEndpoint))
 
+	// Dynamic form lookup endpoints are computed payloads and do not map to one SQL table.
+	// Skip direct table resolution to avoid incorrect joins like business_verticals.bg_number.
+	if strings.Contains(normalizedEndpoint, "/forms/") && strings.Contains(normalizedEndpoint, "/lookup") {
+		return ""
+	}
+
 	// First-class resolvers for common reference entities.
 	if strings.Contains(normalizedEndpoint, "/sites") {
 		return we.resolveByTable("sites", valueID, safeDisplayField, safeValueField, "deleted_at IS NULL")
