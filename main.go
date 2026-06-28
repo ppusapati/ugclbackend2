@@ -85,8 +85,8 @@ func main() {
 	}
 
 	// Keep finance workflows and dynamic forms synchronized with code-defined seeds.
-	config.SeedWorkflows()
-	config.SeedFinanceModulesAndForms()
+	// config.SeedWorkflows()
+	// config.SeedFinanceModulesAndForms()
 
 	handler := routes.RegisterRoutes()
 
