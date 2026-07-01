@@ -1,11 +1,15 @@
 package reports
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -23,6 +27,99 @@ type FieldDef struct {
 	DataType   string `json:"dataType"`
 	Source     string `json:"source"`
 	ColumnName string `json:"column_name"`
+}
+
+const (
+	defaultDashboardsCacheTTL      = 20 * time.Second
+	defaultDashboardExecuteCacheTTL = 15 * time.Second
+	defaultDashboardExecuteTimeout = 20 * time.Second
+	defaultDashboardExecWorkers    = 4
+)
+
+type dashboardCacheEntry struct {
+	payload   []byte
+	expiresAt time.Time
+}
+
+type dashboardResponseCache struct {
+	mu      sync.Mutex
+	entries map[string]dashboardCacheEntry
+}
+
+func newDashboardResponseCache() *dashboardResponseCache {
+	return &dashboardResponseCache{entries: make(map[string]dashboardCacheEntry)}
+}
+
+func (c *dashboardResponseCache) get(key string) ([]byte, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	entry, ok := c.entries[key]
+	if !ok {
+		return nil, false
+	}
+	if time.Now().After(entry.expiresAt) {
+		delete(c.entries, key)
+		return nil, false
+	}
+	return entry.payload, true
+}
+
+func (c *dashboardResponseCache) set(key string, payload []byte, ttl time.Duration) {
+	c.mu.Lock()
+	c.entries[key] = dashboardCacheEntry{payload: payload, expiresAt: time.Now().Add(ttl)}
+	c.mu.Unlock()
+}
+
+var dashboardsListCache = newDashboardResponseCache()
+var dashboardExecuteCache = newDashboardResponseCache()
+
+func envDurationOrDefault(key string, fallback time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	parsed, err := time.ParseDuration(raw)
+	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
+}
+
+func envIntOrDefault(key string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(raw)
+	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
+}
+
+func dashboardsCacheTTL() time.Duration {
+	return envDurationOrDefault("DASHBOARDS_CACHE_TTL", defaultDashboardsCacheTTL)
+}
+
+func dashboardExecuteCacheTTL() time.Duration {
+	return envDurationOrDefault("DASHBOARD_EXECUTE_CACHE_TTL", defaultDashboardExecuteCacheTTL)
+}
+
+func dashboardExecuteTimeout() time.Duration {
+	return envDurationOrDefault("DASHBOARD_EXECUTE_TIMEOUT", defaultDashboardExecuteTimeout)
+}
+
+func dashboardExecuteWorkers() int {
+	return envIntOrDefault("DASHBOARD_EXECUTE_WORKERS", defaultDashboardExecWorkers)
+}
+
+func buildDashboardExecuteCacheKey(dashboardID string, userID string, widgetFilters map[string][]models.ReportFilter) string {
+	filtersJSON, err := json.Marshal(widgetFilters)
+	if err != nil {
+		filtersJSON = []byte("{}")
+	}
+	return dashboardID + ":" + userID + ":" + string(filtersJSON)
 }
 
 func buildSystemFields(tableName string, title string, fields []FieldDef) map[string]interface{} {
@@ -1372,6 +1469,16 @@ func CreateDashboard(w http.ResponseWriter, r *http.Request) {
 // GetDashboards retrieves all dashboards
 func GetDashboards(w http.ResponseWriter, r *http.Request) {
 	businessVerticalID := r.URL.Query().Get("business_vertical_id")
+	cacheKey := "all"
+	if businessVerticalID != "" {
+		cacheKey = "vertical:" + businessVerticalID
+	}
+
+	if payload, ok := dashboardsListCache.get(cacheKey); ok {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(payload)
+		return
+	}
 
 	query := config.DB.Preload("Widgets").Preload("Widgets.Report").Where("deleted_at IS NULL")
 
@@ -1385,11 +1492,18 @@ func GetDashboards(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	payload, err := json.Marshal(map[string]interface{}{
 		"dashboards": dashboards,
 		"count":      len(dashboards),
 	})
+	if err != nil {
+		http.Error(w, "Failed to encode dashboards", http.StatusInternalServerError)
+		return
+	}
+	dashboardsListCache.set(cacheKey, payload, dashboardsCacheTTL())
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(payload)
 }
 
 // GetDashboard retrieves a single dashboard with all widgets
@@ -1412,12 +1526,20 @@ func GetDashboard(w http.ResponseWriter, r *http.Request) {
 // ExecuteDashboard executes all widget reports for a dashboard and returns combined results.
 // POST /api/v1/dashboards/{id}/execute
 func ExecuteDashboard(w http.ResponseWriter, r *http.Request) {
+	requestStart := time.Now()
 	vars := mux.Vars(r)
 	dashboardID := vars["id"]
 	claims := middleware.GetClaims(r)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	execCtx, cancel := context.WithTimeout(r.Context(), dashboardExecuteTimeout())
+	defer cancel()
 
 	var dashboard models.Dashboard
-	if err := config.DB.Preload("Widgets").Preload("Widgets.Report").
+	if err := config.DB.WithContext(execCtx).Preload("Widgets").Preload("Widgets.Report").
 		Where("id = ? AND deleted_at IS NULL", dashboardID).
 		First(&dashboard).Error; err != nil {
 		http.Error(w, "Dashboard not found", http.StatusNotFound)
@@ -1430,7 +1552,13 @@ func ExecuteDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&req)
 
-	engine := NewReportEngine()
+	cacheKey := buildDashboardExecuteCacheKey(dashboardID, claims.UserID, req.WidgetFilters)
+	if payload, ok := dashboardExecuteCache.get(cacheKey); ok {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(payload)
+		return
+	}
+
 	type widgetResult struct {
 		WidgetID string      `json:"widget_id"`
 		Title    string      `json:"title"`
@@ -1440,49 +1568,89 @@ func ExecuteDashboard(w http.ResponseWriter, r *http.Request) {
 		Error    string      `json:"error,omitempty"`
 	}
 
-	results := make([]widgetResult, 0, len(dashboard.Widgets))
-	for _, widget := range dashboard.Widgets {
+	results := make([]widgetResult, len(dashboard.Widgets))
+	workerLimit := dashboardExecuteWorkers()
+	if workerLimit > len(dashboard.Widgets) && len(dashboard.Widgets) > 0 {
+		workerLimit = len(dashboard.Widgets)
+	}
+	semaphore := make(chan struct{}, workerLimit)
+	var wg sync.WaitGroup
+
+	for idx, widget := range dashboard.Widgets {
+		select {
+		case <-execCtx.Done():
+			http.Error(w, "dashboard execution timeout", http.StatusGatewayTimeout)
+			return
+		default:
+		}
+
+		wg.Add(1)
+		semaphore <- struct{}{}
+		go func(i int, wgt models.ReportWidget) {
+			defer wg.Done()
+			defer func() { <-semaphore }()
+
 		wr := widgetResult{
-			WidgetID: widget.ID.String(),
-			Title:    widget.Title,
-			Position: widget.Position,
+			WidgetID: wgt.ID.String(),
+			Title:    wgt.Title,
+			Position: wgt.Position,
 		}
 
-		if widget.Report == nil {
+		if wgt.Report == nil {
 			wr.Error = "report definition not found"
-			results = append(results, wr)
-			continue
+			results[i] = wr
+			return
 		}
 
-		if !canViewReport(r, widget.Report) {
+		if !canViewReport(r, wgt.Report) {
 			wr.Error = "access denied"
-			results = append(results, wr)
-			continue
+			results[i] = wr
+			return
 		}
 
-		if err := ensureReportViewsForDataSources(config.DB, widget.Report.DataSources); err != nil {
+		if err := ensureReportViewsForDataSources(config.DB.WithContext(execCtx), wgt.Report.DataSources); err != nil {
 			wr.Error = fmt.Sprintf("failed to sync report views: %v", err)
-			results = append(results, wr)
-			continue
+			results[i] = wr
+			return
 		}
 
-		filters := req.WidgetFilters[widget.ID.String()]
-		result, err := engine.ExecuteReport(widget.Report, filters, claims.UserID)
+		filters := req.WidgetFilters[wgt.ID.String()]
+		engine := NewReportEngine()
+		result, err := engine.ExecuteReport(wgt.Report, filters, claims.UserID)
 		if err != nil {
 			wr.Error = err.Error()
 		} else {
-			wr.Report = widget.Report
+			wr.Report = wgt.Report
 			wr.Result = result
 		}
-		results = append(results, wr)
+		results[i] = wr
+		}(idx, widget)
 	}
+	wg.Wait()
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	response := map[string]interface{}{
 		"dashboard": dashboard,
 		"widgets":   results,
 		"count":     len(results),
-	})
+	}
+	payload, err := json.Marshal(response)
+	if err != nil {
+		http.Error(w, "Failed to encode dashboard result", http.StatusInternalServerError)
+		return
+	}
+	dashboardExecuteCache.set(cacheKey, payload, dashboardExecuteCacheTTL())
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(payload)
+
+	totalDuration := time.Since(requestStart)
+	if totalDuration >= 1500*time.Millisecond {
+		slog.Warn("slow dashboard execute",
+			"dashboard_id", dashboardID,
+			"widgets", len(results),
+			"duration_ms", totalDuration.Milliseconds(),
+		)
+	}
 }
 
 // DeleteDashboard soft deletes a dashboard and removes related widgets

@@ -2,9 +2,12 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
+	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -128,41 +131,98 @@ type userPayload struct {
 	IsSuperAdmin bool       `json:"is_super_admin"`
 }
 
+func loginQueryTimeout() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("LOGIN_QUERY_TIMEOUT"))
+	if raw == "" {
+		return 5 * time.Second
+	}
+
+	parsed, err := time.ParseDuration(raw)
+	if err != nil || parsed <= 0 {
+		return 5 * time.Second
+	}
+
+	return parsed
+}
+
+func loginAuditInsertTimeout() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("LOGIN_AUDIT_TIMEOUT"))
+	if raw == "" {
+		return 2 * time.Second
+	}
+
+	parsed, err := time.ParseDuration(raw)
+	if err != nil || parsed <= 0 {
+		return 2 * time.Second
+	}
+
+	return parsed
+}
+
+func shouldLogSlowLogin(totalDuration time.Duration) bool {
+	raw := strings.TrimSpace(os.Getenv("LOGIN_SLOW_THRESHOLD"))
+	if raw == "" {
+		return totalDuration >= time.Second
+	}
+
+	threshold, err := time.ParseDuration(raw)
+	if err != nil || threshold <= 0 {
+		return totalDuration >= time.Second
+	}
+
+	return totalDuration >= threshold
+}
+
 func Login(w http.ResponseWriter, r *http.Request) {
+	requestStart := time.Now()
+	var dbLookupDuration time.Duration
+	var passwordCheckDuration time.Duration
+	var tokenBuildDuration time.Duration
+
 	var req loginReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
 
+	loginCtx, cancel := context.WithTimeout(r.Context(), loginQueryTimeout())
+	defer cancel()
+
 	// Keep login lookup minimal and index-friendly: avoid implicit ORDER BY from First().
+	dbLookupStart := time.Now()
 	var u models.User
-	if err := config.DB.
+	if err := config.DB.WithContext(loginCtx).
 		Select("id", "name", "email", "phone", "password_hash", "role_id").
 		Where("phone = ?", req.Phone).
 		Take(&u).Error; err != nil {
 		http.Error(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
+	dbLookupDuration = time.Since(dbLookupStart)
+
+	passwordCheckStart := time.Now()
 	if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(req.Password)); err != nil {
 		http.Error(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
+	passwordCheckDuration = time.Since(passwordCheckStart)
 
 	// Determine role name for token
 	roleName := "user" // default
 	if u.RoleID != nil {
 		var role models.Role
-		if err := config.DB.Select("name").Where("id = ?", *u.RoleID).Take(&role).Error; err == nil {
+		if err := config.DB.WithContext(loginCtx).Select("name").Where("id = ?", *u.RoleID).Take(&role).Error; err == nil {
 			roleName = role.Name
 		}
 	}
 
+	tokenBuildStart := time.Now()
 	token, err := middleware.GenerateToken(u.ID.String(), roleName, u.Name, u.Phone)
 	if err != nil {
 		http.Error(w, "couldn't create token", http.StatusInternalServerError)
 		return
 	}
+	tokenBuildDuration = time.Since(tokenBuildStart)
 	u.PasswordHash = "" // don't leak password hash
 
 	// Check if user is super admin
@@ -174,10 +234,14 @@ func Login(w http.ResponseWriter, r *http.Request) {
 		IPAddress: clientIPFromRequest(r),
 		UserAgent: strings.TrimSpace(r.UserAgent()),
 	}
-	if err := config.DB.Create(&loginEvent).Error; err != nil {
-		http.Error(w, "failed to persist login audit event", http.StatusInternalServerError)
-		return
-	}
+	go func(event models.UserLoginEvent) {
+		auditCtx, auditCancel := context.WithTimeout(context.Background(), loginAuditInsertTimeout())
+		defer auditCancel()
+
+		if auditErr := config.DB.WithContext(auditCtx).Create(&event).Error; auditErr != nil {
+			slog.Warn("login audit insert failed", "user_id", event.UserID, "error", auditErr)
+		}
+	}(loginEvent)
 
 	out := loginResp{
 		Token: token,
@@ -192,6 +256,16 @@ func Login(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 	json.NewEncoder(w).Encode(out)
+
+	totalDuration := time.Since(requestStart)
+	if shouldLogSlowLogin(totalDuration) {
+		slog.Warn("slow login request",
+			"duration_ms", totalDuration.Milliseconds(),
+			"db_lookup_ms", dbLookupDuration.Milliseconds(),
+			"password_check_ms", passwordCheckDuration.Milliseconds(),
+			"token_build_ms", tokenBuildDuration.Milliseconds(),
+		)
+	}
 }
 
 func clientIPFromRequest(r *http.Request) string {
@@ -217,11 +291,16 @@ func clientIPFromRequest(r *http.Request) string {
 }
 
 func GetCurrentUser(w http.ResponseWriter, r *http.Request) {
+	requestStart := time.Now()
 	claims := middleware.GetClaims(r)
 	if claims == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+	defer cancel()
+	r = r.WithContext(ctx)
 
 	authService := middleware.NewAuthService()
 	userCtx, err := authService.LoadUserContext(r)
@@ -291,6 +370,14 @@ func GetCurrentUser(w http.ResponseWriter, r *http.Request) {
 		"business_roles": businessRoles,
 	}
 	json.NewEncoder(w).Encode(resp)
+
+	totalDuration := time.Since(requestStart)
+	if totalDuration >= 800*time.Millisecond {
+		slog.Warn("slow token profile request",
+			"user_id", claims.UserID,
+			"duration_ms", totalDuration.Milliseconds(),
+		)
+	}
 }
 
 func GetAllUsers(w http.ResponseWriter, r *http.Request) {

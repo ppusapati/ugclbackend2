@@ -84,7 +84,7 @@ func main() {
 		port = "8080"
 	}
 
-	// Keep finance workflows and dynamic forms synchronized with code-defined seeds.
+	// // Keep finance workflows and dynamic forms synchronized with code-defined seeds.
 	// config.SeedWorkflows()
 	// config.SeedFinanceModulesAndForms()
 

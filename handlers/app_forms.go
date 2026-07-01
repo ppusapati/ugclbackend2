@@ -244,9 +244,7 @@ func GetFormsForVertical(w http.ResponseWriter, r *http.Request) {
 	// activate forms from mobile and inactive forms break the mobile UX.
 	// Web super admins see ALL forms (active + inactive) so they can manage them.
 	// Web regular users only see active forms.
-	// NOTE: use userCtx.IsSuperAdmin (checks RoleModel.Name) instead of HasPermission
-	// which only inspects stored permission records and misses the super_admin role.
-	isSuperAdmin := userCtx.IsSuperAdmin
+	isSuperAdmin := user.HasPermission("admin_all") || user.HasPermission("super_admin") || user.HasPermission("*:*:*")
 	filterInactive := isMobileClient || !isSuperAdmin
 
 	// Get forms for this vertical using JSONB contains operator.
@@ -262,12 +260,10 @@ func GetFormsForVertical(w http.ResponseWriter, r *http.Request) {
 		filterArgs = append(filterArgs, token)
 	}
 
-	// Cast to jsonb so the query is resilient if production has json/jsonb drift.
-	verticalsExpr := "COALESCE(accessible_verticals::jsonb, '[]'::jsonb)"
-	filterCondition := verticalsExpr + " = '[]'::jsonb"
+	filterCondition := "accessible_verticals = '[]'::jsonb"
 	if len(arrayPlaceholders) > 0 {
-		// jsonb_exists_any avoids placeholder collisions with the ?| operator in GORM raw SQL.
-		filterCondition = filterCondition + " OR jsonb_exists_any(" + verticalsExpr + ", ARRAY[" + strings.Join(arrayPlaceholders, ",") + "]::text[])"
+		// JSONB ?| checks whether any candidate token exists in top-level array values.
+		filterCondition = filterCondition + " OR accessible_verticals ?| ARRAY[" + strings.Join(arrayPlaceholders, ",") + "]"
 	}
 
 	query := config.DB.
@@ -324,11 +320,7 @@ func GetFormsForVertical(w http.ResponseWriter, r *http.Request) {
 
 	// userCanAccess returns true if the user holds the required permission via
 	// their global role OR via any business role in one of the matched verticals.
-	// Super admins bypass all permission checks (their role name grants everything).
 	userCanAccess := func(permission string) bool {
-		if isSuperAdmin {
-			return true
-		}
 		if user.HasPermission(permission) {
 			return true
 		}
