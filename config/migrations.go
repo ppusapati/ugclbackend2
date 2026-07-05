@@ -907,6 +907,32 @@ func Migrations(db *gorm.DB) error {
 				return nil
 			},
 		},
+		{
+			ID: "20260705_active_business_context_unique_user_client",
+			Migrate: func(tx *gorm.DB) error {
+				queries := []string{
+					// Keep one row per (user_id, client_key), preferring the most recently updated record.
+					`DELETE FROM user_active_business_contexts u
+					USING user_active_business_contexts d
+					WHERE u.user_id = d.user_id
+					  AND u.client_key = d.client_key
+					  AND (
+					    u.updated_at < d.updated_at
+					    OR (u.updated_at = d.updated_at AND u.created_at < d.created_at)
+					    OR (u.updated_at = d.updated_at AND u.created_at = d.created_at AND u.id::text < d.id::text)
+					  )`,
+					"CREATE UNIQUE INDEX IF NOT EXISTS idx_user_active_business_user_client_uq ON user_active_business_contexts(user_id, client_key)",
+				}
+
+				for _, q := range queries {
+					if err := tx.Exec(q).Error; err != nil {
+						return err
+					}
+				}
+
+				return nil
+			},
+		},
 	})
 
 	return m.Migrate()

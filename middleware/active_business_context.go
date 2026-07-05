@@ -12,7 +12,6 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/sync/singleflight"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/models"
 )
@@ -128,26 +127,41 @@ func SaveActiveBusinessContext(userID, businessID uuid.UUID, clientKey string) (
 		clientKey = defaultActiveBusinessClientKey
 	}
 
-	ctx := &models.UserActiveBusinessContext{
-		UserID:     userID,
-		BusinessID: businessID,
-		ClientKey:  clientKey,
-	}
+	ctxRecord := &models.UserActiveBusinessContext{}
+	if err := config.DB.Transaction(func(tx *gorm.DB) error {
+		var existing models.UserActiveBusinessContext
+		err := tx.Where("user_id = ? AND client_key = ?", userID, clientKey).First(&existing).Error
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				ctxRecord.UserID = userID
+				ctxRecord.BusinessID = businessID
+				ctxRecord.ClientKey = clientKey
+				return tx.Create(ctxRecord).Error
+			}
+			return err
+		}
 
-	if err := config.DB.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "user_id"}, {Name: "client_key"}},
-		DoUpdates: clause.AssignmentColumns([]string{"business_id", "updated_at"}),
-	}).Create(ctx).Error; err != nil {
+		existing.BusinessID = businessID
+		if err := tx.Model(&existing).Updates(map[string]interface{}{
+			"business_id": businessID,
+			"updated_at":  time.Now(),
+		}).Error; err != nil {
+			return err
+		}
+
+		*ctxRecord = existing
+		return nil
+	}); err != nil {
 		return nil, err
 	}
 
-	if err := config.DB.Preload("Business").First(ctx, "user_id = ? AND client_key = ?", userID, clientKey).Error; err != nil {
+	if err := config.DB.Preload("Business").First(ctxRecord, "user_id = ? AND client_key = ?", userID, clientKey).Error; err != nil {
 		return nil, err
 	}
 
-	activeBusinessContextCache.set(userID, clientKey, ctx, true)
+	activeBusinessContextCache.set(userID, clientKey, ctxRecord, true)
 
-	return ctx, nil
+	return ctxRecord, nil
 }
 
 // GetStoredActiveBusinessContext returns the persisted active business for a user/client pair.
@@ -157,7 +171,7 @@ func GetStoredActiveBusinessContext(userID uuid.UUID, clientKey string) (*models
 
 // GetStoredActiveBusinessContextWithContext returns the persisted active business for a user/client pair
 // using the caller's context so request timeouts/cancellation propagate to the DB layer.
-func GetStoredActiveBusinessContextWithContext(ctx context.Context, userID uuid.UUID, clientKey string) (*models.UserActiveBusinessContext, error) {
+func GetStoredActiveBusinessContextWithContext(reqCtx context.Context, userID uuid.UUID, clientKey string) (*models.UserActiveBusinessContext, error) {
 	if clientKey == "" {
 		clientKey = defaultActiveBusinessClientKey
 	}
@@ -177,11 +191,11 @@ func GetStoredActiveBusinessContextWithContext(ctx context.Context, userID uuid.
 			return nil, gorm.ErrRecordNotFound
 		}
 
-		var ctx models.UserActiveBusinessContext
-		result := config.DB.WithContext(ctx).Preload("Business").
+		var record models.UserActiveBusinessContext
+		result := config.DB.WithContext(reqCtx).Preload("Business").
 			Where("user_id = ? AND client_key = ?", userID, clientKey).
 			Limit(1).
-			Find(&ctx)
+			Find(&record)
 		if result.Error != nil {
 			return nil, result.Error
 		}
@@ -190,8 +204,8 @@ func GetStoredActiveBusinessContextWithContext(ctx context.Context, userID uuid.
 			return nil, gorm.ErrRecordNotFound
 		}
 
-		activeBusinessContextCache.set(userID, clientKey, &ctx, true)
-		return &ctx, nil
+		activeBusinessContextCache.set(userID, clientKey, &record, true)
+		return &record, nil
 	})
 	if loadErr != nil {
 		return nil, loadErr

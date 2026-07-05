@@ -72,6 +72,30 @@ func isPublicFormPermission(permission string) bool {
 	}
 }
 
+func formMatchesCandidateVerticals(accessibleVerticals []string, candidateTokens map[string]struct{}) bool {
+	if len(accessibleVerticals) == 0 {
+		return true
+	}
+
+	for _, raw := range accessibleVerticals {
+		token := strings.TrimSpace(raw)
+		if token == "" {
+			continue
+		}
+		if _, ok := candidateTokens[token]; ok {
+			return true
+		}
+		if _, ok := candidateTokens[strings.ToUpper(token)]; ok {
+			return true
+		}
+		if _, ok := candidateTokens[strings.ToLower(token)]; ok {
+			return true
+		}
+	}
+
+	return false
+}
+
 func getCachedJSONState(cache map[string]cachedJSONResponse, mu *sync.RWMutex, key string) ([]byte, string) {
 	mu.Lock()
 	defer mu.Unlock()
@@ -226,6 +250,7 @@ func GetFormsForVertical(w http.ResponseWriter, r *http.Request) {
 	candidateTokens := map[string]struct{}{
 		verticalCode:                  {},
 		strings.ToUpper(verticalCode): {},
+		strings.ToLower(verticalCode): {},
 	}
 
 	var matchedVerticals []models.BusinessVertical
@@ -235,6 +260,8 @@ func GetFormsForVertical(w http.ResponseWriter, r *http.Request) {
 
 	for _, v := range matchedVerticals {
 		candidateTokens[v.Code] = struct{}{}
+		candidateTokens[strings.ToUpper(v.Code)] = struct{}{}
+		candidateTokens[strings.ToLower(v.Code)] = struct{}{}
 		candidateTokens[v.ID.String()] = struct{}{}
 	}
 
@@ -260,10 +287,10 @@ func GetFormsForVertical(w http.ResponseWriter, r *http.Request) {
 		filterArgs = append(filterArgs, token)
 	}
 
-	filterCondition := "accessible_verticals = '[]'::jsonb"
+	filterCondition := "COALESCE(accessible_verticals::jsonb, '[]'::jsonb) = '[]'::jsonb"
 	if len(arrayPlaceholders) > 0 {
 		// JSONB ?| checks whether any candidate token exists in top-level array values.
-		filterCondition = filterCondition + " OR accessible_verticals ?| ARRAY[" + strings.Join(arrayPlaceholders, ",") + "]"
+		filterCondition = filterCondition + " OR COALESCE(accessible_verticals::jsonb, '[]'::jsonb) ?| ARRAY[" + strings.Join(arrayPlaceholders, ",") + "]"
 	}
 
 	query := config.DB.
@@ -277,9 +304,22 @@ func GetFormsForVertical(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := query.Find(&forms).Error; err != nil {
-		log.Printf("❌ Error fetching forms: %v", err)
-		http.Error(w, "failed to fetch forms", http.StatusInternalServerError)
-		return
+		log.Printf("⚠️ Primary forms query failed, attempting fallback query: %v", err)
+
+		fallbackQuery := config.DB.
+			Select("id, code, title, description, module_id, route, icon, display_order, required_permission, accessible_verticals, is_active").
+			Preload("Module").
+			Order("display_order ASC, title ASC")
+
+		if filterInactive {
+			fallbackQuery = fallbackQuery.Where("is_active = ?", true)
+		}
+
+		if fallbackErr := fallbackQuery.Find(&forms).Error; fallbackErr != nil {
+			log.Printf("❌ Fallback forms query failed: %v", fallbackErr)
+			http.Error(w, "failed to fetch forms", http.StatusInternalServerError)
+			return
+		}
 	}
 
 	log.Printf("✅ Found %d forms for vertical %s", len(forms), verticalCode)
@@ -333,6 +373,10 @@ func GetFormsForVertical(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, form := range forms {
+		if !formMatchesCandidateVerticals(form.AccessibleVerticals, candidateTokens) {
+			continue
+		}
+
 		// Check if user has required permission (global role OR business role in this vertical)
 		if !isPublicFormPermission(form.RequiredPermission) && !userCanAccess(form.RequiredPermission) {
 			log.Printf("   ⊘ Skipping form %s - user lacks permission %s", form.Code, form.RequiredPermission)
