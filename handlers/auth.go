@@ -292,6 +292,7 @@ func clientIPFromRequest(r *http.Request) string {
 
 func GetCurrentUser(w http.ResponseWriter, r *http.Request) {
 	requestStart := time.Now()
+	var loadUserContextDuration time.Duration
 	claims := middleware.GetClaims(r)
 	if claims == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -303,7 +304,9 @@ func GetCurrentUser(w http.ResponseWriter, r *http.Request) {
 	r = r.WithContext(ctx)
 
 	authService := middleware.NewAuthService()
+	loadUserContextStart := time.Now()
 	userCtx, err := authService.LoadUserContext(r)
+	loadUserContextDuration = time.Since(loadUserContextStart)
 	if err != nil || userCtx == nil || userCtx.User == nil {
 		http.Error(w, "User not found", http.StatusNotFound)
 		return
@@ -376,6 +379,9 @@ func GetCurrentUser(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("slow token profile request",
 			"user_id", claims.UserID,
 			"duration_ms", totalDuration.Milliseconds(),
+			"load_user_context_ms", loadUserContextDuration.Milliseconds(),
+			"permissions_count", len(permissions),
+			"business_roles_count", len(businessRoles),
 		)
 	}
 }

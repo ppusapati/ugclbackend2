@@ -139,7 +139,7 @@ func (s *AuthService) LoadUserContext(r *http.Request) (*UserContext, error) {
 			}
 
 			var freshUser models.User
-			if err := config.DB.
+			if err := config.DB.WithContext(r.Context()).
 				Preload("RoleModel.Permissions").
 				Preload("UserBusinessRoles", "is_active = ?", true).
 				Preload("UserBusinessRoles.BusinessRole", "is_active = ?", true).

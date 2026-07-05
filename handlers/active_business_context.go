@@ -71,14 +71,14 @@ func GetActiveBusinessContext(w http.ResponseWriter, r *http.Request) {
 	}
 
 	clientKey := middleware.GetActiveBusinessClientKey(r)
-	activeContext, err := middleware.GetStoredActiveBusinessContext(userCtx.User.ID, clientKey)
+	activeContext, err := middleware.GetStoredActiveBusinessContextWithContext(r.Context(), userCtx.User.ID, clientKey)
 	if err == nil && activeContext.BusinessID == businessID {
 		respondWithActiveBusinessContext(w, http.StatusOK, activeContext, "stored")
 		return
 	}
 
 	var business models.BusinessVertical
-	if err := config.DB.First(&business, "id = ?", businessID).Error; err != nil {
+	if err := config.DB.WithContext(r.Context()).First(&business, "id = ?", businessID).Error; err != nil {
 		http.Error(w, "business not found", http.StatusNotFound)
 		return
 	}

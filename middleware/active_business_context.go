@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -151,6 +152,12 @@ func SaveActiveBusinessContext(userID, businessID uuid.UUID, clientKey string) (
 
 // GetStoredActiveBusinessContext returns the persisted active business for a user/client pair.
 func GetStoredActiveBusinessContext(userID uuid.UUID, clientKey string) (*models.UserActiveBusinessContext, error) {
+	return GetStoredActiveBusinessContextWithContext(context.Background(), userID, clientKey)
+}
+
+// GetStoredActiveBusinessContextWithContext returns the persisted active business for a user/client pair
+// using the caller's context so request timeouts/cancellation propagate to the DB layer.
+func GetStoredActiveBusinessContextWithContext(ctx context.Context, userID uuid.UUID, clientKey string) (*models.UserActiveBusinessContext, error) {
 	if clientKey == "" {
 		clientKey = defaultActiveBusinessClientKey
 	}
@@ -171,7 +178,7 @@ func GetStoredActiveBusinessContext(userID uuid.UUID, clientKey string) (*models
 		}
 
 		var ctx models.UserActiveBusinessContext
-		result := config.DB.Preload("Business").
+		result := config.DB.WithContext(ctx).Preload("Business").
 			Where("user_id = ? AND client_key = ?", userID, clientKey).
 			Limit(1).
 			Find(&ctx)
@@ -207,7 +214,7 @@ func ResolveEffectiveBusinessID(r *http.Request, userCtx *UserContext) (uuid.UUI
 	}
 
 	clientKey := GetActiveBusinessClientKey(r)
-	storedCtx, err := GetStoredActiveBusinessContext(userCtx.User.ID, clientKey)
+	storedCtx, err := GetStoredActiveBusinessContextWithContext(r.Context(), userCtx.User.ID, clientKey)
 	if err == nil {
 		if CanAccessBusiness(userCtx, storedCtx.BusinessID) {
 			return storedCtx.BusinessID, nil
