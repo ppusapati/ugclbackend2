@@ -45,10 +45,6 @@ func RunAllSeeding() error {
 	log.Println("\n[6/7] Seeding Default Users...")
 	SeedUsers()
 
-	// Step 7: Verify RBAC setup
-	log.Println("\n[7/7] Verifying RBAC Migration...")
-	VerifyRBACMigration()
-
 	log.Println("\n=== Database Seeding Complete ===")
 	return nil
 }
@@ -56,14 +52,8 @@ func RunAllSeeding() error {
 // =====================================================
 // Permissions & Roles Seeding
 // =====================================================
-
-// SeedPermissions creates default permissions and roles
 func SeedPermissions() {
 	permissions := []models.Permission{
-		// Super Admin Wildcard
-		{ID: uuid.New(), Name: "*:*:*", Resource: "*", Action: "*", Description: "Super Admin wildcard - all permissions"},
-
-		// Project Management
 		{ID: uuid.New(), Name: "project:create", Resource: "project", Action: "create", Description: "Create project"},
 		{ID: uuid.New(), Name: "project:read", Resource: "project", Action: "read", Description: "View project details"},
 		{ID: uuid.New(), Name: "project:update", Resource: "project", Action: "update", Description: "Edit project"},
@@ -1291,8 +1281,10 @@ func seedWaterSites(businessVerticalID uuid.UUID) {
 }
 
 func seedSolarSites(businessVerticalID uuid.UUID) {
+	locationJSON := `{"lat":17.4133,"lng":78.5586,"address":"Boduppal, Hyderabad, Telangana, India"}`
+	geofenceJSON := `{"name":"Handigund 1 km geofence","coordinates":[{"lat":17.422290,"lng":78.558600},{"lat":17.420672,"lng":78.563513},{"lat":17.413300,"lng":78.565100},{"lat":17.405928,"lng":78.563513},{"lat":17.404310,"lng":78.558600},{"lat":17.405928,"lng":78.553687},{"lat":17.413300,"lng":78.552100},{"lat":17.420672,"lng":78.553687},{"lat":17.422290,"lng":78.558600}]}`
 	solarSites := []models.Site{
-		{Name: "Handigund", Code: "HANDIGUND", Description: "Solar farm Handigund site", BusinessVerticalID: businessVerticalID, IsActive: true},
+		{Name: "Handigund", Code: "HANDIGUND", Description: "Solar farm Handigund site", BusinessVerticalID: businessVerticalID, Location: &locationJSON, Geofence: &geofenceJSON, IsActive: true},
 		{Name: "Itnal", Code: "ITNAL", Description: "Solar farm Itnal site", BusinessVerticalID: businessVerticalID, IsActive: true},
 		{Name: "Malabad", Code: "MALABAD", Description: "Solar farm Malabad site", BusinessVerticalID: businessVerticalID, IsActive: true},
 		{Name: "Nagarmunavali", Code: "NAGARMUNAVALI", Description: "Solar farm Nagarmunavali site", BusinessVerticalID: businessVerticalID, IsActive: true},
@@ -1307,6 +1299,26 @@ func seedSolarSites(businessVerticalID uuid.UUID) {
 			} else {
 				log.Printf("Created site: %s", site.Name)
 			}
+			continue
+		}
+
+		updates := map[string]interface{}{
+			"name":                 site.Name,
+			"description":          site.Description,
+			"business_vertical_id": site.BusinessVerticalID,
+			"is_active":            site.IsActive,
+		}
+		if site.Location != nil {
+			updates["location"] = site.Location
+		}
+		if site.Geofence != nil {
+			updates["geofence"] = site.Geofence
+		}
+
+		if err := DB.Model(&existing).Updates(updates).Error; err != nil {
+			log.Printf("Error updating site %s: %v", site.Name, err)
+		} else {
+			log.Printf("Updated site: %s", site.Name)
 		}
 	}
 }

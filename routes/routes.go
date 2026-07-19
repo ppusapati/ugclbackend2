@@ -46,6 +46,12 @@ func RegisterRoutes() http.Handler {
 	api.HandleFunc("/token", handlers.GetCurrentUser).Methods("GET")
 	api.HandleFunc("/context/business", handlers.GetActiveBusinessContext).Methods("GET")
 	api.HandleFunc("/context/business", handlers.SetActiveBusinessContext).Methods("PUT")
+	api.HandleFunc("/auth/devices/current", handlers.RegisterCurrentTrustedDevice).Methods("PUT")
+	api.HandleFunc("/auth/devices/current/status", handlers.GetCurrentTrustedDeviceStatus).Methods("GET")
+	api.HandleFunc("/auth/devices", handlers.ListMyTrustedDevices).Methods("GET")
+	api.HandleFunc("/auth/devices/{deviceId}/revoke", handlers.RevokeMyTrustedDevice).Methods("POST")
+	api.HandleFunc("/auth/devices/{deviceId}/allow", handlers.AllowMyTrustedDevice).Methods("POST")
+	api.HandleFunc("/auth/offline-bootstrap", handlers.GetOfflineBootstrap).Methods("GET")
 
 	// Register resource routes
 	registerOperationalRoutes(api)
@@ -533,6 +539,12 @@ func registerAdminRoutes(admin *mux.Router) {
 		http.HandlerFunc(handlers.UpdateUser))).Methods("PUT")
 	admin.Handle("/users/{id}", middleware.RequirePermission("delete_users")(
 		http.HandlerFunc(handlers.DeleteUser))).Methods("DELETE")
+	admin.Handle("/users/{id}/auth/devices", middleware.RequirePermission("read_users")(
+		http.HandlerFunc(handlers.AdminListUserTrustedDevices))).Methods("GET")
+	admin.Handle("/users/{id}/auth/devices/{deviceId}/revoke", middleware.RequirePermission("update_users")(
+		http.HandlerFunc(handlers.AdminRevokeUserTrustedDevice))).Methods("POST")
+	admin.Handle("/users/{id}/auth/devices/{deviceId}/allow", middleware.RequirePermission("update_users")(
+		http.HandlerFunc(handlers.AdminAllowUserTrustedDevice))).Methods("POST")
 
 	// Project creation (admin)
 	admin.Handle("/projects", middleware.RequirePermission("project:create")(

@@ -25,6 +25,7 @@ func Migrations(db *gorm.DB) error {
 				// =====================================================
 				if err := tx.AutoMigrate(
 					&models.User{},
+					&models.TrustedDevice{},
 					&models.Permission{},
 					&models.Role{},
 					&models.RolePermission{},
@@ -301,6 +302,23 @@ func Migrations(db *gorm.DB) error {
 
 				for _, idx := range indexes {
 					if err := tx.Exec(idx).Error; err != nil {
+						return err
+					}
+				}
+
+				return nil
+			},
+		},
+		{
+			ID: "20260718_trusted_device_indexes",
+			Migrate: func(tx *gorm.DB) error {
+				statements := []string{
+					"CREATE UNIQUE INDEX IF NOT EXISTS uq_trusted_devices_user_client ON trusted_devices(user_id, client_id) WHERE deleted_at IS NULL",
+					"CREATE INDEX IF NOT EXISTS idx_trusted_devices_offline_allowed ON trusted_devices(user_id, offline_allowed) WHERE deleted_at IS NULL",
+				}
+
+				for _, stmt := range statements {
+					if err := tx.Exec(stmt).Error; err != nil {
 						return err
 					}
 				}

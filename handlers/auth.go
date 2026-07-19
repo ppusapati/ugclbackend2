@@ -4,6 +4,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/sync/singleflight"
+	"gorm.io/gorm"
 	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/middleware"
 	"p9e.in/ugcl/models"
@@ -243,6 +245,25 @@ func Login(w http.ResponseWriter, r *http.Request) {
 		}
 	}(loginEvent)
 
+	installID := strings.TrimSpace(r.Header.Get("X-Install-ID"))
+	platform := strings.TrimSpace(r.Header.Get("X-Platform"))
+	deviceName := strings.TrimSpace(r.Header.Get("X-Device-Name"))
+	appVersion := strings.TrimSpace(r.Header.Get("X-App-Version"))
+	clientID := strings.TrimSpace(r.Header.Get("X-Client-ID"))
+	if clientID != "" {
+		_, bindErr := UpsertTrustedDeviceBinding(
+			u.ID,
+			clientID,
+			optionalString(installID),
+			optionalString(platform),
+			optionalString(deviceName),
+			optionalString(appVersion),
+		)
+		if bindErr != nil && !errors.Is(bindErr, gorm.ErrInvalidData) {
+			slog.Warn("trusted-device bind failed", "user_id", u.ID, "error", bindErr)
+		}
+	}
+
 	out := loginResp{
 		Token: token,
 		User: userPayload{
@@ -266,6 +287,14 @@ func Login(w http.ResponseWriter, r *http.Request) {
 			"token_build_ms", tokenBuildDuration.Milliseconds(),
 		)
 	}
+}
+
+func optionalString(value string) *string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	return &value
 }
 
 func clientIPFromRequest(r *http.Request) string {
