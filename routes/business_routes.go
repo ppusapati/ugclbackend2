@@ -75,8 +75,7 @@ func registerGlobalAdminRoutes(admin *mux.Router) {
 		http.HandlerFunc(biz.GetSuperAdminDashboard))).Methods("GET")
 
 	// Site management (all sites across all business verticals)
-	admin.Handle("/sites", middleware.RequirePermission("admin_all")(
-		http.HandlerFunc(masters.GetAllSites))).Methods("GET")
+	admin.Handle("/sites", http.HandlerFunc(masters.GetAllSites)).Methods("GET")
 	admin.Handle("/sites", middleware.RequirePermission("admin_all")(
 		http.HandlerFunc(masters.CreateSite))).Methods("POST")
 	admin.Handle("/sites/{siteId}", middleware.RequirePermission("admin_all")(
