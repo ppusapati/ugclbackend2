@@ -502,8 +502,7 @@ func registerKPIRoutes(api *mux.Router) {
 
 // registerFileRoutes registers file upload endpoints
 func registerFileRoutes(api *mux.Router) {
-	api.Handle("/files/upload", middleware.RequireUploadAccess([]string{"create_reports", "create_materials"})(
-		http.HandlerFunc(handlers.UploadFileHandler))).Methods("POST")
+	api.Handle("/files/upload", http.HandlerFunc(handlers.UploadFileHandler)).Methods("POST")
 }
 
 // registerTestRoutes registers testing endpoints

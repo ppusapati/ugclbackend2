@@ -126,7 +126,7 @@ func registerBusinessRoleRoutes(business *mux.Router) {
 	business.Handle("/roles/{roleId}", middleware.RequireBusinessPermission("business_manage_roles")(
 		http.HandlerFunc(biz.DeleteBusinessRole))).Methods("DELETE")
 
-	// Business user management
+	// Business user manageformsment
 	business.Handle("/users", middleware.RequireBusinessPermission("business_manage_users")(
 		http.HandlerFunc(biz.GetBusinessUsers))).Methods("GET")
 	business.Handle("/users/assign", middleware.RequireBusinessPermission("business_manage_users")(
