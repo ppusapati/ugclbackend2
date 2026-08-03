@@ -297,6 +297,10 @@ type changePasswordReq struct {
 	NewPassword     string `json:"new_password"`
 }
 
+type adminResetPasswordReq struct {
+	NewPassword string `json:"new_password"`
+}
+
 // ChangePassword allows users to change their own password
 func ChangePassword(w http.ResponseWriter, r *http.Request) {
 	var req changePasswordReq
@@ -335,6 +339,53 @@ func ChangePassword(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"message": "password updated successfully"})
+}
+
+// AdminResetUserPassword allows admins to reset a user's password without the current password.
+func AdminResetUserPassword(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	userID := vars["id"]
+
+	id, err := uuid.Parse(userID)
+	if err != nil {
+		http.Error(w, "invalid user ID", http.StatusBadRequest)
+		return
+	}
+
+	var req adminResetPasswordReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.NewPassword) < 6 {
+		http.Error(w, "new_password must be at least 6 characters", http.StatusBadRequest)
+		return
+	}
+
+	var user models.User
+	if err := config.DB.First(&user, "id = ?", id).Error; err != nil {
+		http.Error(w, "user not found", http.StatusNotFound)
+		return
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
+	if err != nil {
+		http.Error(w, "error hashing password", http.StatusInternalServerError)
+		return
+	}
+
+	user.PasswordHash = string(hash)
+	if err := config.DB.Model(&user).Update("password_hash", user.PasswordHash).Error; err != nil {
+		http.Error(w, "failed to reset password: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	middleware.InvalidateUserCache(userID)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]string{"message": "password reset successfully"})
 }
 
 func GetbyID(w http.ResponseWriter, r *http.Request) {

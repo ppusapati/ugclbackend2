@@ -536,6 +536,8 @@ func registerAdminRoutes(admin *mux.Router) {
 		http.HandlerFunc(handlers.Register))).Methods("POST")
 	admin.Handle("/users/{id}", middleware.RequirePermission("update_users")(
 		http.HandlerFunc(handlers.UpdateUser))).Methods("PUT")
+	    admin.Handle("/users/{id}/reset-password", middleware.RequirePermission("update_users")(
+		    http.HandlerFunc(handlers.AdminResetUserPassword))).Methods("POST")
 	admin.Handle("/users/{id}", middleware.RequirePermission("delete_users")(
 		http.HandlerFunc(handlers.DeleteUser))).Methods("DELETE")
 	admin.Handle("/users/{id}/auth/devices", middleware.RequirePermission("read_users")(
