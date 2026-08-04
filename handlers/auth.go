@@ -77,11 +77,13 @@ type loginPayload struct {
 }
 
 type registerReq struct {
-	Name     string     `json:"name"`
-	Email    string     `json:"email"`
-	Phone    string     `json:"phone"`
-	Password string     `json:"password"`
-	RoleID   *uuid.UUID `json:"role_id"` // Global role ID (optional)
+	Name               string     `json:"name"`
+	Email              string     `json:"email"`
+	Phone              string     `json:"phone"`
+	Password           string     `json:"password"`
+	RoleID             *uuid.UUID `json:"role_id"`              // Global role ID (or legacy business role ID from UI)
+	BusinessRoleID     *uuid.UUID `json:"business_role_id"`     // Preferred field for business role assignment
+	BusinessVerticalID *uuid.UUID `json:"business_vertical_id"` // Optional; inferred from business role when omitted
 }
 
 func Register(w http.ResponseWriter, r *http.Request) {
@@ -96,14 +98,73 @@ func Register(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "error hashing password", http.StatusInternalServerError)
 		return
 	}
-	u := models.User{
-		Name:         req.Name,
-		Email:        req.Email,
-		Phone:        req.Phone,
-		PasswordHash: string(hash),
-		RoleID:       req.RoleID,
+
+	if req.RoleID != nil && req.BusinessRoleID != nil {
+		http.Error(w, "provide either role_id or business_role_id, not both", http.StatusBadRequest)
+		return
 	}
-	if err := config.DB.Create(&u).Error; err != nil {
+
+	var globalRoleID *uuid.UUID
+	var businessRole *models.BusinessRole
+	businessVerticalID := req.BusinessVerticalID
+
+	resolveBusinessRole := func(roleID uuid.UUID) error {
+		var br models.BusinessRole
+		if err := config.DB.Where("id = ? AND is_active = ?", roleID, true).First(&br).Error; err != nil {
+			return err
+		}
+		businessRole = &br
+		if businessVerticalID == nil {
+			businessVerticalID = &br.BusinessVerticalID
+			return nil
+		}
+		if *businessVerticalID != br.BusinessVerticalID {
+			return errors.New("business_vertical_id does not match selected business role")
+		}
+		return nil
+	}
+
+	if req.BusinessRoleID != nil {
+		if err := resolveBusinessRole(*req.BusinessRoleID); err != nil {
+			http.Error(w, "invalid business role", http.StatusBadRequest)
+			return
+		}
+	}
+
+	if req.RoleID != nil {
+		var role models.Role
+		if err := config.DB.Where("id = ? AND is_active = ?", *req.RoleID, true).First(&role).Error; err == nil {
+			globalRoleID = req.RoleID
+		} else {
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				http.Error(w, "db error: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+			// Backward compatibility: some clients send business_role_id in role_id.
+			if err := resolveBusinessRole(*req.RoleID); err != nil {
+				http.Error(w, "invalid role", http.StatusBadRequest)
+				return
+			}
+		}
+	}
+
+	u := models.User{
+		Name:               req.Name,
+		Email:              req.Email,
+		Phone:              req.Phone,
+		PasswordHash:       string(hash),
+		RoleID:             globalRoleID,
+		BusinessVerticalID: businessVerticalID,
+	}
+
+	tx := config.DB.Begin()
+	if tx.Error != nil {
+		http.Error(w, "db error: "+tx.Error.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if err := tx.Create(&u).Error; err != nil {
+		tx.Rollback()
 		if utils.IsUniqueViolation(err) {
 			http.Error(w, "username already taken", http.StatusConflict)
 		} else {
@@ -111,6 +172,26 @@ func Register(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+
+	if businessRole != nil {
+		assignment := models.UserBusinessRole{
+			UserID:         u.ID,
+			BusinessRoleID: businessRole.ID,
+			IsActive:       true,
+		}
+		if err := tx.Create(&assignment).Error; err != nil {
+			tx.Rollback()
+			http.Error(w, "db error: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		http.Error(w, "db error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	InvalidateAdminUsersCache()
 	w.WriteHeader(http.StatusCreated)
 }
 
