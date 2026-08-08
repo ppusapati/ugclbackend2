@@ -75,11 +75,11 @@ func ValidateRBACCutoverReady(db *gorm.DB) error {
 
 	// source counts use DISTINCT name to match the deduplication the migration applies.
 	checks := []struct {
-		name      string
-		sourceSQL string
-		targetSQL string
+		name       string
+		sourceSQL  string
+		targetSQL  string
 		targetArgs []interface{}
-		atMost    bool // true: RBAC count ≤ source count (duplicates/orphans may be skipped)
+		atMost     bool // true: RBAC count ≤ source count (duplicates/orphans may be skipped)
 	}{
 		{
 			name:       "global roles",

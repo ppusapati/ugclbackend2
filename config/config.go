@@ -100,12 +100,10 @@ func Connect() {
 	if err := Migrations(DB); err != nil {
 		log.Fatal("Failed to run migrations:", err)
 	}
-	if getEnvAsBool("RBAC_ENABLED", getEnvAsBool("UNIFIED_RBAC_ENABLED", false)) {
-		if err := ValidateRBACCutoverReady(DB); err != nil {
-			log.Fatal(err)
-		}
-		log.Println("RBAC cutover validation passed")
+	if err := ValidateRBACCutoverReady(DB); err != nil {
+		log.Fatal(err)
 	}
+	log.Println("RBAC cutover validation passed")
 
 }
 

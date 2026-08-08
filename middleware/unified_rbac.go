@@ -1,21 +1,13 @@
 package middleware
 
 import (
-	"os"
-	"strings"
-
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"p9e.in/ugcl/models"
 )
 
-func RBACEnabled() bool {
-	value := strings.TrimSpace(os.Getenv("RBAC_ENABLED"))
-	if value == "" {
-		value = strings.TrimSpace(os.Getenv("UNIFIED_RBAC_ENABLED"))
-	}
-	return strings.EqualFold(value, "true")
-}
+// RBACEnabled always returns true; the migration is permanent.
+func RBACEnabled() bool { return true }
 
 func preloadAuthorizationGraph(query *gorm.DB) *gorm.DB {
 	if RBACEnabled() {
