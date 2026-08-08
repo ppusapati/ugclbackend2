@@ -264,6 +264,24 @@ func ListRBACRoles(w http.ResponseWriter, r *http.Request) {
 	writeRBACJSON(w, http.StatusOK, map[string]interface{}{"data": data, "page": page, "limit": limit, "total": total})
 }
 
+func GetRBACRole(w http.ResponseWriter, r *http.Request) {
+	roleID, err := uuid.Parse(mux.Vars(r)["roleId"])
+	if err != nil {
+		writeRBACError(w, http.StatusBadRequest, "invalid role ID")
+		return
+	}
+	role, err := loadRBACRole(config.DB, roleID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		writeRBACError(w, http.StatusNotFound, "role not found")
+		return
+	}
+	if err != nil {
+		writeRBACError(w, http.StatusInternalServerError, "failed to load role")
+		return
+	}
+	writeRBACJSON(w, http.StatusOK, roleResponseFromModel(role))
+}
+
 func CreateRBACRole(w http.ResponseWriter, r *http.Request) {
 	actorID, err := authenticatedRBACActorID(r)
 	if err != nil {

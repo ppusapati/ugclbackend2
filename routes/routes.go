@@ -571,6 +571,8 @@ func registerAdminRoutes(admin *mux.Router) {
 	// Canonical scoped RBAC API. Legacy role routes remain read-only during cutover.
 	admin.Handle("/rbac/roles", middleware.RequirePermission("manage_roles")(
 		http.HandlerFunc(handlers.ListRBACRoles))).Methods("GET")
+	admin.Handle("/rbac/roles/{roleId}", middleware.RequirePermission("manage_roles")(
+		http.HandlerFunc(handlers.GetRBACRole))).Methods("GET")
 	admin.Handle("/rbac/roles", middleware.RequirePermission("manage_roles")(
 		http.HandlerFunc(handlers.CreateRBACRole))).Methods("POST")
 	admin.Handle("/rbac/roles/{roleId}", middleware.RequirePermission("manage_roles")(
