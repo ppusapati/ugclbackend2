@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"golang.org/x/sync/singleflight"
+	"gorm.io/gorm"
 	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/handlers"
 	"p9e.in/ugcl/middleware"
@@ -101,6 +102,8 @@ type createBusinessRoleReq struct {
 	Level         int             `json:"level"`
 	Permissions   json.RawMessage `json:"permissions"`
 	PermissionIDs []string        `json:"permission_ids"`
+	// Keep camelCase variant for compatibility with clients using JS conventions.
+	PermissionIDsCamel []string `json:"permissionIds"`
 }
 
 type businessRoleResponse struct {
@@ -125,6 +128,14 @@ func resolveRolePermissionIDs(req createBusinessRoleReq) ([]uuid.UUID, error) {
 	permissionNames := make(map[string]struct{})
 
 	for _, rawID := range req.PermissionIDs {
+		parsedID, err := uuid.Parse(strings.TrimSpace(rawID))
+		if err != nil {
+			continue
+		}
+		idSet[parsedID] = struct{}{}
+	}
+
+	for _, rawID := range req.PermissionIDsCamel {
 		parsedID, err := uuid.Parse(strings.TrimSpace(rawID))
 		if err != nil {
 			continue
@@ -561,8 +572,21 @@ func CreateBusinessRole(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to resolve permissions", http.StatusInternalServerError)
 		return
 	}
-	for _, permissionID := range permissionIDs {
-		config.DB.Exec("INSERT INTO business_role_permissions (business_role_id, permission_id) VALUES (?, ?)", role.ID, permissionID)
+
+	if err := config.DB.Transaction(func(tx *gorm.DB) error {
+		for _, permissionID := range permissionIDs {
+			if err := tx.Exec(
+				"INSERT INTO business_role_permissions (business_role_id, permission_id, created_at) VALUES (?, ?, NOW()) ON CONFLICT (business_role_id, permission_id) DO NOTHING",
+				role.ID,
+				permissionID,
+			).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		http.Error(w, "failed to assign role permissions: "+err.Error(), http.StatusInternalServerError)
+		return
 	}
 
 	// Load for response
@@ -635,16 +659,32 @@ func UpdateBusinessRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Clear existing permissions and assign new ones using direct SQL (GORM association has UUID issues)
-	config.DB.Exec("DELETE FROM business_role_permissions WHERE business_role_id = ?", role.ID)
-
 	permissionIDs, err := resolveRolePermissionIDs(req)
 	if err != nil {
 		http.Error(w, "failed to resolve permissions", http.StatusInternalServerError)
 		return
 	}
-	for _, permissionID := range permissionIDs {
-		config.DB.Exec("INSERT INTO business_role_permissions (business_role_id, permission_id) VALUES (?, ?)", role.ID, permissionID)
+
+	// Clear and replace permission mapping atomically, and fail fast on DB errors.
+	if err := config.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("DELETE FROM business_role_permissions WHERE business_role_id = ?", role.ID).Error; err != nil {
+			return err
+		}
+
+		for _, permissionID := range permissionIDs {
+			if err := tx.Exec(
+				"INSERT INTO business_role_permissions (business_role_id, permission_id, created_at) VALUES (?, ?, NOW())",
+				role.ID,
+				permissionID,
+			).Error; err != nil {
+				return err
+			}
+		}
+
+		return nil
+	}); err != nil {
+		http.Error(w, "failed to update role permissions: "+err.Error(), http.StatusInternalServerError)
+		return
 	}
 
 	// Load fresh role with permissions for response

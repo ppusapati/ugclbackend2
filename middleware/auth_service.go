@@ -298,6 +298,12 @@ func (s *AuthService) HasBusinessPermission(ctx *UserContext, permission string)
 		return false
 	}
 
+	// Global roles may explicitly grant an operation within a user's resolved
+	// business context (for example, HR attendance permissions).
+	if s.HasPermission(ctx, permission) {
+		return true
+	}
+
 	if _, ok := ctx.BusinessContext.permissionSet[permission]; ok {
 		return true
 	}
@@ -324,7 +330,7 @@ func (s *AuthService) HasBusinessAccess(ctx *UserContext) bool {
 		return false
 	}
 
-	return len(ctx.BusinessContext.BusinessRoles) > 0
+	return CanAccessBusiness(ctx, ctx.BusinessContext.BusinessID)
 }
 
 // GetUserRoleLevel returns highest role level for user
