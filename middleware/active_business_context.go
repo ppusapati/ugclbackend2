@@ -108,6 +108,10 @@ func CanAccessBusiness(userCtx *UserContext, businessID uuid.UUID) bool {
 		return true
 	}
 
+	if RBACEnabled() {
+		return len(unifiedBusinessAssignments(*userCtx.User, businessID)) > 0
+	}
+
 	if userCtx.User.BusinessVerticalID != nil && *userCtx.User.BusinessVerticalID == businessID {
 		return true
 	}

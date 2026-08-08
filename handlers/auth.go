@@ -77,13 +77,14 @@ type loginPayload struct {
 }
 
 type registerReq struct {
-	Name               string     `json:"name"`
-	Email              string     `json:"email"`
-	Phone              string     `json:"phone"`
-	Password           string     `json:"password"`
-	RoleID             *uuid.UUID `json:"role_id"`              // Global role ID (or legacy business role ID from UI)
-	BusinessRoleID     *uuid.UUID `json:"business_role_id"`     // Preferred field for business role assignment
-	BusinessVerticalID *uuid.UUID `json:"business_vertical_id"` // Optional; inferred from business role when omitted
+	Name               string      `json:"name"`
+	Email              string      `json:"email"`
+	Phone              string      `json:"phone"`
+	Password           string      `json:"password"`
+	RoleID             *uuid.UUID  `json:"role_id"`              // Global role ID (or legacy business role ID from UI)
+	BusinessRoleID     *uuid.UUID  `json:"business_role_id"`     // Preferred field for business role assignment
+	BusinessVerticalID *uuid.UUID  `json:"business_vertical_id"` // Optional; inferred from business role when omitted
+	RoleIDs            []uuid.UUID `json:"role_ids"`
 }
 
 func Register(w http.ResponseWriter, r *http.Request) {
@@ -96,6 +97,11 @@ func Register(w http.ResponseWriter, r *http.Request) {
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), userRegistrationBcryptCost)
 	if err != nil {
 		http.Error(w, "error hashing password", http.StatusInternalServerError)
+		return
+	}
+
+	if middleware.RBACEnabled() {
+		registerWithRBAC(w, r, req, string(hash))
 		return
 	}
 
@@ -193,6 +199,85 @@ func Register(w http.ResponseWriter, r *http.Request) {
 
 	InvalidateAdminUsersCache()
 	w.WriteHeader(http.StatusCreated)
+}
+
+func registerWithRBAC(w http.ResponseWriter, r *http.Request, req registerReq, passwordHash string) {
+	if req.RoleID != nil || req.BusinessRoleID != nil {
+		writeRBACError(w, http.StatusBadRequest, "use role_ids for scoped RBAC assignments")
+		return
+	}
+	claims := middleware.GetClaims(r)
+	if len(req.RoleIDs) > 0 && claims == nil {
+		writeRBACError(w, http.StatusForbidden, "public registration cannot assign roles")
+		return
+	}
+	var actorID uuid.UUID
+	if claims != nil {
+		var err error
+		actorID, err = uuid.Parse(claims.UserID)
+		if err != nil {
+			writeRBACError(w, http.StatusUnauthorized, "invalid authenticated user")
+			return
+		}
+	}
+
+	user := models.User{
+		Name: req.Name, Email: req.Email, Phone: req.Phone,
+		PasswordHash: passwordHash, BusinessVerticalID: req.BusinessVerticalID,
+	}
+	err := config.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&user).Error; err != nil {
+			return err
+		}
+		seenScopes := make(map[string]struct{}, len(req.RoleIDs))
+		seenRoles := make(map[uuid.UUID]struct{}, len(req.RoleIDs))
+		for _, roleID := range req.RoleIDs {
+			if roleID == uuid.Nil {
+				return errors.New("role_ids contains an invalid ID")
+			}
+			if _, duplicate := seenRoles[roleID]; duplicate {
+				continue
+			}
+			seenRoles[roleID] = struct{}{}
+			var role models.RBACRole
+			if err := tx.First(&role, "id = ? AND is_active = ?", roleID, true).Error; err != nil {
+				return errors.New("one or more role_ids do not reference an active role")
+			}
+			allowed, err := actorCanAssignRBACRole(tx, actorID, role)
+			if err != nil {
+				return err
+			}
+			if !allowed {
+				return errors.New("you cannot assign a role at or above your privilege level")
+			}
+			scopeKey, err := role.AssignmentScopeKey()
+			if err != nil {
+				return err
+			}
+			if _, duplicate := seenScopes[scopeKey]; duplicate {
+				return errors.New("role_ids contains more than one role for the same scope")
+			}
+			seenScopes[scopeKey] = struct{}{}
+			assignment := models.UserRoleAssignment{
+				UserID: user.ID, RoleID: role.ID, ScopeKey: scopeKey,
+				IsActive: true, AssignedAt: time.Now().UTC(), AssignedBy: &actorID,
+			}
+			if err := tx.Create(&assignment).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		if utils.IsUniqueViolation(err) {
+			writeRBACError(w, http.StatusConflict, "email or phone already exists")
+		} else {
+			writeRBACError(w, http.StatusBadRequest, err.Error())
+		}
+		return
+	}
+	InvalidateAdminUsersCache()
+	writeRBACJSON(w, http.StatusCreated, map[string]interface{}{"id": user.ID, "success": true})
 }
 
 type loginReq struct {
@@ -473,14 +558,16 @@ func GetCurrentUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := map[string]interface{}{
-		"id":             user.ID,
-		"name":           user.Name,
-		"phone":          user.Phone,
-		"email":          user.Email,
-		"role_id":        user.RoleID,
-		"global_role":    globalRoleName,
-		"permissions":    permissions,
-		"business_roles": businessRoles,
+		"id":               user.ID,
+		"name":             user.Name,
+		"phone":            user.Phone,
+		"email":            user.Email,
+		"role_id":          user.RoleID,
+		"global_role":      globalRoleName,
+		"permissions":      permissions,
+		"business_roles":   businessRoles,
+		"role_assignments": CurrentUserRBACAssignments(*user),
+		"is_super_admin":   userCtx.IsSuperAdmin,
 	}
 	json.NewEncoder(w).Encode(resp)
 
@@ -527,12 +614,20 @@ func GetAllUsers(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var users []models.User
-		if err := config.DB.
+		query := config.DB.
 			Preload("RoleModel").
 			Preload("BusinessVertical").
 			Preload("UserBusinessRoles", "is_active = ?", true).
 			Preload("UserBusinessRoles.BusinessRole", "is_active = ?", true).
-			Preload("UserBusinessRoles.BusinessRole.BusinessVertical").
+			Preload("UserBusinessRoles.BusinessRole.BusinessVertical")
+		if middleware.RBACEnabled() {
+			query = query.
+				Preload("RoleAssignments", "is_active = ?", true).
+				Preload("RoleAssignments.Role", "is_active = ?", true).
+				Preload("RoleAssignments.Role.Permissions").
+				Preload("RoleAssignments.Role.BusinessVertical")
+		}
+		if err := query.
 			Where("is_active = ?", true).
 			Limit(limit).
 			Offset(offset).

@@ -248,6 +248,7 @@ func GetOfflineBootstrap(w http.ResponseWriter, r *http.Request) {
 			"is_super_admin":   userCtx.IsSuperAdmin,
 			"permissions":      permissions,
 			"business_roles":   businessRoles,
+			"role_assignments": CurrentUserRBACAssignments(*userCtx.User),
 			"accessible_sites": sites,
 		},
 		"device": deviceStatus,

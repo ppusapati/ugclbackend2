@@ -116,13 +116,7 @@ func (c *userContextCache) set(userID string, user models.User) {
 	defer c.mu.Unlock()
 
 	userCopy := user
-	globalPermissions := make([]string, 0)
-	if userCopy.RoleModel != nil {
-		globalPermissions = make([]string, 0, len(userCopy.RoleModel.Permissions))
-		for _, permission := range userCopy.RoleModel.Permissions {
-			globalPermissions = append(globalPermissions, permission.Name)
-		}
-	}
+	globalPermissions := collectGlobalPermissions(userCopy)
 
 	if elem, ok := c.entries[userID]; ok {
 		elem.Value = cachedUser{

@@ -17,23 +17,23 @@ import (
 )
 
 type migrationState struct {
-	permIDByName            map[string]string
-	roleIDByName            map[string]string
-	businessIDByCode        map[string]string
-	businessRoleIDByKey     map[string]string // key: BUSINESS_CODE::ROLE_NAME
+	permIDByName             map[string]string
+	roleIDByName             map[string]string
+	businessIDByCode         map[string]string
+	businessRoleIDByKey      map[string]string // key: BUSINESS_CODE::ROLE_NAME
 	businessRoleIDBySourceID map[string]string
-	userIDByEmail           map[string]string
-	siteIDByCode            map[string]string
-	attributeIDByName       map[string]string
-	migratedUserEmails      []string
-	migratedUserIDs         []string
-	sourcePermByID          map[string]models.Permission
-	sourceRoleByID          map[string]models.Role
-	sourceBusinessByID      map[string]models.BusinessVertical
-	sourceBusinessRoleByID  map[string]models.BusinessRole
-	sourceUserByID          map[string]models.User
-	sourceSiteByID          map[string]models.Site
-	sourceAttributeByID     map[string]models.Attribute
+	userIDByEmail            map[string]string
+	siteIDByCode             map[string]string
+	attributeIDByName        map[string]string
+	migratedUserEmails       []string
+	migratedUserIDs          []string
+	sourcePermByID           map[string]models.Permission
+	sourceRoleByID           map[string]models.Role
+	sourceBusinessByID       map[string]models.BusinessVertical
+	sourceBusinessRoleByID   map[string]models.BusinessRole
+	sourceUserByID           map[string]models.User
+	sourceSiteByID           map[string]models.Site
+	sourceAttributeByID      map[string]models.Attribute
 }
 
 func main() {
@@ -197,7 +197,7 @@ func migratePermissions(dst *gorm.DB, s *migrationState) error {
 
 	for _, p := range items {
 		if err := dst.Clauses(clause.OnConflict{
-			Columns: []clause.Column{{Name: "name"}},
+			Columns:   []clause.Column{{Name: "name"}},
 			DoUpdates: clause.AssignmentColumns([]string{"description", "resource", "action", "updated_at"}),
 		}).Create(&p).Error; err != nil {
 			return err
@@ -224,7 +224,7 @@ func migrateRoles(dst *gorm.DB, s *migrationState) error {
 
 	for _, r := range items {
 		if err := dst.Clauses(clause.OnConflict{
-			Columns: []clause.Column{{Name: "name"}},
+			Columns:   []clause.Column{{Name: "name"}},
 			DoUpdates: clause.AssignmentColumns([]string{"description", "is_active", "is_global", "level", "updated_at"}),
 		}).Create(&r).Error; err != nil {
 			return err
@@ -251,7 +251,7 @@ func migrateBusinessVerticals(dst *gorm.DB, s *migrationState) error {
 
 	for _, b := range items {
 		if err := dst.Clauses(clause.OnConflict{
-			Columns: []clause.Column{{Name: "code"}},
+			Columns:   []clause.Column{{Name: "code"}},
 			DoUpdates: clause.AssignmentColumns([]string{"name", "description", "is_active", "settings", "updated_at"}),
 		}).Create(&b).Error; err != nil {
 			return err
@@ -677,7 +677,7 @@ func migrateAttributes(src, dst *gorm.DB, s *migrationState) error {
 	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
 	for _, a := range items {
 		if err := dst.Clauses(clause.OnConflict{
-			Columns: []clause.Column{{Name: "name"}},
+			Columns:   []clause.Column{{Name: "name"}},
 			DoUpdates: clause.AssignmentColumns([]string{"display_name", "description", "type", "data_type", "is_system", "is_active", "metadata", "updated_at"}),
 		}).Create(&a).Error; err != nil {
 			return err

@@ -34,6 +34,7 @@ type adminUserOut struct {
 	CreatedAt            interface{}                `json:"created_at,omitempty"`
 	UpdatedAt            interface{}                `json:"updated_at,omitempty"`
 	BusinessRoles        []adminUserBusinessRoleOut `json:"business_roles,omitempty"`
+	RoleAssignments      []RBACAssignmentResponse   `json:"role_assignments,omitempty"`
 }
 
 func buildAdminUserResponse(user models.User) adminUserOut {
@@ -76,6 +77,7 @@ func buildAdminUserResponse(user models.User) adminUserOut {
 		CreatedAt:            user.CreatedAt,
 		UpdatedAt:            user.UpdatedAt,
 		BusinessRoles:        businessRoles,
+		RoleAssignments:      CurrentUserRBACAssignments(user),
 	}
 }
 
@@ -104,6 +106,10 @@ func UpdateUser(w http.ResponseWriter, r *http.Request) {
 	var req updateUserReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	if middleware.RBACEnabled() && req.RoleID != nil {
+		writeRBACError(w, http.StatusBadRequest, "manage roles through /admin/rbac/users/{userId}/assignments")
 		return
 	}
 
@@ -238,11 +244,18 @@ func UpdateUser(w http.ResponseWriter, r *http.Request) {
 	middleware.InvalidateUserCache(userID)
 	InvalidateAdminUsersCache()
 
-	if err := config.DB.
+	reloadQuery := config.DB.
 		Preload("RoleModel").
 		Preload("BusinessVertical").
-		Preload("UserBusinessRoles.BusinessRole.BusinessVertical").
-		First(&user, "id = ?", user.ID).Error; err != nil {
+		Preload("UserBusinessRoles.BusinessRole.BusinessVertical")
+	if middleware.RBACEnabled() {
+		reloadQuery = reloadQuery.
+			Preload("RoleAssignments", "is_active = ?", true).
+			Preload("RoleAssignments.Role", "is_active = ?", true).
+			Preload("RoleAssignments.Role.Permissions").
+			Preload("RoleAssignments.Role.BusinessVertical")
+	}
+	if err := reloadQuery.First(&user, "id = ?", user.ID).Error; err != nil {
 		http.Error(w, "failed to reload updated user", http.StatusInternalServerError)
 		return
 	}
@@ -401,11 +414,18 @@ func GetbyID(w http.ResponseWriter, r *http.Request) {
 
 	// Get user
 	var user models.User
-	if err := config.DB.
+	query := config.DB.
 		Preload("RoleModel").
 		Preload("BusinessVertical").
-		Preload("UserBusinessRoles.BusinessRole.BusinessVertical").
-		First(&user, "id = ?", id).Error; err != nil {
+		Preload("UserBusinessRoles.BusinessRole.BusinessVertical")
+	if middleware.RBACEnabled() {
+		query = query.
+			Preload("RoleAssignments", "is_active = ?", true).
+			Preload("RoleAssignments.Role", "is_active = ?", true).
+			Preload("RoleAssignments.Role.Permissions").
+			Preload("RoleAssignments.Role.BusinessVertical")
+	}
+	if err := query.First(&user, "id = ?", id).Error; err != nil {
 		http.Error(w, "user not found", http.StatusNotFound)
 		return
 	}

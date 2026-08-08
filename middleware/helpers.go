@@ -246,12 +246,7 @@ func loadUserWithAuthGraph(userID uuid.UUID) (models.User, error) {
 		}
 
 		var freshUser models.User
-		if dbErr := config.DB.
-			Preload("RoleModel.Permissions").
-			Preload("UserBusinessRoles", "is_active = ?", true).
-			Preload("UserBusinessRoles.BusinessRole", "is_active = ?", true).
-			Preload("UserBusinessRoles.BusinessRole.Permissions").
-			Preload("UserBusinessRoles.BusinessRole.BusinessVertical").
+		if dbErr := preloadAuthorizationGraph(config.DB).
 			First(&freshUser, "id = ?", userID).Error; dbErr != nil {
 			return nil, dbErr
 		}

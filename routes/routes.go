@@ -159,6 +159,7 @@ func handleProfile(w http.ResponseWriter, r *http.Request) {
 		"updated_at":       user.UpdatedAt,
 		"permissions":      permissions,
 		"business_roles":   businessRoles,
+		"role_assignments": handlers.CurrentUserRBACAssignments(*user),
 		"access_scope":     accessScope,
 		"permission_count": len(permissions),
 		"recent_logins":    []map[string]interface{}{},
@@ -536,8 +537,8 @@ func registerAdminRoutes(admin *mux.Router) {
 		http.HandlerFunc(handlers.Register))).Methods("POST")
 	admin.Handle("/users/{id}", middleware.RequirePermission("update_users")(
 		http.HandlerFunc(handlers.UpdateUser))).Methods("PUT")
-	    admin.Handle("/users/{id}/reset-password", middleware.RequirePermission("update_users")(
-		    http.HandlerFunc(handlers.AdminResetUserPassword))).Methods("POST")
+	admin.Handle("/users/{id}/reset-password", middleware.RequirePermission("update_users")(
+		http.HandlerFunc(handlers.AdminResetUserPassword))).Methods("POST")
 	admin.Handle("/users/{id}", middleware.RequirePermission("delete_users")(
 		http.HandlerFunc(handlers.DeleteUser))).Methods("DELETE")
 	admin.Handle("/users/{id}/auth/devices", middleware.RequirePermission("read_users")(
@@ -566,6 +567,22 @@ func registerAdminRoutes(admin *mux.Router) {
 		http.HandlerFunc(handlers.GetAllPermissions))).Methods("GET")
 	admin.Handle("/permissions", middleware.RequirePermission("manage_roles")(
 		http.HandlerFunc(handlers.CreatePermission))).Methods("POST")
+
+	// Canonical scoped RBAC API. Legacy role routes remain read-only during cutover.
+	admin.Handle("/rbac/roles", middleware.RequirePermission("manage_roles")(
+		http.HandlerFunc(handlers.ListRBACRoles))).Methods("GET")
+	admin.Handle("/rbac/roles", middleware.RequirePermission("manage_roles")(
+		http.HandlerFunc(handlers.CreateRBACRole))).Methods("POST")
+	admin.Handle("/rbac/roles/{roleId}", middleware.RequirePermission("manage_roles")(
+		http.HandlerFunc(handlers.UpdateRBACRole))).Methods("PUT")
+	admin.Handle("/rbac/roles/{roleId}", middleware.RequirePermission("manage_roles")(
+		http.HandlerFunc(handlers.DeactivateRBACRole))).Methods("DELETE")
+	admin.Handle("/rbac/users/{userId}/assignments", middleware.RequirePermission("manage_roles")(
+		http.HandlerFunc(handlers.ListUserRBACAssignments))).Methods("GET")
+	admin.Handle("/rbac/users/{userId}/assignments", middleware.RequirePermission("manage_roles")(
+		http.HandlerFunc(handlers.AssignRBACRole))).Methods("POST")
+	admin.Handle("/rbac/users/{userId}/assignments/{assignmentId}", middleware.RequirePermission("manage_roles")(
+		http.HandlerFunc(handlers.RemoveRBACRoleAssignment))).Methods("DELETE")
 }
 
 // registerPartnerRoutes registers partner API routes (read-only)

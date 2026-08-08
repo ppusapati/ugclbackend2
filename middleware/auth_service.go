@@ -43,12 +43,7 @@ func PrewarmAuthorizationCaches(userLimit int) {
 
 	// Preload active users with full auth graph used by LoadUserContext.
 	var users []models.User
-	if err := config.DB.
-		Preload("RoleModel.Permissions").
-		Preload("UserBusinessRoles", "is_active = ?", true).
-		Preload("UserBusinessRoles.BusinessRole", "is_active = ?", true).
-		Preload("UserBusinessRoles.BusinessRole.Permissions").
-		Preload("UserBusinessRoles.BusinessRole.BusinessVertical").
+	if err := preloadAuthorizationGraph(config.DB).
 		Where("is_active = ?", true).
 		Order("updated_at DESC").
 		Limit(userLimit).
@@ -105,6 +100,7 @@ type UserContext struct {
 type BusinessContext struct {
 	BusinessID      uuid.UUID
 	BusinessRoles   []models.UserBusinessRole
+	RoleAssignments []models.UserRoleAssignment
 	Permissions     []string
 	permissionSet   map[string]struct{}
 	IsBusinessAdmin bool
@@ -139,12 +135,7 @@ func (s *AuthService) LoadUserContext(r *http.Request) (*UserContext, error) {
 			}
 
 			var freshUser models.User
-			if err := config.DB.WithContext(r.Context()).
-				Preload("RoleModel.Permissions").
-				Preload("UserBusinessRoles", "is_active = ?", true).
-				Preload("UserBusinessRoles.BusinessRole", "is_active = ?", true).
-				Preload("UserBusinessRoles.BusinessRole.Permissions").
-				Preload("UserBusinessRoles.BusinessRole.BusinessVertical").
+			if err := preloadAuthorizationGraph(config.DB.WithContext(r.Context())).
 				First(&freshUser, "id = ?", userID).Error; err != nil {
 				return nil, err
 			}
@@ -189,6 +180,9 @@ func (s *AuthService) LoadUserContext(r *http.Request) (*UserContext, error) {
 
 // IsSuperAdmin checks if user has super admin role
 func (s *AuthService) IsSuperAdmin(user models.User) bool {
+	if RBACEnabled() {
+		return isUnifiedSuperAdmin(user)
+	}
 	if user.RoleModel != nil && user.RoleModel.Name == "super_admin" {
 		return true
 	}
@@ -197,13 +191,7 @@ func (s *AuthService) IsSuperAdmin(user models.User) bool {
 
 // GetGlobalPermissions returns all global permissions for user
 func (s *AuthService) GetGlobalPermissions(user models.User) []string {
-	permissions := make([]string, 0)
-	if user.RoleModel != nil {
-		for _, perm := range user.RoleModel.Permissions {
-			permissions = append(permissions, perm.Name)
-		}
-	}
-	return permissions
+	return collectGlobalPermissions(user)
 }
 
 // LoadBusinessContext loads business-specific context for user
@@ -220,6 +208,20 @@ func (s *AuthService) LoadBusinessContext(user models.User, businessID uuid.UUID
 		ctx.Permissions = []string{"*:*:*"} // Wildcard grants all permissions dynamically
 		ctx.permissionSet["*:*:*"] = struct{}{}
 		ctx.IsBusinessAdmin = true
+		return ctx
+	}
+
+	if RBACEnabled() {
+		ctx.RoleAssignments = unifiedBusinessAssignments(user, businessID)
+		for _, assignment := range ctx.RoleAssignments {
+			for _, permission := range assignment.Role.Permissions {
+				ctx.Permissions = append(ctx.Permissions, permission.Name)
+				ctx.permissionSet[permission.Name] = struct{}{}
+				if permission.Name == "business_admin" {
+					ctx.IsBusinessAdmin = true
+				}
+			}
+		}
 		return ctx
 	}
 
@@ -298,8 +300,7 @@ func (s *AuthService) HasBusinessPermission(ctx *UserContext, permission string)
 		return false
 	}
 
-	// Global roles may explicitly grant an operation within a user's resolved
-	// business context (for example, HR attendance permissions).
+	// Global-role permissions apply system-wide after business access has been resolved.
 	if s.HasPermission(ctx, permission) {
 		return true
 	}
@@ -392,6 +393,9 @@ func (s *AuthService) GetAccessibleBusinessVerticals(user models.User) []uuid.UU
 	}
 
 	verticalMap := make(map[uuid.UUID]bool)
+	if RBACEnabled() {
+		return unifiedAccessibleBusinessIDs(user)
+	}
 	for _, ubr := range user.UserBusinessRoles {
 		if ubr.IsActive && ubr.BusinessRole.ID != uuid.Nil {
 			verticalMap[ubr.BusinessRole.BusinessVerticalID] = true
