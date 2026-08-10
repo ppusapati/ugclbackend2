@@ -192,6 +192,40 @@ func loadRBACRole(db *gorm.DB, roleID uuid.UUID) (models.RBACRole, error) {
 	return role, err
 }
 
+func replaceRBACRolePermissions(tx *gorm.DB, roleID uuid.UUID, permissions []models.Permission) error {
+	if err := tx.Where("role_id = ?", roleID).Delete(&models.RBACRolePermission{}).Error; err != nil {
+		return err
+	}
+
+	if len(permissions) == 0 {
+		return nil
+	}
+
+	rows := make([]models.RBACRolePermission, 0, len(permissions))
+	now := time.Now().UTC()
+	for _, permission := range permissions {
+		rows = append(rows, models.RBACRolePermission{
+			RoleID:       roleID,
+			PermissionID: permission.ID,
+			CreatedAt:    now,
+		})
+	}
+
+	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&rows).Error; err != nil {
+		return err
+	}
+
+	var assignedCount int64
+	if err := tx.Model(&models.RBACRolePermission{}).Where("role_id = ?", roleID).Count(&assignedCount).Error; err != nil {
+		return err
+	}
+	if assignedCount != int64(len(rows)) {
+		return errors.New("failed to persist all permission assignments")
+	}
+
+	return nil
+}
+
 func authenticatedRBACActorID(r *http.Request) (uuid.UUID, error) {
 	claims := middleware.GetClaims(r)
 	if claims == nil {
@@ -321,7 +355,7 @@ func CreateRBACRole(w http.ResponseWriter, r *http.Request) {
 		if err := tx.Create(&created).Error; err != nil {
 			return err
 		}
-		return tx.Model(&created).Association("Permissions").Replace(permissions)
+		return replaceRBACRolePermissions(tx, created.ID, permissions)
 	})
 	if err != nil {
 		writeRBACError(w, http.StatusBadRequest, err.Error())
@@ -406,7 +440,7 @@ func UpdateRBACRole(w http.ResponseWriter, r *http.Request) {
 		if err := tx.Save(&role).Error; err != nil {
 			return err
 		}
-		if err := tx.Model(&role).Association("Permissions").Replace(permissions); err != nil {
+		if err := replaceRBACRolePermissions(tx, role.ID, permissions); err != nil {
 			return err
 		}
 		newScopeKey, err := role.AssignmentScopeKey()
