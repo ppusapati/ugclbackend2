@@ -48,16 +48,24 @@ import (
 // 	return userLevel + 1
 // }
 
-// IsSuperAdmin checks if user has super admin privileges
+// IsSuperAdmin checks if user has super admin privileges.
 func IsSuperAdmin(userID uuid.UUID) bool {
 	var user models.User
 	if err := config.DB.
 		Preload("RoleModel").
+		Preload("RoleAssignments.Role").
 		First(&user, "id = ?", userID).Error; err != nil {
 		return false
 	}
-
-	return user.RoleModel != nil && user.RoleModel.Name == "super_admin"
+	if user.RoleModel != nil && user.RoleModel.Name == "super_admin" {
+		return true
+	}
+	for _, a := range user.RoleAssignments {
+		if a.IsActive && a.Role.IsActive && a.Role.Name == "super_admin" {
+			return true
+		}
+	}
+	return false
 }
 
 // // HasPermissionInVertical checks if user has a specific permission in a business vertical

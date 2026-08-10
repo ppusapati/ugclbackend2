@@ -1080,7 +1080,7 @@ func GetUserBusinessAccess(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	} else {
-		// Regular user - only businesses they have roles in
+		// Regular user - businesses from legacy business roles and RBAC business-scoped assignments.
 		businessMap := make(map[uuid.UUID]map[string]interface{})
 
 		for _, ubr := range user.UserBusinessRoles {
@@ -1103,6 +1103,35 @@ func GetUserBusinessAccess(w http.ResponseWriter, r *http.Request) {
 				roles = append(roles, ubr.BusinessRole.DisplayName)
 				businessMap[businessID]["roles"] = roles
 			}
+		}
+
+		// RBAC business-scoped assignments (new system).
+		for _, a := range user.RoleAssignments {
+			if !a.IsActive || !a.Role.IsActive || a.Role.ScopeType != models.RoleScopeBusinessVertical {
+				continue
+			}
+			if a.Role.BusinessVerticalID == nil {
+				continue
+			}
+			bid := *a.Role.BusinessVerticalID
+			if _, exists := businessMap[bid]; !exists {
+				bv := a.Role.BusinessVertical
+				if bv == nil {
+					continue
+				}
+				businessMap[bid] = map[string]interface{}{
+					"id":          bv.ID,
+					"name":        bv.Name,
+					"code":        bv.Code,
+					"description": bv.Description,
+					"access_type": "business_role",
+					"roles":       []string{},
+					"permissions": []string{},
+				}
+			}
+			roles := businessMap[bid]["roles"].([]string)
+			roles = append(roles, a.Role.DisplayName)
+			businessMap[bid]["roles"] = roles
 		}
 
 		// Convert map to slice
@@ -1138,13 +1167,21 @@ func GetSuperAdminDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var user models.User
-	if err := config.DB.Preload("RoleModel.Permissions").First(&user, "id = ?", claims.UserID).Error; err != nil {
+	if err := config.DB.Preload("RoleModel.Permissions").Preload("RoleAssignments.Role").First(&user, "id = ?", claims.UserID).Error; err != nil {
 		http.Error(w, "user not found", http.StatusUnauthorized)
 		return
 	}
 
-	// Verify super admin access
-	isSuperAdmin2 := user.RoleModel != nil && user.RoleModel.Name == "super_admin"
+	// Verify super admin access via both legacy role and RBAC assignments.
+	isSuperAdmin2 := (user.RoleModel != nil && user.RoleModel.Name == "super_admin")
+	if !isSuperAdmin2 {
+		for _, a := range user.RoleAssignments {
+			if a.IsActive && a.Role.IsActive && a.Role.Name == "super_admin" {
+				isSuperAdmin2 = true
+				break
+			}
+		}
+	}
 	if !user.HasPermission("admin_all") && !isSuperAdmin2 {
 		http.Error(w, "super admin access required", http.StatusForbidden)
 		return

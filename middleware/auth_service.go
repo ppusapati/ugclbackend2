@@ -394,7 +394,18 @@ func (s *AuthService) GetAccessibleBusinessVerticals(user models.User) []uuid.UU
 
 	verticalMap := make(map[uuid.UUID]bool)
 	if RBACEnabled() {
-		return unifiedAccessibleBusinessIDs(user)
+		ids := unifiedAccessibleBusinessIDs(user)
+		if len(ids) > 0 {
+			return ids
+		}
+		// Global-role users have no business-scoped assignment; return all active
+		// verticals so routing succeeds — handler-level site checks enforce boundaries.
+		if hasActiveGlobalRBACRole(user) {
+			var verticalIDs []uuid.UUID
+			config.DB.Model(&models.BusinessVertical{}).Where("is_active = ?", true).Pluck("id", &verticalIDs)
+			return verticalIDs
+		}
+		return nil
 	}
 	for _, ubr := range user.UserBusinessRoles {
 		if ubr.IsActive && ubr.BusinessRole.ID != uuid.Nil {

@@ -69,18 +69,27 @@ func (u *User) GetMaxAssignableLevel() int {
 func (u *User) GetHighestRoleLevel() int {
 	minLevel := 5 // Default to lowest privilege
 
-	// Check global role level
 	if u.RoleModel != nil {
 		if u.RoleModel.Name == "super_admin" {
-			return 0 // Super Admin is level 0
+			return 0
 		}
-		// System Admin and other global roles are typically level 1
 		if u.RoleModel.IsGlobal {
 			minLevel = 1
 		}
 	}
 
-	// Check business role levels
+	// RBAC scoped assignments.
+	for _, a := range u.RoleAssignments {
+		if a.IsActive && a.Role.IsActive {
+			if a.Role.Name == "super_admin" {
+				return 0
+			}
+			if a.Role.Level < minLevel {
+				minLevel = a.Role.Level
+			}
+		}
+	}
+
 	for _, ubr := range u.UserBusinessRoles {
 		if ubr.IsActive && ubr.BusinessRole.ID != uuid.Nil {
 			if ubr.BusinessRole.Level < minLevel {
@@ -94,11 +103,15 @@ func (u *User) GetHighestRoleLevel() int {
 
 // GetAllPermissions collects all permissions from global and business roles
 func (u *User) GetAllPermissions() []string {
-	permissions := make(map[string]bool) // Use map to avoid duplicates
+	permissions := make(map[string]bool)
 
-	// Check for Super Admin wildcard
 	if u.RoleModel != nil && u.RoleModel.Name == "super_admin" {
 		return []string{"*:*:*"}
+	}
+	for _, a := range u.RoleAssignments {
+		if a.IsActive && a.Role.IsActive && a.Role.Name == "super_admin" {
+			return []string{"*:*:*"}
+		}
 	}
 
 	// Add global role permissions
@@ -128,9 +141,13 @@ func (u *User) GetAllPermissions() []string {
 
 // HasPermissionInVertical checks if user has permission in specific vertical
 func (u *User) HasPermissionInVertical(permission string, verticalID uuid.UUID) bool {
-	// Super Admin has all permissions in all verticals
 	if u.RoleModel != nil && u.RoleModel.Name == "super_admin" {
 		return true
+	}
+	for _, a := range u.RoleAssignments {
+		if a.IsActive && a.Role.IsActive && a.Role.Name == "super_admin" {
+			return true
+		}
 	}
 
 	// Check if user has role in this vertical with the required permission
