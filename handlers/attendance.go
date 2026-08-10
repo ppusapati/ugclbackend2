@@ -527,6 +527,13 @@ func loadAccessibleSite(r *http.Request, user models.User, businessID uuid.UUID,
 		return site, nil
 	}
 
+	// RBAC super_admin check (global assignment with super_admin role name).
+	for _, a := range user.RoleAssignments {
+		if a.IsActive && a.Role.IsActive && a.Role.Name == "super_admin" {
+			return site, nil
+		}
+	}
+
 	if middleware.HasBusinessPermissionInContext(r, "site:view") {
 		return site, nil
 	}

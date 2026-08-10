@@ -109,7 +109,19 @@ func CanAccessBusiness(userCtx *UserContext, businessID uuid.UUID) bool {
 	}
 
 	if RBACEnabled() {
-		return len(unifiedBusinessAssignments(*userCtx.User, businessID)) > 0
+		// Business-scoped assignments grant access to exactly that vertical.
+		if len(unifiedBusinessAssignments(*userCtx.User, businessID)) > 0 {
+			return true
+		}
+		// Global-role users have no business-scoped assignment but are system-wide
+		// administrators. They may access any vertical they have explicit site access
+		// entries for; the site-level check in the handler enforces that boundary.
+		for _, a := range userCtx.User.RoleAssignments {
+			if a.IsActive && a.Role.IsActive && a.Role.ScopeType == models.RoleScopeGlobal {
+				return true
+			}
+		}
+		return false
 	}
 
 	if userCtx.User.BusinessVerticalID != nil && *userCtx.User.BusinessVerticalID == businessID {
