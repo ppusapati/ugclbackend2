@@ -88,6 +88,13 @@ type registerReq struct {
 }
 
 func Register(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var req registerReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
@@ -116,7 +123,7 @@ func Register(w http.ResponseWriter, r *http.Request) {
 
 	resolveBusinessRole := func(roleID uuid.UUID) error {
 		var br models.BusinessRole
-		if err := config.DB.Where("id = ? AND is_active = ?", roleID, true).First(&br).Error; err != nil {
+		if err := db.Where("id = ? AND is_active = ?", roleID, true).First(&br).Error; err != nil {
 			return err
 		}
 		businessRole = &br
@@ -139,7 +146,7 @@ func Register(w http.ResponseWriter, r *http.Request) {
 
 	if req.RoleID != nil {
 		var role models.Role
-		if err := config.DB.Where("id = ? AND is_active = ?", *req.RoleID, true).First(&role).Error; err == nil {
+		if err := db.Where("id = ? AND is_active = ?", *req.RoleID, true).First(&role).Error; err == nil {
 			globalRoleID = req.RoleID
 		} else {
 			if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -163,7 +170,7 @@ func Register(w http.ResponseWriter, r *http.Request) {
 		BusinessVerticalID: businessVerticalID,
 	}
 
-	tx := config.DB.Begin()
+	tx := db.Begin()
 	if tx.Error != nil {
 		http.Error(w, "db error: "+tx.Error.Error(), http.StatusInternalServerError)
 		return
@@ -202,6 +209,13 @@ func Register(w http.ResponseWriter, r *http.Request) {
 }
 
 func registerWithRBAC(w http.ResponseWriter, r *http.Request, req registerReq, passwordHash string) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	if req.RoleID != nil || req.BusinessRoleID != nil {
 		writeRBACError(w, http.StatusBadRequest, "use role_ids for scoped RBAC assignments")
 		return
@@ -225,7 +239,7 @@ func registerWithRBAC(w http.ResponseWriter, r *http.Request, req registerReq, p
 		Name: req.Name, Email: req.Email, Phone: req.Phone,
 		PasswordHash: passwordHash, BusinessVerticalID: req.BusinessVerticalID,
 	}
-	err := config.DB.Transaction(func(tx *gorm.DB) error {
+	err = db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&user).Error; err != nil {
 			return err
 		}
@@ -342,6 +356,13 @@ func shouldLogSlowLogin(totalDuration time.Duration) bool {
 }
 
 func Login(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, dbErr := config.DBFromContext(r.Context())
+	if dbErr != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	requestStart := time.Now()
 	var dbLookupDuration time.Duration
 	var passwordCheckDuration time.Duration
@@ -359,7 +380,7 @@ func Login(w http.ResponseWriter, r *http.Request) {
 	// Keep login lookup minimal and index-friendly: avoid implicit ORDER BY from First().
 	dbLookupStart := time.Now()
 	var u models.User
-	if err := config.DB.WithContext(loginCtx).
+	if err := db.WithContext(loginCtx).
 		Select("id", "name", "email", "phone", "password_hash", "role_id").
 		Where("phone = ?", req.Phone).
 		Take(&u).Error; err != nil {
@@ -379,7 +400,7 @@ func Login(w http.ResponseWriter, r *http.Request) {
 	roleName := "user" // default
 	if u.RoleID != nil {
 		var role models.Role
-		if err := config.DB.WithContext(loginCtx).Select("name").Where("id = ?", *u.RoleID).Take(&role).Error; err == nil {
+		if err := db.WithContext(loginCtx).Select("name").Where("id = ?", *u.RoleID).Take(&role).Error; err == nil {
 			roleName = role.Name
 		}
 	}
@@ -402,11 +423,19 @@ func Login(w http.ResponseWriter, r *http.Request) {
 		IPAddress: clientIPFromRequest(r),
 		UserAgent: strings.TrimSpace(r.UserAgent()),
 	}
+	tenantSchema := config.TenantSchemaFromContext(r.Context())
 	go func(event models.UserLoginEvent) {
-		auditCtx, auditCancel := context.WithTimeout(context.Background(), loginAuditInsertTimeout())
+		auditCtx, auditCancel := context.WithTimeout(config.WithTenantSchema(context.Background(), tenantSchema), loginAuditInsertTimeout())
 		defer auditCancel()
 
-		if auditErr := config.DB.WithContext(auditCtx).Create(&event).Error; auditErr != nil {
+		auditDB, auditCleanup, dbErr := config.DBFromContext(auditCtx)
+		if dbErr != nil {
+			slog.Warn("login audit db unavailable", "user_id", event.UserID, "error", dbErr)
+			return
+		}
+		defer auditCleanup()
+
+		if auditErr := auditDB.WithContext(auditCtx).Create(&event).Error; auditErr != nil {
 			slog.Warn("login audit insert failed", "user_id", event.UserID, "error", auditErr)
 		}
 	}(loginEvent)
@@ -418,7 +447,7 @@ func Login(w http.ResponseWriter, r *http.Request) {
 	clientID := strings.TrimSpace(r.Header.Get("X-Client-ID"))
 	if clientID != "" {
 		_, bindErr := UpsertTrustedDeviceBinding(
-			config.DB,
+			db,
 			u.ID,
 			clientID,
 			optionalString(installID),
@@ -612,6 +641,13 @@ func GetCurrentUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func GetAllUsers(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	pageStr := r.URL.Query().Get("page")
 	limitStr := r.URL.Query().Get("limit")
 
@@ -628,7 +664,8 @@ func GetAllUsers(w http.ResponseWriter, r *http.Request) {
 		limit = 100
 	}
 	offset := (page - 1) * limit
-	cacheKey := adminUsersCacheKey(page, limit)
+	tenantSchema := config.TenantSchemaFromContext(r.Context())
+	cacheKey := tenantSchema + ":" + adminUsersCacheKey(page, limit)
 
 	if payload, ok := adminUsersCache.get(cacheKey); ok {
 		w.Header().Set("Content-Type", "application/json")
@@ -642,7 +679,7 @@ func GetAllUsers(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var users []models.User
-		query := config.DB.
+		query := db.
 			Preload("RoleModel").
 			Preload("BusinessVertical").
 			Preload("UserBusinessRoles", "is_active = ?", true).
@@ -664,7 +701,7 @@ func GetAllUsers(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var total int64
-		if err := config.DB.
+		if err := db.
 			Model(&models.User{}).
 			Where("is_active = ?", true).
 			Count(&total).Error; err != nil {
