@@ -18,11 +18,18 @@ import (
 
 // GetDocumentVersionsHandler returns all versions of a document
 func GetDocumentVersionsHandler(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	documentID := vars["id"]
 
 	var versions []models.DocumentVersion
-	if err := config.DB.Preload("CreatedBy").Where("document_id = ?", documentID).
+	if err := db.Preload("CreatedBy").Where("document_id = ?", documentID).
 		Order("version_number DESC").Find(&versions).Error; err != nil {
 		http.Error(w, "failed to fetch versions: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -34,6 +41,13 @@ func GetDocumentVersionsHandler(w http.ResponseWriter, r *http.Request) {
 
 // CreateDocumentVersionHandler creates a new version of a document
 func CreateDocumentVersionHandler(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	documentID := vars["id"]
 	userID, err := getDocumentUserID(r)
@@ -44,7 +58,7 @@ func CreateDocumentVersionHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Get existing document
 	var document models.Document
-	if err := config.DB.First(&document, "id = ?", documentID).Error; err != nil {
+	if err := db.First(&document, "id = ?", documentID).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			http.Error(w, "document not found", http.StatusNotFound)
 		} else {
@@ -93,7 +107,7 @@ func CreateDocumentVersionHandler(w http.ResponseWriter, r *http.Request) {
 	fileSize := upload.Size
 
 	// Start transaction
-	tx := config.DB.Begin()
+	tx := db.Begin()
 	defer func() {
 		if r := recover(); r != nil {
 			tx.Rollback()
@@ -167,7 +181,7 @@ func CreateDocumentVersionHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Load relationships
-	config.DB.Preload("CreatedBy").First(&version, version.ID)
+	db.Preload("CreatedBy").First(&version, version.ID)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -178,6 +192,13 @@ func CreateDocumentVersionHandler(w http.ResponseWriter, r *http.Request) {
 
 // RollbackDocumentVersionHandler rolls back a document to a specific version
 func RollbackDocumentVersionHandler(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	documentID := vars["id"]
 	versionID := vars["version_id"]
@@ -189,7 +210,7 @@ func RollbackDocumentVersionHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Get document
 	var document models.Document
-	if err := config.DB.First(&document, "id = ?", documentID).Error; err != nil {
+	if err := db.First(&document, "id = ?", documentID).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			http.Error(w, "document not found", http.StatusNotFound)
 		} else {
@@ -200,7 +221,7 @@ func RollbackDocumentVersionHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Get target version
 	var targetVersion models.DocumentVersion
-	if err := config.DB.First(&targetVersion, "id = ? AND document_id = ?", versionID, documentID).Error; err != nil {
+	if err := db.First(&targetVersion, "id = ? AND document_id = ?", versionID, documentID).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			http.Error(w, "version not found", http.StatusNotFound)
 		} else {
@@ -210,7 +231,7 @@ func RollbackDocumentVersionHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Start transaction
-	tx := config.DB.Begin()
+	tx := db.Begin()
 	defer func() {
 		if r := recover(); r != nil {
 			tx.Rollback()
@@ -266,6 +287,13 @@ func RollbackDocumentVersionHandler(w http.ResponseWriter, r *http.Request) {
 
 // DownloadDocumentVersionHandler downloads a specific version of a document
 func DownloadDocumentVersionHandler(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	documentID := vars["id"]
 	versionID := vars["version_id"]
@@ -276,7 +304,7 @@ func DownloadDocumentVersionHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var version models.DocumentVersion
-	if err := config.DB.First(&version, "id = ? AND document_id = ?", versionID, documentID).Error; err != nil {
+	if err := db.First(&version, "id = ? AND document_id = ?", versionID, documentID).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			http.Error(w, "version not found", http.StatusNotFound)
 		} else {
@@ -294,7 +322,7 @@ func DownloadDocumentVersionHandler(w http.ResponseWriter, r *http.Request) {
 		IPAddress:  r.RemoteAddr,
 		UserAgent:  r.UserAgent(),
 	}
-	config.DB.Create(&auditLog)
+	db.Create(&auditLog)
 
 	if err := serveStoredFile(w, r, version.FilePath, version.FileName, version.FileType, version.FileSize); err != nil {
 		if errors.Is(err, errStoredFileNotFound) {
@@ -307,6 +335,13 @@ func DownloadDocumentVersionHandler(w http.ResponseWriter, r *http.Request) {
 
 // CompareDocumentVersionsHandler compares two versions of a document
 func CompareDocumentVersionsHandler(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	documentID := vars["id"]
 	version1ID := r.URL.Query().Get("version1")
@@ -318,12 +353,12 @@ func CompareDocumentVersionsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var version1, version2 models.DocumentVersion
-	if err := config.DB.Preload("CreatedBy").First(&version1, "id = ? AND document_id = ?", version1ID, documentID).Error; err != nil {
+	if err := db.Preload("CreatedBy").First(&version1, "id = ? AND document_id = ?", version1ID, documentID).Error; err != nil {
 		http.Error(w, "version1 not found", http.StatusNotFound)
 		return
 	}
 
-	if err := config.DB.Preload("CreatedBy").First(&version2, "id = ? AND document_id = ?", version2ID, documentID).Error; err != nil {
+	if err := db.Preload("CreatedBy").First(&version2, "id = ? AND document_id = ?", version2ID, documentID).Error; err != nil {
 		http.Error(w, "version2 not found", http.StatusNotFound)
 		return
 	}
