@@ -238,9 +238,9 @@ func authenticatedRBACActorID(r *http.Request) (uuid.UUID, error) {
 	return actorID, nil
 }
 
-func invalidateUsersAssignedToRole(roleID uuid.UUID) {
+func invalidateUsersAssignedToRole(db *gorm.DB, roleID uuid.UUID) {
 	var userIDs []uuid.UUID
-	if err := config.DB.Model(&models.UserRoleAssignment{}).
+	if err := db.Model(&models.UserRoleAssignment{}).
 		Where("role_id = ? AND is_active = ?", roleID, true).
 		Distinct("user_id").Pluck("user_id", &userIDs).Error; err == nil {
 		for _, userID := range userIDs {
@@ -252,6 +252,13 @@ func invalidateUsersAssignedToRole(roleID uuid.UUID) {
 }
 
 func ListRBACRoles(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		writeRBACError(w, http.StatusInternalServerError, "database unavailable")
+		return
+	}
+	defer cleanup()
+
 	page, limit := 1, 50
 	if value, err := strconv.Atoi(r.URL.Query().Get("page")); err == nil && value > 0 {
 		page = value
@@ -260,7 +267,7 @@ func ListRBACRoles(w http.ResponseWriter, r *http.Request) {
 		limit = value
 	}
 
-	query := config.DB.Model(&models.RBACRole{})
+	query := db.Model(&models.RBACRole{})
 	if r.URL.Query().Get("include_inactive") != "true" {
 		query = query.Where("is_active = ?", true)
 	}
@@ -299,12 +306,19 @@ func ListRBACRoles(w http.ResponseWriter, r *http.Request) {
 }
 
 func GetRBACRole(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		writeRBACError(w, http.StatusInternalServerError, "database unavailable")
+		return
+	}
+	defer cleanup()
+
 	roleID, err := uuid.Parse(mux.Vars(r)["roleId"])
 	if err != nil {
 		writeRBACError(w, http.StatusBadRequest, "invalid role ID")
 		return
 	}
-	role, err := loadRBACRole(config.DB, roleID)
+	role, err := loadRBACRole(db, roleID)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		writeRBACError(w, http.StatusNotFound, "role not found")
 		return
@@ -317,6 +331,13 @@ func GetRBACRole(w http.ResponseWriter, r *http.Request) {
 }
 
 func CreateRBACRole(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		writeRBACError(w, http.StatusInternalServerError, "database unavailable")
+		return
+	}
+	defer cleanup()
+
 	actorID, err := authenticatedRBACActorID(r)
 	if err != nil {
 		writeRBACError(w, http.StatusUnauthorized, err.Error())
@@ -331,7 +352,7 @@ func CreateRBACRole(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var created models.RBACRole
-	err = config.DB.Transaction(func(tx *gorm.DB) error {
+	err = db.Transaction(func(tx *gorm.DB) error {
 		permissions, err := validateRBACRoleRequest(tx, &req, nil)
 		if err != nil {
 			return err
@@ -361,7 +382,7 @@ func CreateRBACRole(w http.ResponseWriter, r *http.Request) {
 		writeRBACError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	created, err = loadRBACRole(config.DB, created.ID)
+	created, err = loadRBACRole(db, created.ID)
 	if err != nil {
 		writeRBACError(w, http.StatusInternalServerError, "role created but could not be reloaded")
 		return
@@ -371,6 +392,13 @@ func CreateRBACRole(w http.ResponseWriter, r *http.Request) {
 }
 
 func UpdateRBACRole(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		writeRBACError(w, http.StatusInternalServerError, "database unavailable")
+		return
+	}
+	defer cleanup()
+
 	roleID, err := uuid.Parse(mux.Vars(r)["roleId"])
 	if err != nil {
 		writeRBACError(w, http.StatusBadRequest, "invalid role ID")
@@ -389,7 +417,7 @@ func UpdateRBACRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = config.DB.Transaction(func(tx *gorm.DB) error {
+	err = db.Transaction(func(tx *gorm.DB) error {
 		var role models.RBACRole
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&role, "id = ?", roleID).Error; err != nil {
 			return err
@@ -459,12 +487,12 @@ func UpdateRBACRole(w http.ResponseWriter, r *http.Request) {
 		writeRBACError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	role, err := loadRBACRole(config.DB, roleID)
+	role, err := loadRBACRole(db, roleID)
 	if err != nil {
 		writeRBACError(w, http.StatusInternalServerError, "role updated but could not be reloaded")
 		return
 	}
-	invalidateUsersAssignedToRole(roleID)
+	invalidateUsersAssignedToRole(db, roleID)
 	writeRBACJSON(w, http.StatusOK, roleResponseFromModel(role))
 }
 
@@ -476,6 +504,13 @@ func sameOptionalUUID(left, right *uuid.UUID) bool {
 }
 
 func DeactivateRBACRole(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		writeRBACError(w, http.StatusInternalServerError, "database unavailable")
+		return
+	}
+	defer cleanup()
+
 	roleID, err := uuid.Parse(mux.Vars(r)["roleId"])
 	if err != nil {
 		writeRBACError(w, http.StatusBadRequest, "invalid role ID")
@@ -487,7 +522,7 @@ func DeactivateRBACRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var affectedUserIDs []uuid.UUID
-	err = config.DB.Transaction(func(tx *gorm.DB) error {
+	err = db.Transaction(func(tx *gorm.DB) error {
 		var role models.RBACRole
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&role, "id = ?", roleID).Error; err != nil {
 			return err
@@ -535,13 +570,20 @@ func DeactivateRBACRole(w http.ResponseWriter, r *http.Request) {
 }
 
 func ListUserRBACAssignments(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		writeRBACError(w, http.StatusInternalServerError, "database unavailable")
+		return
+	}
+	defer cleanup()
+
 	userID, err := uuid.Parse(mux.Vars(r)["userId"])
 	if err != nil {
 		writeRBACError(w, http.StatusBadRequest, "invalid user ID")
 		return
 	}
 	var assignments []models.UserRoleAssignment
-	if err := config.DB.Preload("Role.Permissions").Preload("Role.BusinessVertical").
+	if err := db.Preload("Role.Permissions").Preload("Role.BusinessVertical").
 		Where("user_id = ? AND is_active = ?", userID, true).
 		Order("scope_key").Find(&assignments).Error; err != nil {
 		writeRBACError(w, http.StatusInternalServerError, "failed to load assignments")
@@ -582,6 +624,13 @@ func actorRoleCanManageTarget(actor, target models.RBACRole) bool {
 }
 
 func AssignRBACRole(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		writeRBACError(w, http.StatusInternalServerError, "database unavailable")
+		return
+	}
+	defer cleanup()
+
 	targetUserID, err := uuid.Parse(mux.Vars(r)["userId"])
 	if err != nil {
 		writeRBACError(w, http.StatusBadRequest, "invalid user ID")
@@ -606,7 +655,7 @@ func AssignRBACRole(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var assignment models.UserRoleAssignment
-	err = config.DB.Transaction(func(tx *gorm.DB) error {
+	err = db.Transaction(func(tx *gorm.DB) error {
 		var userCount int64
 		if err := tx.Model(&models.User{}).Where("id = ? AND is_active = ?", targetUserID, true).Count(&userCount).Error; err != nil {
 			return err
@@ -655,7 +704,7 @@ func AssignRBACRole(w http.ResponseWriter, r *http.Request) {
 		writeRBACError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := config.DB.Preload("Role.Permissions").Preload("Role.BusinessVertical").First(&assignment, "id = ?", assignment.ID).Error; err != nil {
+	if err := db.Preload("Role.Permissions").Preload("Role.BusinessVertical").First(&assignment, "id = ?", assignment.ID).Error; err != nil {
 		writeRBACError(w, http.StatusInternalServerError, "assignment saved but could not be reloaded")
 		return
 	}
@@ -665,6 +714,13 @@ func AssignRBACRole(w http.ResponseWriter, r *http.Request) {
 }
 
 func RemoveRBACRoleAssignment(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		writeRBACError(w, http.StatusInternalServerError, "database unavailable")
+		return
+	}
+	defer cleanup()
+
 	targetUserID, err := uuid.Parse(mux.Vars(r)["userId"])
 	if err != nil {
 		writeRBACError(w, http.StatusBadRequest, "invalid user ID")
@@ -680,7 +736,7 @@ func RemoveRBACRoleAssignment(w http.ResponseWriter, r *http.Request) {
 		writeRBACError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
-	err = config.DB.Transaction(func(tx *gorm.DB) error {
+	err = db.Transaction(func(tx *gorm.DB) error {
 		var assignment models.UserRoleAssignment
 		if err := tx.Preload("Role").Clauses(clause.Locking{Strength: "UPDATE"}).
 			First(&assignment, "id = ? AND user_id = ? AND is_active = ?", assignmentID, targetUserID, true).Error; err != nil {
