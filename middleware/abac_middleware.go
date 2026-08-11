@@ -24,6 +24,13 @@ func RequireABACPolicy(action string, resourceType string) func(http.Handler) ht
 				return
 			}
 
+			db, cleanup, err := config.DBFromContext(r.Context())
+			if err != nil {
+				http.Error(w, "database unavailable", http.StatusInternalServerError)
+				return
+			}
+			defer cleanup()
+
 			// Parse user ID
 			userID, err := uuid.Parse(claims.UserID)
 			if err != nil {
@@ -52,7 +59,7 @@ func RequireABACPolicy(action string, resourceType string) func(http.Handler) ht
 			}
 
 			// Get user attributes
-			attributeService := abac.NewAttributeService(config.DB)
+			attributeService := abac.NewAttributeService(db)
 			userAttrs, err := attributeService.GetUserAttributes(userID)
 			if err == nil {
 				policyReq.UserAttributes = userAttrs
@@ -74,7 +81,7 @@ func RequireABACPolicy(action string, resourceType string) func(http.Handler) ht
 			policyReq.Environment["environment.user_agent"] = r.UserAgent()
 
 			// Evaluate policies
-			policyEngine := abac.NewPolicyEngine(config.DB)
+			policyEngine := abac.NewPolicyEngine(db)
 			decision, err := policyEngine.EvaluateRequest(policyReq)
 			if err != nil {
 				http.Error(w, fmt.Sprintf("Policy evaluation error: %v", err), http.StatusInternalServerError)
@@ -124,7 +131,7 @@ func CheckPolicyDecision(userID uuid.UUID, action string, resourceType string, r
 	}
 
 	// Get user attributes
-	attributeService := abac.NewAttributeService(config.DB)
+	attributeService := abac.NewAttributeService(config.DB) // config-db-ok: CheckPolicyDecision is unused (no callers), no request to thread a tenant schema from
 	userAttrs, err := attributeService.GetUserAttributes(userID)
 	if err == nil {
 		policyReq.UserAttributes = userAttrs
@@ -139,6 +146,6 @@ func CheckPolicyDecision(userID uuid.UUID, action string, resourceType string, r
 	}
 
 	// Evaluate policies
-	policyEngine := abac.NewPolicyEngine(config.DB)
+	policyEngine := abac.NewPolicyEngine(config.DB) // config-db-ok: CheckPolicyDecision is unused (no callers), no request to thread a tenant schema from
 	return policyEngine.EvaluateRequest(policyReq)
 }
