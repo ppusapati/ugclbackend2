@@ -100,6 +100,13 @@ type updateUserReq struct {
 
 // UpdateUser allows admins to update user information
 func UpdateUser(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	userID := vars["id"]
 
@@ -122,7 +129,7 @@ func UpdateUser(w http.ResponseWriter, r *http.Request) {
 
 	// Get existing user
 	var user models.User
-	if err := config.DB.First(&user, "id = ?", id).Error; err != nil {
+	if err := db.First(&user, "id = ?", id).Error; err != nil {
 		http.Error(w, "user not found", http.StatusNotFound)
 		return
 	}
@@ -161,7 +168,7 @@ func UpdateUser(w http.ResponseWriter, r *http.Request) {
 			}
 
 			var role models.Role
-			if err := config.DB.First(&role, "id = ? AND is_active = ?", roleID, true).Error; err != nil {
+			if err := db.First(&role, "id = ? AND is_active = ?", roleID, true).Error; err != nil {
 				http.Error(w, "role not found", http.StatusBadRequest)
 				return
 			}
@@ -182,7 +189,7 @@ func UpdateUser(w http.ResponseWriter, r *http.Request) {
 			}
 
 			var businessVertical models.BusinessVertical
-			if err := config.DB.First(&businessVertical, "id = ? AND is_active = ?", businessVerticalID, true).Error; err != nil {
+			if err := db.First(&businessVertical, "id = ? AND is_active = ?", businessVerticalID, true).Error; err != nil {
 				http.Error(w, "business vertical not found", http.StatusBadRequest)
 				return
 			}
@@ -197,7 +204,7 @@ func UpdateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Use Updates() instead of Save() to explicitly persist pointer fields
-	if err := config.DB.Model(&user).Updates(updateMap).Error; err != nil {
+	if err := db.Model(&user).Updates(updateMap).Error; err != nil {
 		http.Error(w, "failed to update user: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -205,7 +212,7 @@ func UpdateUser(w http.ResponseWriter, r *http.Request) {
 	// Verify critical role/vertical fields actually persisted when requested.
 	if req.RoleID != nil || req.BusinessVerticalID != nil {
 		var persisted models.User
-		if err := config.DB.Select("id", "role_id", "business_vertical_id").First(&persisted, "id = ?", user.ID).Error; err != nil {
+		if err := db.Select("id", "role_id", "business_vertical_id").First(&persisted, "id = ?", user.ID).Error; err != nil {
 			http.Error(w, "failed to verify user update: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -251,7 +258,7 @@ func UpdateUser(w http.ResponseWriter, r *http.Request) {
 	middleware.InvalidateUserCache(userID)
 	InvalidateAdminUsersCache()
 
-	reloadQuery := config.DB.
+	reloadQuery := db.
 		Preload("RoleModel").
 		Preload("BusinessVertical").
 		Preload("UserBusinessRoles.BusinessRole.BusinessVertical")
@@ -273,6 +280,13 @@ func UpdateUser(w http.ResponseWriter, r *http.Request) {
 
 // DeleteUser allows admins to soft delete users
 func DeleteUser(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	userID := vars["id"]
 
@@ -285,7 +299,7 @@ func DeleteUser(w http.ResponseWriter, r *http.Request) {
 
 	// Check if user exists
 	var user models.User
-	if err := config.DB.First(&user, "id = ?", id).Error; err != nil {
+	if err := db.First(&user, "id = ?", id).Error; err != nil {
 		http.Error(w, "user not found", http.StatusNotFound)
 		return
 	}
@@ -299,7 +313,7 @@ func DeleteUser(w http.ResponseWriter, r *http.Request) {
 
 	// Soft delete (set IsActive to false)
 	user.IsActive = false
-	if err := config.DB.Save(&user).Error; err != nil {
+	if err := db.Save(&user).Error; err != nil {
 		http.Error(w, "failed to delete user: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -323,6 +337,13 @@ type adminResetPasswordReq struct {
 
 // ChangePassword allows users to change their own password
 func ChangePassword(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var req changePasswordReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
@@ -332,7 +353,7 @@ func ChangePassword(w http.ResponseWriter, r *http.Request) {
 	// Get current user
 	claims := middleware.GetClaims(r)
 	var user models.User
-	if err := config.DB.First(&user, "id = ?", claims.UserID).Error; err != nil {
+	if err := db.First(&user, "id = ?", claims.UserID).Error; err != nil {
 		http.Error(w, "user not found", http.StatusNotFound)
 		return
 	}
@@ -352,7 +373,7 @@ func ChangePassword(w http.ResponseWriter, r *http.Request) {
 
 	// Update password
 	user.PasswordHash = string(hash)
-	if err := config.DB.Save(&user).Error; err != nil {
+	if err := db.Save(&user).Error; err != nil {
 		http.Error(w, "failed to update password: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -363,6 +384,13 @@ func ChangePassword(w http.ResponseWriter, r *http.Request) {
 
 // AdminResetUserPassword allows admins to reset a user's password without the current password.
 func AdminResetUserPassword(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	userID := vars["id"]
 
@@ -384,7 +412,7 @@ func AdminResetUserPassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var user models.User
-	if err := config.DB.First(&user, "id = ?", id).Error; err != nil {
+	if err := db.First(&user, "id = ?", id).Error; err != nil {
 		http.Error(w, "user not found", http.StatusNotFound)
 		return
 	}
@@ -396,7 +424,7 @@ func AdminResetUserPassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user.PasswordHash = string(hash)
-	if err := config.DB.Model(&user).Update("password_hash", user.PasswordHash).Error; err != nil {
+	if err := db.Model(&user).Update("password_hash", user.PasswordHash).Error; err != nil {
 		http.Error(w, "failed to reset password: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -409,6 +437,13 @@ func AdminResetUserPassword(w http.ResponseWriter, r *http.Request) {
 }
 
 func GetbyID(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	userID := vars["id"]
 
@@ -421,7 +456,7 @@ func GetbyID(w http.ResponseWriter, r *http.Request) {
 
 	// Get user
 	var user models.User
-	query := config.DB.
+	query := db.
 		Preload("RoleModel").
 		Preload("BusinessVertical").
 		Preload("UserBusinessRoles.BusinessRole.BusinessVertical")
