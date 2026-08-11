@@ -73,6 +73,13 @@ func invalidatePolicyCaches() {
 
 // CreatePolicy creates a new policy
 func CreatePolicy(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var policy models.Policy
 	if err := json.NewDecoder(r.Body).Decode(&policy); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -89,7 +96,7 @@ func CreatePolicy(w http.ResponseWriter, r *http.Request) {
 	policy.CreatedBy = userID
 
 	// Create policy
-	policyService := abac.NewPolicyService(config.DB)
+	policyService := abac.NewPolicyService(db)
 	createdPolicy, err := policyService.CreatePolicy(policy)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -104,6 +111,13 @@ func CreatePolicy(w http.ResponseWriter, r *http.Request) {
 
 // UpdatePolicy updates an existing policy
 func UpdatePolicy(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	policyID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -127,7 +141,7 @@ func UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 	updates.UpdatedBy = &userID
 
 	// Update policy
-	policyService := abac.NewPolicyService(config.DB)
+	policyService := abac.NewPolicyService(db)
 	updatedPolicy, err := policyService.UpdatePolicy(policyID, updates)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -141,6 +155,13 @@ func UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 
 // DeletePolicy deletes a policy
 func DeletePolicy(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	policyID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -148,7 +169,7 @@ func DeletePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	policyService := abac.NewPolicyService(config.DB)
+	policyService := abac.NewPolicyService(db)
 	if err := policyService.DeletePolicy(policyID); err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -160,6 +181,13 @@ func DeletePolicy(w http.ResponseWriter, r *http.Request) {
 
 // GetPolicy retrieves a single policy
 func GetPolicy(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	policyID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -167,7 +195,7 @@ func GetPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	policyService := abac.NewPolicyService(config.DB)
+	policyService := abac.NewPolicyService(db)
 	policy, err := policyService.GetPolicy(policyID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
@@ -180,6 +208,13 @@ func GetPolicy(w http.ResponseWriter, r *http.Request) {
 
 // ListPolicies lists all policies with pagination and filtering
 func ListPolicies(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	// Parse query parameters
 	limitStr := r.URL.Query().Get("limit")
 	offsetStr := r.URL.Query().Get("offset")
@@ -213,7 +248,7 @@ func ListPolicies(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	policyService := abac.NewPolicyService(config.DB)
+	policyService := abac.NewPolicyService(db)
 	statusKey := ""
 	if status != nil {
 		statusKey = string(*status)
@@ -222,7 +257,8 @@ func ListPolicies(w http.ResponseWriter, r *http.Request) {
 	if businessVerticalID != nil {
 		businessKey = businessVerticalID.String()
 	}
-	cacheKey := statusKey + "|" + businessKey + "|" + strconv.Itoa(limit) + "|" + strconv.Itoa(offset)
+	tenantSchema := config.TenantSchemaFromContext(r.Context())
+	cacheKey := tenantSchema + "|" + statusKey + "|" + businessKey + "|" + strconv.Itoa(limit) + "|" + strconv.Itoa(offset)
 
 	if payload, ok := policyListCache.get(cacheKey); ok {
 		w.Header().Set("Content-Type", "application/json")
@@ -265,6 +301,13 @@ func ListPolicies(w http.ResponseWriter, r *http.Request) {
 
 // ActivatePolicy activates a policy
 func ActivatePolicy(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	policyID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -278,7 +321,7 @@ func ActivatePolicy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid user ID", http.StatusUnauthorized)
 		return
 	}
-	policyService := abac.NewPolicyService(config.DB)
+	policyService := abac.NewPolicyService(db)
 	if err := policyService.ActivatePolicy(policyID, userID); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -291,6 +334,13 @@ func ActivatePolicy(w http.ResponseWriter, r *http.Request) {
 
 // DeactivatePolicy deactivates a policy
 func DeactivatePolicy(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	policyID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -304,7 +354,7 @@ func DeactivatePolicy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid user ID", http.StatusUnauthorized)
 		return
 	}
-	policyService := abac.NewPolicyService(config.DB)
+	policyService := abac.NewPolicyService(db)
 	if err := policyService.DeactivatePolicy(policyID, userID); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -317,6 +367,13 @@ func DeactivatePolicy(w http.ResponseWriter, r *http.Request) {
 
 // TestPolicy tests a policy against a request
 func TestPolicy(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	policyID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -330,7 +387,7 @@ func TestPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	policyService := abac.NewPolicyService(config.DB)
+	policyService := abac.NewPolicyService(db)
 	decision, err := policyService.TestPolicy(policyID, req)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -343,6 +400,13 @@ func TestPolicy(w http.ResponseWriter, r *http.Request) {
 
 // ClonePolicy clones an existing policy
 func ClonePolicy(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	policyID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -364,7 +428,7 @@ func ClonePolicy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid user ID", http.StatusUnauthorized)
 		return
 	}
-	policyService := abac.NewPolicyService(config.DB)
+	policyService := abac.NewPolicyService(db)
 	clonedPolicy, err := policyService.ClonePolicy(policyID, userID, req.NewName)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -379,6 +443,13 @@ func ClonePolicy(w http.ResponseWriter, r *http.Request) {
 
 // GetPolicyEvaluations retrieves evaluation history for a policy
 func GetPolicyEvaluations(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	policyID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -403,7 +474,7 @@ func GetPolicyEvaluations(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	policyService := abac.NewPolicyService(config.DB)
+	policyService := abac.NewPolicyService(db)
 	evaluations, total, err := policyService.GetPolicyEvaluations(policyID, limit, offset)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -423,8 +494,15 @@ func GetPolicyEvaluations(w http.ResponseWriter, r *http.Request) {
 
 // GetPolicyStatistics returns policy statistics
 func GetPolicyStatistics(w http.ResponseWriter, r *http.Request) {
-	policyService := abac.NewPolicyService(config.DB)
-	const cacheKey = "all"
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
+	policyService := abac.NewPolicyService(db)
+	cacheKey := config.TenantSchemaFromContext(r.Context()) + "|all"
 
 	if payload, ok := policyStatsCache.get(cacheKey); ok {
 		w.Header().Set("Content-Type", "application/json")
@@ -460,13 +538,20 @@ func GetPolicyStatistics(w http.ResponseWriter, r *http.Request) {
 
 // EvaluatePolicyRequest evaluates an authorization request against all policies
 func EvaluatePolicyRequest(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var req models.PolicyRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	policyEngine := abac.NewPolicyEngine(config.DB)
+	policyEngine := abac.NewPolicyEngine(db)
 	decision, err := policyEngine.EvaluateRequest(req)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
