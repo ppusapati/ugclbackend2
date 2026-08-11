@@ -47,6 +47,13 @@ type UpdateWebhookRequest struct {
 // @Failure 401 {object} map[string]string "Unauthorized"
 // @Router /api/v1/webhooks [post]
 func CreateWebhook(c *gin.Context) {
+	db, cleanup, err := config.DBFromContext(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "database unavailable"})
+		return
+	}
+	defer cleanup()
+
 	var req CreateWebhookRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -90,7 +97,7 @@ func CreateWebhook(c *gin.Context) {
 		Status:        models.StatusActive,
 	}
 
-	webhookService := utils.NewWebhookService(config.DB)
+	webhookService := utils.NewWebhookService(db)
 	if err := webhookService.CreateWebhook(webhook); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Failed to create webhook: %v", err)})
 		return
@@ -108,13 +115,20 @@ func CreateWebhook(c *gin.Context) {
 // @Failure 401 {object} map[string]string "Unauthorized"
 // @Router /api/v1/webhooks [get]
 func ListWebhooks(c *gin.Context) {
+	db, cleanup, err := config.DBFromContext(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "database unavailable"})
+		return
+	}
+	defer cleanup()
+
 	businessID, exists := middleware.GetBusinessIDFromContext(c)
 	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Business ID not found"})
 		return
 	}
 
-	webhookService := utils.NewWebhookService(config.DB)
+	webhookService := utils.NewWebhookService(db)
 	webhooks, err := webhookService.GetWebhooksByBusiness(businessID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Failed to fetch webhooks: %v", err)})
@@ -135,6 +149,13 @@ func ListWebhooks(c *gin.Context) {
 // @Failure 401 {object} map[string]string "Unauthorized"
 // @Router /api/v1/webhooks/{id} [get]
 func GetWebhook(c *gin.Context) {
+	db, cleanup, err := config.DBFromContext(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "database unavailable"})
+		return
+	}
+	defer cleanup()
+
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid webhook ID"})
@@ -147,7 +168,7 @@ func GetWebhook(c *gin.Context) {
 		return
 	}
 
-	webhookService := utils.NewWebhookService(config.DB)
+	webhookService := utils.NewWebhookService(db)
 	webhook, err := webhookService.GetWebhook(uint(id))
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Webhook not found"})
@@ -177,6 +198,13 @@ func GetWebhook(c *gin.Context) {
 // @Failure 401 {object} map[string]string "Unauthorized"
 // @Router /api/v1/webhooks/{id} [put]
 func UpdateWebhook(c *gin.Context) {
+	db, cleanup, err := config.DBFromContext(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "database unavailable"})
+		return
+	}
+	defer cleanup()
+
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid webhook ID"})
@@ -195,7 +223,7 @@ func UpdateWebhook(c *gin.Context) {
 		return
 	}
 
-	webhookService := utils.NewWebhookService(config.DB)
+	webhookService := utils.NewWebhookService(db)
 	webhook, err := webhookService.GetWebhook(uint(id))
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Webhook not found"})
@@ -251,6 +279,13 @@ func UpdateWebhook(c *gin.Context) {
 // @Failure 401 {object} map[string]string "Unauthorized"
 // @Router /api/v1/webhooks/{id} [delete]
 func DeleteWebhook(c *gin.Context) {
+	db, cleanup, err := config.DBFromContext(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "database unavailable"})
+		return
+	}
+	defer cleanup()
+
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid webhook ID"})
@@ -263,7 +298,7 @@ func DeleteWebhook(c *gin.Context) {
 		return
 	}
 
-	webhookService := utils.NewWebhookService(config.DB)
+	webhookService := utils.NewWebhookService(db)
 	webhook, err := webhookService.GetWebhook(uint(id))
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Webhook not found"})
@@ -294,6 +329,13 @@ func DeleteWebhook(c *gin.Context) {
 // @Failure 404 {object} map[string]string "Not found"
 // @Router /api/v1/webhooks/{id}/test [post]
 func TestWebhook(c *gin.Context) {
+	db, cleanup, err := config.DBFromContext(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "database unavailable"})
+		return
+	}
+	defer cleanup()
+
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid webhook ID"})
@@ -306,7 +348,7 @@ func TestWebhook(c *gin.Context) {
 		return
 	}
 
-	webhookService := utils.NewWebhookService(config.DB)
+	webhookService := utils.NewWebhookService(db)
 	webhook, err := webhookService.GetWebhook(uint(id))
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Webhook not found"})
@@ -338,6 +380,13 @@ func TestWebhook(c *gin.Context) {
 // @Failure 404 {object} map[string]string "Not found"
 // @Router /api/v1/webhooks/{id}/deliveries [get]
 func GetWebhookDeliveryHistory(c *gin.Context) {
+	db, cleanup, err := config.DBFromContext(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "database unavailable"})
+		return
+	}
+	defer cleanup()
+
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid webhook ID"})
@@ -357,7 +406,7 @@ func GetWebhookDeliveryHistory(c *gin.Context) {
 		return
 	}
 
-	webhookService := utils.NewWebhookService(config.DB)
+	webhookService := utils.NewWebhookService(db)
 	webhook, err := webhookService.GetWebhook(uint(id))
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Webhook not found"})
@@ -388,6 +437,13 @@ func GetWebhookDeliveryHistory(c *gin.Context) {
 // @Failure 404 {object} map[string]string "Not found"
 // @Router /api/v1/webhooks/deliveries/{deliveryId}/logs [get]
 func GetDeliveryLogs(c *gin.Context) {
+	db, cleanup, err := config.DBFromContext(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "database unavailable"})
+		return
+	}
+	defer cleanup()
+
 	deliveryID, err := strconv.ParseUint(c.Param("deliveryId"), 10, 32)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid delivery ID"})
@@ -400,7 +456,7 @@ func GetDeliveryLogs(c *gin.Context) {
 		return
 	}
 
-	webhookService := utils.NewWebhookService(config.DB)
+	webhookService := utils.NewWebhookService(db)
 	delivery, webhook, err := webhookService.GetWebhookDelivery(uint(deliveryID))
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Webhook delivery not found"})
