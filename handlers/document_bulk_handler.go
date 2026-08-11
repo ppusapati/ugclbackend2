@@ -27,6 +27,13 @@ func (docTagLink) TableName() string { return "document_tag_links" }
 
 // BulkDeleteDocumentsHandler deletes multiple documents
 func BulkDeleteDocumentsHandler(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	userID, err := getDocumentUserID(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
@@ -49,7 +56,7 @@ func BulkDeleteDocumentsHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Batch fetch IDs that actually exist (for accurate count + audit)
 	var documents []models.Document
-	if err := config.DB.Select("id").Where("id IN ?", req.DocumentIDs).Find(&documents).Error; err != nil {
+	if err := db.Select("id").Where("id IN ?", req.DocumentIDs).Find(&documents).Error; err != nil {
 		http.Error(w, "failed to fetch documents: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -64,7 +71,7 @@ func BulkDeleteDocumentsHandler(w http.ResponseWriter, r *http.Request) {
 		validIDs[i] = d.ID
 	}
 
-	tx := config.DB.Begin()
+	tx := db.Begin()
 	defer func() {
 		if rec := recover(); rec != nil {
 			tx.Rollback()
@@ -112,6 +119,13 @@ func BulkDeleteDocumentsHandler(w http.ResponseWriter, r *http.Request) {
 
 // BulkUpdateDocumentsHandler updates multiple documents
 func BulkUpdateDocumentsHandler(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	userID, err := getDocumentUserID(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
@@ -135,7 +149,7 @@ func BulkUpdateDocumentsHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Batch fetch valid document IDs
 	var documents []models.Document
-	if err := config.DB.Select("id").Where("id IN ?", req.DocumentIDs).Find(&documents).Error; err != nil {
+	if err := db.Select("id").Where("id IN ?", req.DocumentIDs).Find(&documents).Error; err != nil {
 		http.Error(w, "failed to fetch documents: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -161,7 +175,7 @@ func BulkUpdateDocumentsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	tx := config.DB.Begin()
+	tx := db.Begin()
 	defer func() {
 		if rec := recover(); rec != nil {
 			tx.Rollback()
@@ -210,6 +224,13 @@ func BulkUpdateDocumentsHandler(w http.ResponseWriter, r *http.Request) {
 
 // BulkDownloadDocumentsHandler creates a zip file of multiple documents
 func BulkDownloadDocumentsHandler(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	userID, err := getDocumentUserID(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
@@ -232,7 +253,7 @@ func BulkDownloadDocumentsHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Fetch documents
 	var documents []models.Document
-	if err := config.DB.Where("id IN ?", req.DocumentIDs).Find(&documents).Error; err != nil {
+	if err := db.Where("id IN ?", req.DocumentIDs).Find(&documents).Error; err != nil {
 		http.Error(w, "failed to fetch documents: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -293,7 +314,7 @@ func BulkDownloadDocumentsHandler(w http.ResponseWriter, r *http.Request) {
 			IPAddress:  r.RemoteAddr,
 			UserAgent:  r.UserAgent(),
 		}
-		config.DB.Create(&auditLog)
+		db.Create(&auditLog)
 	}
 
 	zipWriter.Close()
@@ -308,6 +329,13 @@ func BulkDownloadDocumentsHandler(w http.ResponseWriter, r *http.Request) {
 
 // GetDocumentStatisticsHandler returns statistics about documents
 func GetDocumentStatisticsHandler(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	businessVerticalID := r.URL.Query().Get("business_vertical_id")
 
 	var stats struct {
@@ -322,7 +350,7 @@ func GetDocumentStatisticsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	scopedDocuments := func() *gorm.DB {
-		query := config.DB.Model(&models.Document{})
+		query := db.Model(&models.Document{})
 		if businessVerticalID != "" {
 			query = query.Where("business_vertical_id = ?", businessVerticalID)
 		}
@@ -362,7 +390,7 @@ func GetDocumentStatisticsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Recent uploads
-	recentUploadsQuery := config.DB.Preload("UploadedBy").Preload("Category").Model(&models.Document{})
+	recentUploadsQuery := db.Preload("UploadedBy").Preload("Category").Model(&models.Document{})
 	if businessVerticalID != "" {
 		recentUploadsQuery = recentUploadsQuery.Where("business_vertical_id = ?", businessVerticalID)
 	}
@@ -383,7 +411,7 @@ func GetDocumentStatisticsHandler(w http.ResponseWriter, r *http.Request) {
 		CategoryName string
 		DocCount     int64
 	}
-	categoryQuery := config.DB.Table("documents").
+	categoryQuery := db.Table("documents").
 		Select("category_id, document_categories.name as category_name, COUNT(*) as doc_count").
 		Joins("LEFT JOIN document_categories ON documents.category_id = document_categories.id").
 		Where("documents.deleted_at IS NULL AND category_id IS NOT NULL")
@@ -411,6 +439,13 @@ func GetDocumentStatisticsHandler(w http.ResponseWriter, r *http.Request) {
 
 // BulkAddTagsHandler adds tags to multiple documents
 func BulkAddTagsHandler(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	userID, err := getDocumentUserID(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
@@ -434,7 +469,7 @@ func BulkAddTagsHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Batch find existing tags, then create missing ones
 	var existingTags []models.DocumentTag
-	config.DB.Where("name IN ?", req.TagNames).Find(&existingTags)
+	db.Where("name IN ?", req.TagNames).Find(&existingTags)
 
 	existingByName := make(map[string]models.DocumentTag, len(existingTags))
 	for _, t := range existingTags {
@@ -448,7 +483,7 @@ func BulkAddTagsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if len(newTags) > 0 {
-		config.DB.CreateInBatches(newTags, 100)
+		db.CreateInBatches(newTags, 100)
 		for _, t := range newTags {
 			existingByName[t.Name] = t
 		}
@@ -463,7 +498,7 @@ func BulkAddTagsHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Batch fetch documents
 	var documents []models.Document
-	config.DB.Select("id").Where("id IN ?", req.DocumentIDs).Find(&documents)
+	db.Select("id").Where("id IN ?", req.DocumentIDs).Find(&documents)
 	if len(documents) == 0 {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{"message": "Tags added successfully", "updated": 0, "total": len(req.DocumentIDs)})
@@ -478,7 +513,7 @@ func BulkAddTagsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if len(links) > 0 {
-		config.DB.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(links, 200)
+		db.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(links, 200)
 	}
 
 	// Batch audit logs
@@ -493,7 +528,7 @@ func BulkAddTagsHandler(w http.ResponseWriter, r *http.Request) {
 			UserAgent:  r.UserAgent(),
 		}
 	}
-	config.DB.CreateInBatches(auditLogs, 100)
+	db.CreateInBatches(auditLogs, 100)
 
 	updatedCount := len(documents)
 
