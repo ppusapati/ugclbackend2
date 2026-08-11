@@ -65,6 +65,13 @@ func invalidateAllSitesCache() {
 
 // GetAllSites returns all sites irrespective of business vertical (Admin only)
 func GetAllSites(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	// Parse pagination parameters
 	pageStr := r.URL.Query().Get("page")
 	limitStr := r.URL.Query().Get("limit")
@@ -79,7 +86,10 @@ func GetAllSites(w http.ResponseWriter, r *http.Request) {
 		limit = l
 	}
 	offset := (page - 1) * limit
-	cacheKey := allSitesCacheKey(page, limit)
+	// Cache key includes the tenant schema so the shared process-wide cache
+	// never serves one tenant's sites page to another tenant.
+	tenantSchema := config.TenantSchemaFromContext(r.Context())
+	cacheKey := tenantSchema + ":" + allSitesCacheKey(page, limit)
 	if payload, ok := allSitesCache.get(cacheKey); ok {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(payload)
@@ -93,7 +103,7 @@ func GetAllSites(w http.ResponseWriter, r *http.Request) {
 
 		// Get total count of all active sites
 		var total int64
-		if err := config.DB.Model(&models.Site{}).Where("sites.is_active = ?", true).Count(&total).Error; err != nil {
+		if err := db.Model(&models.Site{}).Where("sites.is_active = ?", true).Count(&total).Error; err != nil {
 			return nil, err
 		}
 
@@ -105,7 +115,7 @@ func GetAllSites(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var sites []SiteWithBusinessVertical
-		err := config.DB.Table("sites").
+		err := db.Table("sites").
 			Select("sites.*, business_verticals.name as business_vertical_name, business_verticals.code as business_vertical_code").
 			Joins("LEFT JOIN business_verticals ON sites.business_vertical_id = business_verticals.id").
 			Where("sites.is_active = ?", true).
@@ -141,10 +151,17 @@ func GetAllSites(w http.ResponseWriter, r *http.Request) {
 }
 
 func GetSiteByID(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	siteID := vars["siteId"]
 	var site models.Site
-	if err := config.DB.Where("id = ? AND is_active = ?", siteID, true).First(&site).Error; err != nil {
+	if err := db.Where("id = ? AND is_active = ?", siteID, true).First(&site).Error; err != nil {
 		http.Error(w, "site not found", http.StatusNotFound)
 		return
 	}
@@ -153,6 +170,13 @@ func GetSiteByID(w http.ResponseWriter, r *http.Request) {
 }
 
 func CreateSite(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var site models.Site
 	if err := json.NewDecoder(r.Body).Decode(&site); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -181,7 +205,7 @@ func CreateSite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := config.DB.Create(&site).Error; err != nil {
+	if err := db.Create(&site).Error; err != nil {
 		http.Error(w, fmt.Sprintf("failed to create site: %s", err.Error()), http.StatusInternalServerError)
 		return
 	}
@@ -194,12 +218,19 @@ func CreateSite(w http.ResponseWriter, r *http.Request) {
 
 // UpdateSite updates an existing site including geofencing data
 func UpdateSite(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	siteID := vars["siteId"]
 
 	// Check if site exists
 	var existingSite models.Site
-	if err := config.DB.Where("id = ? AND is_active = ?", siteID, true).First(&existingSite).Error; err != nil {
+	if err := db.Where("id = ? AND is_active = ?", siteID, true).First(&existingSite).Error; err != nil {
 		http.Error(w, "site not found", http.StatusNotFound)
 		return
 	}
@@ -240,7 +271,7 @@ func UpdateSite(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Save updates
-	if err := config.DB.Save(&existingSite).Error; err != nil {
+	if err := db.Save(&existingSite).Error; err != nil {
 		http.Error(w, fmt.Sprintf("failed to update site: %s", err.Error()), http.StatusInternalServerError)
 		return
 	}
@@ -252,6 +283,13 @@ func UpdateSite(w http.ResponseWriter, r *http.Request) {
 
 // GetBusinessSites returns all sites for a specific business vertical
 func GetBusinessSites(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	businessContext := middleware.GetUserBusinessContext(r)
 	if businessContext == nil {
 		http.Error(w, "business context not found", http.StatusBadRequest)
@@ -281,11 +319,11 @@ func GetBusinessSites(w http.ResponseWriter, r *http.Request) {
 
 	// Get total count for this business
 	var total int64
-	config.DB.Model(&models.Site{}).Where("business_vertical_id = ? AND is_active = ?", businessID, true).Count(&total)
+	db.Model(&models.Site{}).Where("business_vertical_id = ? AND is_active = ?", businessID, true).Count(&total)
 
 	// Get paginated sites for this business
 	var sites []models.Site
-	if err := config.DB.Where("business_vertical_id = ? AND is_active = ?", businessID, true).
+	if err := db.Where("business_vertical_id = ? AND is_active = ?", businessID, true).
 		Limit(limit).
 		Offset(offset).
 		Find(&sites).Error; err != nil {
@@ -306,6 +344,13 @@ func GetBusinessSites(w http.ResponseWriter, r *http.Request) {
 
 // GetUserSites returns all sites the current user has access to
 func GetUserSites(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	user := middleware.GetUser(r)
 
 	businessContext := middleware.GetUserBusinessContext(r)
@@ -337,7 +382,7 @@ func GetUserSites(w http.ResponseWriter, r *http.Request) {
 
 	// Get total count
 	var total int64
-	config.DB.Table("user_site_accesses").
+	db.Table("user_site_accesses").
 		Joins("JOIN sites ON sites.id = user_site_accesses.site_id").
 		Where("user_site_accesses.user_id = ? AND sites.business_vertical_id = ? AND sites.is_active = ?",
 			user.ID, businessID, true).
@@ -353,7 +398,7 @@ func GetUserSites(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var result []SiteWithAccess
-	err := config.DB.Table("sites").
+	err = db.Table("sites").
 		Select("sites.*, user_site_accesses.can_read, user_site_accesses.can_create, user_site_accesses.can_update, user_site_accesses.can_delete").
 		Joins("JOIN user_site_accesses ON user_site_accesses.site_id = sites.id").
 		Where("user_site_accesses.user_id = ? AND sites.business_vertical_id = ? AND sites.is_active = ?",
@@ -393,6 +438,13 @@ type UserSiteAccessWithSite struct {
 
 // GetUserSiteAccessByUserID returns all site access records for a specific user within the current business
 func GetUserSiteAccessByUserID(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	userID, err := uuid.Parse(vars["userId"])
 	if err != nil {
@@ -424,7 +476,7 @@ func GetUserSiteAccessByUserID(w http.ResponseWriter, r *http.Request) {
 	}
 	offset := (page - 1) * limit
 
-	baseQuery := config.DB.Model(&models.UserSiteAccess{}).
+	baseQuery := db.Model(&models.UserSiteAccess{}).
 		Joins("JOIN sites ON sites.id = user_site_accesses.site_id").
 		Where("user_site_accesses.user_id = ? AND sites.business_vertical_id = ? AND sites.is_active = ?", userID, businessID, true)
 
@@ -435,7 +487,7 @@ func GetUserSiteAccessByUserID(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var accesses []models.UserSiteAccess
-	if err := config.DB.
+	if err := db.
 		Preload("Site").
 		Joins("JOIN sites ON sites.id = user_site_accesses.site_id").
 		Where("user_site_accesses.user_id = ? AND sites.business_vertical_id = ? AND sites.is_active = ?", userID, businessID, true).
@@ -485,6 +537,13 @@ type AssignUserSiteAccessRequest struct {
 // AssignUserSiteAccess assigns or updates a user's access to a site
 // Only business admins or users with site:manage_access permission can do this
 func AssignUserSiteAccess(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var req AssignUserSiteAccessRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -519,14 +578,14 @@ func AssignUserSiteAccess(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var site models.Site
-	if err := config.DB.Where("id = ? AND business_vertical_id = ?", req.SiteID, businessID).First(&site).Error; err != nil {
+	if err := db.Where("id = ? AND business_vertical_id = ?", req.SiteID, businessID).First(&site).Error; err != nil {
 		http.Error(w, "site not found or does not belong to this business", http.StatusNotFound)
 		return
 	}
 
 	// Check if access already exists
 	var existing models.UserSiteAccess
-	err = config.DB.Where("user_id = ? AND site_id = ?", req.UserID, req.SiteID).First(&existing).Error
+	err = db.Where("user_id = ? AND site_id = ?", req.UserID, req.SiteID).First(&existing).Error
 
 	if err != nil {
 		// Create new access
@@ -540,7 +599,7 @@ func AssignUserSiteAccess(w http.ResponseWriter, r *http.Request) {
 			AssignedBy: &currentUserID,
 		}
 
-		if err := config.DB.Create(&access).Error; err != nil {
+		if err := db.Create(&access).Error; err != nil {
 			http.Error(w, "failed to create site access", http.StatusInternalServerError)
 			return
 		}
@@ -555,7 +614,7 @@ func AssignUserSiteAccess(w http.ResponseWriter, r *http.Request) {
 		existing.CanDelete = req.CanDelete
 		existing.AssignedBy = &currentUserID
 
-		if err := config.DB.Save(&existing).Error; err != nil {
+		if err := db.Save(&existing).Error; err != nil {
 			http.Error(w, "failed to update site access", http.StatusInternalServerError)
 			return
 		}
@@ -567,10 +626,17 @@ func AssignUserSiteAccess(w http.ResponseWriter, r *http.Request) {
 
 // RevokeUserSiteAccess removes a user's access to a site
 func RevokeUserSiteAccess(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	accessID := vars["accessId"]
 
-	if err := config.DB.Delete(&models.UserSiteAccess{}, "id = ?", accessID).Error; err != nil {
+	if err := db.Delete(&models.UserSiteAccess{}, "id = ?", accessID).Error; err != nil {
 		http.Error(w, "failed to revoke site access", http.StatusInternalServerError)
 		return
 	}
@@ -580,6 +646,13 @@ func RevokeUserSiteAccess(w http.ResponseWriter, r *http.Request) {
 
 // GetSiteUsers returns all users with access to a specific site
 func GetSiteUsers(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	siteID := vars["siteId"]
 
@@ -615,7 +688,7 @@ func GetSiteUsers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var users []UserAccess
-	err := config.DB.Table("user_site_accesses").
+	err = db.Table("user_site_accesses").
 		Select("users.id as user_id, users.name, users.phone, user_site_accesses.can_read, user_site_accesses.can_create, user_site_accesses.can_update, user_site_accesses.can_delete").
 		Joins("JOIN users ON users.id = user_site_accesses.user_id").
 		Where("user_site_accesses.site_id = ?", siteID).
