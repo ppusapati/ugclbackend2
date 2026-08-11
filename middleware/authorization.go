@@ -208,7 +208,7 @@ func RequireResourceOwnership(resourceType string) func(http.Handler) http.Handl
 			}
 
 			// Check ownership
-			if !checkResourceOwnership(userCtx.User.ID.String(), resourceType, resourceID) {
+			if !checkResourceOwnership(r, userCtx.User.ID.String(), resourceType, resourceID) {
 				http.Error(w, "access denied - not resource owner", http.StatusForbidden)
 				return
 			}
@@ -325,11 +325,17 @@ func extractResourceID(r *http.Request) string {
 }
 
 // checkResourceOwnership verifies if user owns the specific resource
-func checkResourceOwnership(userID, resourceType, resourceID string) bool {
+func checkResourceOwnership(r *http.Request, userID, resourceType, resourceID string) bool {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		return false
+	}
+	defer cleanup()
+
 	switch resourceType {
 	case "reports":
 		var count int64
-		config.DB.Model(&models.User{}).
+		db.Model(&models.User{}).
 			Where("id = ? AND created_by = ?", resourceID, userID).
 			Count(&count)
 		return count > 0

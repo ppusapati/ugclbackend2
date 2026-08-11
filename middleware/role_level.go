@@ -51,10 +51,10 @@ import (
 // IsSuperAdmin checks if user has super admin privileges.
 func IsSuperAdmin(userID uuid.UUID) bool {
 	var user models.User
-	if err := config.DB.
-		Preload("RoleModel").
-		Preload("RoleAssignments.Role").
-		First(&user, "id = ?", userID).Error; err != nil {
+	if err := config.DB. // config-db-ok: IsSuperAdmin(userID) is unused (no callers) — AuthService.IsSuperAdmin(user) is the live path
+				Preload("RoleModel").
+				Preload("RoleAssignments.Role").
+				First(&user, "id = ?", userID).Error; err != nil {
 		return false
 	}
 	if user.RoleModel != nil && user.RoleModel.Name == "super_admin" {
