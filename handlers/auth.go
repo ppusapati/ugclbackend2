@@ -418,6 +418,7 @@ func Login(w http.ResponseWriter, r *http.Request) {
 	clientID := strings.TrimSpace(r.Header.Get("X-Client-ID"))
 	if clientID != "" {
 		_, bindErr := UpsertTrustedDeviceBinding(
+			config.DB,
 			u.ID,
 			clientID,
 			optionalString(installID),

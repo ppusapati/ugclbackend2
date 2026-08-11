@@ -72,6 +72,13 @@ type trustedDeviceRecordResponse struct {
 }
 
 func RegisterCurrentTrustedDevice(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	claims := middleware.GetClaims(r)
 	if claims == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -96,7 +103,7 @@ func RegisterCurrentTrustedDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	device, err := UpsertTrustedDeviceBinding(userID, clientID, req.InstallID, req.Platform, req.DeviceName, req.AppVersion)
+	device, err := UpsertTrustedDeviceBinding(db, userID, clientID, req.InstallID, req.Platform, req.DeviceName, req.AppVersion)
 	if err != nil {
 		http.Error(w, "failed to register trusted device", http.StatusInternalServerError)
 		return
@@ -118,6 +125,13 @@ func RegisterCurrentTrustedDevice(w http.ResponseWriter, r *http.Request) {
 }
 
 func GetCurrentTrustedDeviceStatus(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	claims := middleware.GetClaims(r)
 	if claims == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -137,7 +151,7 @@ func GetCurrentTrustedDeviceStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var device models.TrustedDevice
-	if err := config.DB.Where("user_id = ? AND client_id = ?", userID, clientID).First(&device).Error; err != nil {
+	if err := db.Where("user_id = ? AND client_id = ?", userID, clientID).First(&device).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			respondJSON(w, http.StatusOK, trustedDeviceStatusResponse{
 				Trusted:        false,
@@ -168,6 +182,13 @@ func GetCurrentTrustedDeviceStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func GetOfflineBootstrap(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	claims := middleware.GetClaims(r)
 	if claims == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -198,7 +219,7 @@ func GetOfflineBootstrap(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	sites, err := loadOfflineSites(userCtx.User.ID, userCtx.IsSuperAdmin)
+	sites, err := loadOfflineSites(db, userCtx.User.ID, userCtx.IsSuperAdmin)
 	if err != nil {
 		http.Error(w, "failed to load site access", http.StatusInternalServerError)
 		return
@@ -208,7 +229,7 @@ func GetOfflineBootstrap(w http.ResponseWriter, r *http.Request) {
 	var deviceStatus trustedDeviceStatusResponse
 	if clientID != "" {
 		var device models.TrustedDevice
-		if err := config.DB.Where("user_id = ? AND client_id = ?", userCtx.User.ID, clientID).First(&device).Error; err == nil {
+		if err := db.Where("user_id = ? AND client_id = ?", userCtx.User.ID, clientID).First(&device).Error; err == nil {
 			revalidateBy := device.LastSeenAt.Add(offlineRevalidationDays * 24 * time.Hour)
 			deviceStatus = trustedDeviceStatusResponse{
 				Trusted:          device.RevokedAt == nil && device.OfflineAllowed,
@@ -260,13 +281,20 @@ func GetOfflineBootstrap(w http.ResponseWriter, r *http.Request) {
 }
 
 func ListMyTrustedDevices(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	userID, ok := authenticatedUserID(r, w)
 	if !ok {
 		return
 	}
 
 	var devices []models.TrustedDevice
-	if err := config.DB.Where("user_id = ?", userID).
+	if err := db.Where("user_id = ?", userID).
 		Order("updated_at DESC").
 		Find(&devices).Error; err != nil {
 		http.Error(w, "failed to load trusted devices", http.StatusInternalServerError)
@@ -285,6 +313,13 @@ func ListMyTrustedDevices(w http.ResponseWriter, r *http.Request) {
 }
 
 func RevokeMyTrustedDevice(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	userID, ok := authenticatedUserID(r, w)
 	if !ok {
 		return
@@ -309,7 +344,7 @@ func RevokeMyTrustedDevice(w http.ResponseWriter, r *http.Request) {
 		reason = &defaultReason
 	}
 
-	device, err := revokeTrustedDeviceByScope(userID, &deviceID, reason)
+	device, err := revokeTrustedDeviceByScope(db, userID, &deviceID, reason)
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			http.Error(w, "trusted device not found", http.StatusNotFound)
@@ -323,6 +358,13 @@ func RevokeMyTrustedDevice(w http.ResponseWriter, r *http.Request) {
 }
 
 func AllowMyTrustedDevice(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	userID, ok := authenticatedUserID(r, w)
 	if !ok {
 		return
@@ -333,7 +375,7 @@ func AllowMyTrustedDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	device, err := allowTrustedDeviceByScope(userID, &deviceID)
+	device, err := allowTrustedDeviceByScope(db, userID, &deviceID)
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			http.Error(w, "trusted device not found", http.StatusNotFound)
@@ -347,13 +389,20 @@ func AllowMyTrustedDevice(w http.ResponseWriter, r *http.Request) {
 }
 
 func AdminListUserTrustedDevices(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	userID, ok := userIDFromRoute(w, r)
 	if !ok {
 		return
 	}
 
 	var devices []models.TrustedDevice
-	if err := config.DB.Where("user_id = ?", userID).
+	if err := db.Where("user_id = ?", userID).
 		Order("updated_at DESC").
 		Find(&devices).Error; err != nil {
 		http.Error(w, "failed to load trusted devices", http.StatusInternalServerError)
@@ -373,6 +422,13 @@ func AdminListUserTrustedDevices(w http.ResponseWriter, r *http.Request) {
 }
 
 func AdminRevokeUserTrustedDevice(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	userID, ok := userIDFromRoute(w, r)
 	if !ok {
 		return
@@ -396,7 +452,7 @@ func AdminRevokeUserTrustedDevice(w http.ResponseWriter, r *http.Request) {
 		reason = &defaultReason
 	}
 
-	device, err := revokeTrustedDeviceByScope(userID, &deviceID, reason)
+	device, err := revokeTrustedDeviceByScope(db, userID, &deviceID, reason)
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			http.Error(w, "trusted device not found", http.StatusNotFound)
@@ -410,6 +466,13 @@ func AdminRevokeUserTrustedDevice(w http.ResponseWriter, r *http.Request) {
 }
 
 func AdminAllowUserTrustedDevice(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	userID, ok := userIDFromRoute(w, r)
 	if !ok {
 		return
@@ -419,7 +482,7 @@ func AdminAllowUserTrustedDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	device, err := allowTrustedDeviceByScope(userID, &deviceID)
+	device, err := allowTrustedDeviceByScope(db, userID, &deviceID)
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			http.Error(w, "trusted device not found", http.StatusNotFound)
@@ -433,6 +496,7 @@ func AdminAllowUserTrustedDevice(w http.ResponseWriter, r *http.Request) {
 }
 
 func UpsertTrustedDeviceBinding(
+	db *gorm.DB,
 	userID uuid.UUID,
 	clientID string,
 	installID *string,
@@ -451,7 +515,7 @@ func UpsertTrustedDeviceBinding(
 	normalizedAppVersion := normalizeOptionalHeaderString(appVersion)
 
 	var existing models.TrustedDevice
-	err := config.DB.Where("user_id = ? AND client_id = ?", userID, clientID).First(&existing).Error
+	err := db.Where("user_id = ? AND client_id = ?", userID, clientID).First(&existing).Error
 	now := time.Now().UTC()
 	if err == nil {
 		existing.InstallID = normalizedInstallID
@@ -462,7 +526,7 @@ func UpsertTrustedDeviceBinding(
 		if existing.RevokedAt == nil {
 			existing.OfflineAllowed = true
 		}
-		if saveErr := config.DB.Save(&existing).Error; saveErr != nil {
+		if saveErr := db.Save(&existing).Error; saveErr != nil {
 			return nil, saveErr
 		}
 		return &existing, nil
@@ -481,7 +545,7 @@ func UpsertTrustedDeviceBinding(
 		OfflineAllowed: true,
 		LastSeenAt:     now,
 	}
-	if createErr := config.DB.Create(&device).Error; createErr != nil {
+	if createErr := db.Create(&device).Error; createErr != nil {
 		return nil, createErr
 	}
 	return &device, nil
@@ -544,8 +608,8 @@ func trustedDeviceIDFromRoute(w http.ResponseWriter, r *http.Request) (uuid.UUID
 	return deviceID, true
 }
 
-func revokeTrustedDeviceByScope(userID uuid.UUID, deviceID *uuid.UUID, reason *string) (*models.TrustedDevice, error) {
-	query := config.DB.Where("user_id = ?", userID)
+func revokeTrustedDeviceByScope(db *gorm.DB, userID uuid.UUID, deviceID *uuid.UUID, reason *string) (*models.TrustedDevice, error) {
+	query := db.Where("user_id = ?", userID)
 	if deviceID != nil {
 		query = query.Where("id = ?", *deviceID)
 	}
@@ -559,15 +623,15 @@ func revokeTrustedDeviceByScope(userID uuid.UUID, deviceID *uuid.UUID, reason *s
 	device.OfflineAllowed = false
 	device.RevokedAt = &now
 	device.RevocationReason = reason
-	if err := config.DB.Save(&device).Error; err != nil {
+	if err := db.Save(&device).Error; err != nil {
 		return nil, err
 	}
 
 	return &device, nil
 }
 
-func allowTrustedDeviceByScope(userID uuid.UUID, deviceID *uuid.UUID) (*models.TrustedDevice, error) {
-	query := config.DB.Where("user_id = ?", userID)
+func allowTrustedDeviceByScope(db *gorm.DB, userID uuid.UUID, deviceID *uuid.UUID) (*models.TrustedDevice, error) {
+	query := db.Where("user_id = ?", userID)
 	if deviceID != nil {
 		query = query.Where("id = ?", *deviceID)
 	}
@@ -580,7 +644,7 @@ func allowTrustedDeviceByScope(userID uuid.UUID, deviceID *uuid.UUID) (*models.T
 	device.OfflineAllowed = true
 	device.RevokedAt = nil
 	device.RevocationReason = nil
-	if err := config.DB.Save(&device).Error; err != nil {
+	if err := db.Save(&device).Error; err != nil {
 		return nil, err
 	}
 
@@ -609,7 +673,7 @@ func toTrustedDeviceRecordResponse(device models.TrustedDevice) trustedDeviceRec
 	}
 }
 
-func loadOfflineSites(userID uuid.UUID, isSuperAdmin bool) ([]offlineBootstrapSite, error) {
+func loadOfflineSites(db *gorm.DB, userID uuid.UUID, isSuperAdmin bool) ([]offlineBootstrapSite, error) {
 	if isSuperAdmin {
 		var sites []struct {
 			ID                 uuid.UUID
@@ -617,7 +681,7 @@ func loadOfflineSites(userID uuid.UUID, isSuperAdmin bool) ([]offlineBootstrapSi
 			Name               string
 			Code               string
 		}
-		if err := config.DB.Table("sites").
+		if err := db.Table("sites").
 			Select("id, business_vertical_id, name, code").
 			Where("is_active = ?", true).
 			Find(&sites).Error; err != nil {
@@ -653,7 +717,7 @@ func loadOfflineSites(userID uuid.UUID, isSuperAdmin bool) ([]offlineBootstrapSi
 		CanDelete            bool
 	}
 
-	err := config.DB.Table("user_site_accesses").
+	err := db.Table("user_site_accesses").
 		Select(`user_site_accesses.site_id,
 			sites.business_vertical_id,
 			bv.name AS business_vertical_name,
