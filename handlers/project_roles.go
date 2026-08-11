@@ -12,19 +12,14 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
-	"gorm.io/gorm"
 )
 
 // ProjectRoleHandler handles project role and permission management
-type ProjectRoleHandler struct {
-	db *gorm.DB
-}
+type ProjectRoleHandler struct{}
 
 // NewProjectRoleHandler creates a new project role handler
 func NewProjectRoleHandler() *ProjectRoleHandler {
-	return &ProjectRoleHandler{
-		db: config.DB,
-	}
+	return &ProjectRoleHandler{}
 }
 
 // CreateRoleRequest represents the request to create a role
@@ -58,6 +53,13 @@ type AssignRoleRequest struct {
 
 // CreateRole creates a new project role
 func (h *ProjectRoleHandler) CreateRole(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var req CreateRoleRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -80,7 +82,7 @@ func (h *ProjectRoleHandler) CreateRole(w http.ResponseWriter, r *http.Request) 
 		CreatedBy:    claims.UserID,
 	}
 
-	if err := h.db.Create(&role).Error; err != nil {
+	if err := db.Create(&role).Error; err != nil {
 		log.Printf("❌ Failed to create role: %v", err)
 		http.Error(w, "Failed to create role", http.StatusInternalServerError)
 		return
@@ -97,11 +99,18 @@ func (h *ProjectRoleHandler) CreateRole(w http.ResponseWriter, r *http.Request) 
 
 // GetRole retrieves a role by ID
 func (h *ProjectRoleHandler) GetRole(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	roleID := vars["id"]
 
 	var role models.ProjectRole
-	if err := h.db.Preload("ParentRole").First(&role, "id = ?", roleID).Error; err != nil {
+	if err := db.Preload("ParentRole").First(&role, "id = ?", roleID).Error; err != nil {
 		http.Error(w, "Role not found", http.StatusNotFound)
 		return
 	}
@@ -112,9 +121,16 @@ func (h *ProjectRoleHandler) GetRole(w http.ResponseWriter, r *http.Request) {
 
 // ListRoles lists all project roles
 func (h *ProjectRoleHandler) ListRoles(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var roles []models.ProjectRole
 
-	query := h.db.Preload("ParentRole")
+	query := db.Preload("ParentRole")
 
 	// Apply filters
 	if isActive := r.URL.Query().Get("is_active"); isActive != "" {
@@ -138,6 +154,13 @@ func (h *ProjectRoleHandler) ListRoles(w http.ResponseWriter, r *http.Request) {
 
 // UpdateRole updates a role
 func (h *ProjectRoleHandler) UpdateRole(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	roleID := vars["id"]
 
@@ -148,7 +171,7 @@ func (h *ProjectRoleHandler) UpdateRole(w http.ResponseWriter, r *http.Request) 
 	}
 
 	var role models.ProjectRole
-	if err := h.db.First(&role, "id = ?", roleID).Error; err != nil {
+	if err := db.First(&role, "id = ?", roleID).Error; err != nil {
 		http.Error(w, "Role not found", http.StatusNotFound)
 		return
 	}
@@ -176,7 +199,7 @@ func (h *ProjectRoleHandler) UpdateRole(w http.ResponseWriter, r *http.Request) 
 		role.IsActive = *req.IsActive
 	}
 
-	if err := h.db.Save(&role).Error; err != nil {
+	if err := db.Save(&role).Error; err != nil {
 		http.Error(w, "Failed to update role", http.StatusInternalServerError)
 		return
 	}
@@ -191,11 +214,18 @@ func (h *ProjectRoleHandler) UpdateRole(w http.ResponseWriter, r *http.Request) 
 
 // DeleteRole soft deletes a role
 func (h *ProjectRoleHandler) DeleteRole(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	roleID := vars["id"]
 
 	var role models.ProjectRole
-	if err := h.db.First(&role, "id = ?", roleID).Error; err != nil {
+	if err := db.First(&role, "id = ?", roleID).Error; err != nil {
 		http.Error(w, "Role not found", http.StatusNotFound)
 		return
 	}
@@ -208,7 +238,7 @@ func (h *ProjectRoleHandler) DeleteRole(w http.ResponseWriter, r *http.Request) 
 
 	// Check if role is assigned to any users
 	var count int64
-	h.db.Model(&models.UserProjectRole{}).Where("role_id = ? AND is_active = ?", roleID, true).Count(&count)
+	db.Model(&models.UserProjectRole{}).Where("role_id = ? AND is_active = ?", roleID, true).Count(&count)
 	if count > 0 {
 		http.Error(w, "Cannot delete role that is assigned to users", http.StatusBadRequest)
 		return
@@ -216,7 +246,7 @@ func (h *ProjectRoleHandler) DeleteRole(w http.ResponseWriter, r *http.Request) 
 
 	// Soft delete
 	role.IsActive = false
-	if err := h.db.Save(&role).Error; err != nil {
+	if err := db.Save(&role).Error; err != nil {
 		http.Error(w, "Failed to delete role", http.StatusInternalServerError)
 		return
 	}
@@ -230,6 +260,13 @@ func (h *ProjectRoleHandler) DeleteRole(w http.ResponseWriter, r *http.Request) 
 
 // AssignRoleToUser assigns a role to a user for a project
 func (h *ProjectRoleHandler) AssignRoleToUser(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var req AssignRoleRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -238,14 +275,14 @@ func (h *ProjectRoleHandler) AssignRoleToUser(w http.ResponseWriter, r *http.Req
 
 	// Verify project exists
 	var project models.Project
-	if err := h.db.First(&project, "id = ?", req.ProjectID).Error; err != nil {
+	if err := db.First(&project, "id = ?", req.ProjectID).Error; err != nil {
 		http.Error(w, "Project not found", http.StatusBadRequest)
 		return
 	}
 
 	// Verify role exists and is active
 	var role models.ProjectRole
-	if err := h.db.First(&role, "id = ? AND is_active = ?", req.RoleID, true).Error; err != nil {
+	if err := db.First(&role, "id = ? AND is_active = ?", req.RoleID, true).Error; err != nil {
 		http.Error(w, "Role not found or inactive", http.StatusBadRequest)
 		return
 	}
@@ -254,7 +291,7 @@ func (h *ProjectRoleHandler) AssignRoleToUser(w http.ResponseWriter, r *http.Req
 	claims := middleware.GetClaims(r)
 
 	// Start transaction
-	tx := h.db.Begin()
+	tx := db.Begin()
 	defer func() {
 		if r := recover(); r != nil {
 			tx.Rollback()
@@ -303,18 +340,25 @@ func (h *ProjectRoleHandler) AssignRoleToUser(w http.ResponseWriter, r *http.Req
 
 // RevokeRoleFromUser revokes a user's role for a project
 func (h *ProjectRoleHandler) RevokeRoleFromUser(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	assignmentID := vars["id"]
 
 	var assignment models.UserProjectRole
-	if err := h.db.First(&assignment, "id = ?", assignmentID).Error; err != nil {
+	if err := db.First(&assignment, "id = ?", assignmentID).Error; err != nil {
 		http.Error(w, "Role assignment not found", http.StatusNotFound)
 		return
 	}
 
 	// Deactivate the assignment
 	assignment.IsActive = false
-	if err := h.db.Save(&assignment).Error; err != nil {
+	if err := db.Save(&assignment).Error; err != nil {
 		http.Error(w, "Failed to revoke role", http.StatusInternalServerError)
 		return
 	}
@@ -328,6 +372,13 @@ func (h *ProjectRoleHandler) RevokeRoleFromUser(w http.ResponseWriter, r *http.R
 
 // GetUserProjectRoles retrieves all roles for a user in a project
 func (h *ProjectRoleHandler) GetUserProjectRoles(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	userID := r.URL.Query().Get("user_id")
 	projectID := r.URL.Query().Get("project_id")
 
@@ -337,7 +388,7 @@ func (h *ProjectRoleHandler) GetUserProjectRoles(w http.ResponseWriter, r *http.
 	}
 
 	var assignments []models.UserProjectRole
-	query := h.db.Preload("Project").Preload("Role")
+	query := db.Preload("Project").Preload("Role")
 
 	if err := query.Where("user_id = ? AND project_id = ? AND is_active = ?", userID, projectID, true).
 		Find(&assignments).Error; err != nil {
@@ -354,11 +405,18 @@ func (h *ProjectRoleHandler) GetUserProjectRoles(w http.ResponseWriter, r *http.
 
 // GetProjectUsers retrieves all users assigned to a project
 func (h *ProjectRoleHandler) GetProjectUsers(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	projectID := vars["id"]
 
 	var assignments []models.UserProjectRole
-	if err := h.db.Preload("Role").
+	if err := db.Preload("Role").
 		Where("project_id = ? AND is_active = ?", projectID, true).
 		Find(&assignments).Error; err != nil {
 		http.Error(w, "Failed to fetch project users", http.StatusInternalServerError)
@@ -374,6 +432,13 @@ func (h *ProjectRoleHandler) GetProjectUsers(w http.ResponseWriter, r *http.Requ
 
 // CheckUserPermission checks if a user has a specific permission for a project
 func (h *ProjectRoleHandler) CheckUserPermission(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	userID := r.URL.Query().Get("user_id")
 	projectID := r.URL.Query().Get("project_id")
 	permission := r.URL.Query().Get("permission")
@@ -385,7 +450,7 @@ func (h *ProjectRoleHandler) CheckUserPermission(w http.ResponseWriter, r *http.
 
 	// Get user's active role for the project
 	var assignment models.UserProjectRole
-	if err := h.db.Preload("Role").
+	if err := db.Preload("Role").
 		Where("user_id = ? AND project_id = ? AND is_active = ?", userID, projectID, true).
 		First(&assignment).Error; err != nil {
 		w.Header().Set("Content-Type", "application/json")
