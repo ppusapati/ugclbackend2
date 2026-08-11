@@ -297,9 +297,9 @@ func getAvailableDocumentWorkflowActions(document *models.Document, userPermissi
 	return actions, transitions, nil
 }
 
-func getDocumentWorkflowHistory(documentID uuid.UUID) ([]documentWorkflowHistoryItem, error) {
+func getDocumentWorkflowHistory(db *gorm.DB, documentID uuid.UUID) ([]documentWorkflowHistoryItem, error) {
 	var logs []models.DocumentAuditLog
-	if err := config.DB.
+	if err := db.
 		Preload("User").
 		Where("document_id = ? AND action = ?", documentID, models.DocumentAuditActionStatusChange).
 		Order("created_at DESC").
@@ -348,8 +348,15 @@ func getDocumentWorkflowHistory(documentID uuid.UUID) ([]documentWorkflowHistory
 }
 
 func ListDocumentWorkflowsHandler(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var workflows []models.WorkflowDefinition
-	if err := config.DB.
+	if err := db.
 		Where("is_active = ?", true).
 		Order("name ASC").
 		Find(&workflows).Error; err != nil {
@@ -376,6 +383,13 @@ func ListDocumentWorkflowsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func GetDocumentWorkflowHandler(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	documentID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -384,7 +398,7 @@ func GetDocumentWorkflowHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var document models.Document
-	if err := config.DB.Preload("Workflow").First(&document, "id = ?", documentID).Error; err != nil {
+	if err := db.Preload("Workflow").First(&document, "id = ?", documentID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			http.Error(w, "document not found", http.StatusNotFound)
 			return
@@ -404,7 +418,7 @@ func GetDocumentWorkflowHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	history, err := getDocumentWorkflowHistory(document.ID)
+	history, err := getDocumentWorkflowHistory(db, document.ID)
 	if err != nil {
 		http.Error(w, "failed to fetch workflow history: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -422,6 +436,13 @@ func GetDocumentWorkflowHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func TransitionDocumentWorkflowHandler(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	claims := middleware.GetClaims(r)
 	if claims == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -455,7 +476,7 @@ func TransitionDocumentWorkflowHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var document models.Document
-	if err := config.DB.Preload("Workflow").First(&document, "id = ?", documentID).Error; err != nil {
+	if err := db.Preload("Workflow").First(&document, "id = ?", documentID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			http.Error(w, "document not found", http.StatusNotFound)
 			return
@@ -509,7 +530,7 @@ func TransitionDocumentWorkflowHandler(w http.ResponseWriter, r *http.Request) {
 	toState := targetTransition.To
 	toStatus := mapDocumentStateToStatus(toState)
 
-	tx := config.DB.Begin()
+	tx := db.Begin()
 	defer func() {
 		if rec := recover(); rec != nil {
 			tx.Rollback()
@@ -620,7 +641,7 @@ func TransitionDocumentWorkflowHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := config.DB.Preload("Category").Preload("Tags").Preload("UploadedBy").Preload("Workflow").First(&document, "id = ?", document.ID).Error; err != nil {
+	if err := db.Preload("Category").Preload("Tags").Preload("UploadedBy").Preload("Workflow").First(&document, "id = ?", document.ID).Error; err != nil {
 		http.Error(w, "failed to fetch updated document: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -631,7 +652,7 @@ func TransitionDocumentWorkflowHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	history, err := getDocumentWorkflowHistory(document.ID)
+	history, err := getDocumentWorkflowHistory(db, document.ID)
 	if err != nil {
 		http.Error(w, "failed to fetch workflow history: "+err.Error(), http.StatusInternalServerError)
 		return
