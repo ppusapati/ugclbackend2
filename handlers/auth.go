@@ -588,10 +588,10 @@ func GetCurrentUser(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			entry := map[string]interface{}{
-				"role_id": a.Role.ID,
-				"role_name": a.Role.DisplayName,
+				"role_id":     a.Role.ID,
+				"role_name":   a.Role.DisplayName,
 				"vertical_id": a.Role.BusinessVerticalID,
-				"level": a.Role.Level,
+				"level":       a.Role.Level,
 			}
 			if a.Role.BusinessVertical != nil {
 				entry["vertical_name"] = a.Role.BusinessVertical.Name
