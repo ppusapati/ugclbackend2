@@ -138,13 +138,19 @@ func CanAccessBusiness(userCtx *UserContext, businessID uuid.UUID) bool {
 }
 
 // SaveActiveBusinessContext upserts the current active business for a user/client pair.
-func SaveActiveBusinessContext(userID, businessID uuid.UUID, clientKey string) (*models.UserActiveBusinessContext, error) {
+func SaveActiveBusinessContext(reqCtx context.Context, userID, businessID uuid.UUID, clientKey string) (*models.UserActiveBusinessContext, error) {
 	if clientKey == "" {
 		clientKey = defaultActiveBusinessClientKey
 	}
 
+	db, cleanup, err := config.DBFromContext(reqCtx)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+
 	ctxRecord := &models.UserActiveBusinessContext{}
-	if err := config.DB.Transaction(func(tx *gorm.DB) error {
+	if err := db.Transaction(func(tx *gorm.DB) error {
 		var existing models.UserActiveBusinessContext
 		err := tx.Where("user_id = ? AND client_key = ?", userID, clientKey).First(&existing).Error
 		if err != nil {
@@ -171,7 +177,7 @@ func SaveActiveBusinessContext(userID, businessID uuid.UUID, clientKey string) (
 		return nil, err
 	}
 
-	if err := config.DB.Preload("Business").First(ctxRecord, "user_id = ? AND client_key = ?", userID, clientKey).Error; err != nil {
+	if err := db.Preload("Business").First(ctxRecord, "user_id = ? AND client_key = ?", userID, clientKey).Error; err != nil {
 		return nil, err
 	}
 
@@ -207,8 +213,14 @@ func GetStoredActiveBusinessContextWithContext(reqCtx context.Context, userID uu
 			return nil, gorm.ErrRecordNotFound
 		}
 
+		db, cleanup, err := config.DBFromContext(reqCtx)
+		if err != nil {
+			return nil, err
+		}
+		defer cleanup()
+
 		var record models.UserActiveBusinessContext
-		result := config.DB.WithContext(reqCtx).Preload("Business").
+		result := db.WithContext(reqCtx).Preload("Business").
 			Where("user_id = ? AND client_key = ?", userID, clientKey).
 			Limit(1).
 			Find(&record)

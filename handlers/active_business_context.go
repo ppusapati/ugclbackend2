@@ -47,7 +47,7 @@ func SetActiveBusinessContext(w http.ResponseWriter, r *http.Request) {
 		clientKey = middleware.GetActiveBusinessClientKey(r)
 	}
 
-	activeContext, err := middleware.SaveActiveBusinessContext(userCtx.User.ID, businessID, clientKey)
+	activeContext, err := middleware.SaveActiveBusinessContext(r.Context(), userCtx.User.ID, businessID, clientKey)
 	if err != nil {
 		http.Error(w, "failed to save active business context", http.StatusInternalServerError)
 		return
@@ -58,6 +58,13 @@ func SetActiveBusinessContext(w http.ResponseWriter, r *http.Request) {
 
 // GetActiveBusinessContext returns the effective active business for the current request.
 func GetActiveBusinessContext(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	userCtx, err := middleware.NewAuthService().LoadUserContext(r)
 	if err != nil {
 		writeAuthError(w, err)
@@ -78,7 +85,7 @@ func GetActiveBusinessContext(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var business models.BusinessVertical
-	if err := config.DB.WithContext(r.Context()).First(&business, "id = ?", businessID).Error; err != nil {
+	if err := db.WithContext(r.Context()).First(&business, "id = ?", businessID).Error; err != nil {
 		http.Error(w, "business not found", http.StatusNotFound)
 		return
 	}
