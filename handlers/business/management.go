@@ -124,7 +124,7 @@ type assignUserRoleReq struct {
 	BusinessRoleID string `json:"business_role_id"`
 }
 
-func resolveRolePermissionIDs(req createBusinessRoleReq) ([]uuid.UUID, error) {
+func resolveRolePermissionIDs(db *gorm.DB, req createBusinessRoleReq) ([]uuid.UUID, error) {
 	idSet := make(map[uuid.UUID]struct{})
 	permissionNames := make(map[string]struct{})
 
@@ -180,7 +180,7 @@ func resolveRolePermissionIDs(req createBusinessRoleReq) ([]uuid.UUID, error) {
 		}
 
 		var permissionsByName []models.Permission
-		if err := config.DB.Select("id").Where("name IN ?", names).Find(&permissionsByName).Error; err != nil {
+		if err := db.Select("id").Where("name IN ?", names).Find(&permissionsByName).Error; err != nil {
 			return nil, err
 		}
 
@@ -199,7 +199,7 @@ func resolveRolePermissionIDs(req createBusinessRoleReq) ([]uuid.UUID, error) {
 	}
 
 	var existingIDs []uuid.UUID
-	if err := config.DB.Model(&models.Permission{}).Where("id IN ?", requestedIDs).Pluck("id", &existingIDs).Error; err != nil {
+	if err := db.Model(&models.Permission{}).Where("id IN ?", requestedIDs).Pluck("id", &existingIDs).Error; err != nil {
 		return nil, err
 	}
 
@@ -208,6 +208,13 @@ func resolveRolePermissionIDs(req createBusinessRoleReq) ([]uuid.UUID, error) {
 
 // GetAllBusinessVerticals returns all business verticals
 func GetAllBusinessVerticals(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	pageStr := r.URL.Query().Get("page")
 	limitStr := r.URL.Query().Get("limit")
 
@@ -221,7 +228,10 @@ func GetAllBusinessVerticals(w http.ResponseWriter, r *http.Request) {
 		limit = l
 	}
 
-	cacheKey := strconv.Itoa(page) + ":" + strconv.Itoa(limit)
+	// Cache key includes the tenant schema so the shared process-wide cache
+	// never serves one tenant's business-verticals page to another tenant.
+	tenantSchema := config.TenantSchemaFromContext(r.Context())
+	cacheKey := tenantSchema + ":" + strconv.Itoa(page) + ":" + strconv.Itoa(limit)
 	if payload, ok := businessVerticalsCache.get(cacheKey); ok {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(payload)
@@ -236,7 +246,7 @@ func GetAllBusinessVerticals(w http.ResponseWriter, r *http.Request) {
 		offset := (page - 1) * limit
 
 		var businesses []models.BusinessVertical
-		if err := config.DB.Where("is_active = ?", true).
+		if err := db.Where("is_active = ?", true).
 			Limit(limit).
 			Offset(offset).
 			Find(&businesses).Error; err != nil {
@@ -244,7 +254,7 @@ func GetAllBusinessVerticals(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var total int64
-		if err := config.DB.Model(&models.BusinessVertical{}).Where("is_active = ?", true).Count(&total).Error; err != nil {
+		if err := db.Model(&models.BusinessVertical{}).Where("is_active = ?", true).Count(&total).Error; err != nil {
 			return nil, err
 		}
 
@@ -254,7 +264,7 @@ func GetAllBusinessVerticals(w http.ResponseWriter, r *http.Request) {
 			BusinessVerticalID uuid.UUID
 			Count              int64
 		}
-		config.DB.Model(&models.User{}).
+		db.Model(&models.User{}).
 			Select("business_vertical_id, COUNT(*) as count").
 			Where("business_vertical_id IN ?", func() []uuid.UUID {
 				ids := make([]uuid.UUID, len(businesses))
@@ -276,7 +286,7 @@ func GetAllBusinessVerticals(w http.ResponseWriter, r *http.Request) {
 			BusinessVerticalID uuid.UUID
 			Count              int64
 		}
-		config.DB.Model(&models.BusinessRole{}).
+		db.Model(&models.BusinessRole{}).
 			Select("business_vertical_id, COUNT(*) as count").
 			Where("business_vertical_id IN ? AND is_active = ?", func() []uuid.UUID {
 				ids := make([]uuid.UUID, len(businesses))
@@ -330,6 +340,13 @@ func GetAllBusinessVerticals(w http.ResponseWriter, r *http.Request) {
 
 // CreateBusinessVertical creates a new business vertical
 func CreateBusinessVertical(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var req createBusinessReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
@@ -345,7 +362,7 @@ func CreateBusinessVertical(w http.ResponseWriter, r *http.Request) {
 		Settings:    &defaultSettings,
 	}
 
-	if err := config.DB.Create(&business).Error; err != nil {
+	if err := db.Create(&business).Error; err != nil {
 		http.Error(w, "failed to create business vertical: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -355,7 +372,7 @@ func CreateBusinessVertical(w http.ResponseWriter, r *http.Request) {
 	businessVerticalsCache.invalidate()
 
 	// Create default roles for this business
-	createDefaultBusinessRoles(business.ID)
+	createDefaultBusinessRoles(db, business.ID)
 
 	response := businessResponse{
 		ID:          business.ID,
@@ -374,6 +391,13 @@ func CreateBusinessVertical(w http.ResponseWriter, r *http.Request) {
 
 // UpdateBusinessVertical updates an existing business vertical by ID
 func UpdateBusinessVertical(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	businessID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -388,7 +412,7 @@ func UpdateBusinessVertical(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var business models.BusinessVertical
-	if err := config.DB.Where("id = ?", businessID).First(&business).Error; err != nil {
+	if err := db.Where("id = ?", businessID).First(&business).Error; err != nil {
 		http.Error(w, "business vertical not found", http.StatusNotFound)
 		return
 	}
@@ -408,7 +432,7 @@ func UpdateBusinessVertical(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := config.DB.Save(&business).Error; err != nil {
+	if err := db.Save(&business).Error; err != nil {
 		http.Error(w, "failed to update business vertical: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -435,6 +459,13 @@ func UpdateBusinessVertical(w http.ResponseWriter, r *http.Request) {
 // DeleteBusinessVertical deactivates an existing business vertical by ID.
 // This is a safe delete to avoid foreign key issues with historical references.
 func DeleteBusinessVertical(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	businessID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -443,7 +474,7 @@ func DeleteBusinessVertical(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var business models.BusinessVertical
-	if err := config.DB.Where("id = ?", businessID).First(&business).Error; err != nil {
+	if err := db.Where("id = ?", businessID).First(&business).Error; err != nil {
 		http.Error(w, "business vertical not found", http.StatusNotFound)
 		return
 	}
@@ -454,7 +485,7 @@ func DeleteBusinessVertical(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := config.DB.Model(&business).Update("is_active", false).Error; err != nil {
+	if err := db.Model(&business).Update("is_active", false).Error; err != nil {
 		http.Error(w, "failed to delete business vertical: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -479,6 +510,13 @@ func DeleteBusinessVertical(w http.ResponseWriter, r *http.Request) {
 
 // GetBusinessRoles returns all roles for a specific business vertical
 func GetBusinessRoles(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	businessID := middleware.GetCurrentBusinessID(r)
 	if businessID == uuid.Nil {
 		http.Error(w, "invalid business identifier", http.StatusBadRequest)
@@ -486,7 +524,7 @@ func GetBusinessRoles(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var roles []models.BusinessRole
-	if err := config.DB.Preload("Permissions").
+	if err := db.Preload("Permissions").
 		Preload("BusinessVertical").
 		Where("business_vertical_id = ? AND is_active = ?", businessID, true).
 		Order("level ASC").
@@ -501,7 +539,7 @@ func GetBusinessRoles(w http.ResponseWriter, r *http.Request) {
 		BusinessRoleID uuid.UUID
 		Count          int64
 	}
-	config.DB.Model(&models.UserBusinessRole{}).
+	db.Model(&models.UserBusinessRole{}).
 		Select("business_role_id, COUNT(*) as count").
 		Where("business_role_id IN ? AND is_active = ?", func() []uuid.UUID {
 			ids := make([]uuid.UUID, len(roles))
@@ -552,6 +590,13 @@ func GetBusinessRoles(w http.ResponseWriter, r *http.Request) {
 
 // CreateBusinessRole creates a new role for a business vertical
 func CreateBusinessRole(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	businessID := middleware.GetCurrentBusinessID(r)
 	if businessID == uuid.Nil {
 		http.Error(w, "invalid business identifier", http.StatusBadRequest)
@@ -573,19 +618,19 @@ func CreateBusinessRole(w http.ResponseWriter, r *http.Request) {
 		IsActive:           true,
 	}
 
-	if err := config.DB.Create(&role).Error; err != nil {
+	if err := db.Create(&role).Error; err != nil {
 		http.Error(w, "failed to create role: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	handlers.InvalidateUnifiedRolesCache()
 
-	permissionIDs, err := resolveRolePermissionIDs(req)
+	permissionIDs, err := resolveRolePermissionIDs(db, req)
 	if err != nil {
 		http.Error(w, "failed to resolve permissions", http.StatusInternalServerError)
 		return
 	}
 
-	if err := config.DB.Transaction(func(tx *gorm.DB) error {
+	if err := db.Transaction(func(tx *gorm.DB) error {
 		for _, permissionID := range permissionIDs {
 			if err := tx.Exec(
 				"INSERT INTO business_role_permissions (business_role_id, permission_id, created_at) VALUES (?, ?, NOW()) ON CONFLICT (business_role_id, permission_id) DO NOTHING",
@@ -602,7 +647,7 @@ func CreateBusinessRole(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Load for response
-	config.DB.Preload("Permissions").Preload("BusinessVertical").First(&role, role.ID)
+	db.Preload("Permissions").Preload("BusinessVertical").First(&role, role.ID)
 
 	permissions := make([]permissionResponse, len(role.Permissions))
 	for i, perm := range role.Permissions {
@@ -636,6 +681,13 @@ func CreateBusinessRole(w http.ResponseWriter, r *http.Request) {
 
 // UpdateBusinessRole updates an existing business role with permissions
 func UpdateBusinessRole(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	businessID := middleware.GetCurrentBusinessID(r)
 	if businessID == uuid.Nil {
 		http.Error(w, "invalid business identifier", http.StatusBadRequest)
@@ -657,7 +709,7 @@ func UpdateBusinessRole(w http.ResponseWriter, r *http.Request) {
 
 	// Get existing role and verify it belongs to this business
 	var role models.BusinessRole
-	if err := config.DB.Where("id = ? AND business_vertical_id = ?", roleID, businessID).First(&role).Error; err != nil {
+	if err := db.Where("id = ? AND business_vertical_id = ?", roleID, businessID).First(&role).Error; err != nil {
 		http.Error(w, "role not found in this business", http.StatusNotFound)
 		return
 	}
@@ -668,19 +720,19 @@ func UpdateBusinessRole(w http.ResponseWriter, r *http.Request) {
 	role.Description = req.Description
 	role.Level = req.Level
 
-	if err := config.DB.Save(&role).Error; err != nil {
+	if err := db.Save(&role).Error; err != nil {
 		http.Error(w, "failed to update role: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	permissionIDs, err := resolveRolePermissionIDs(req)
+	permissionIDs, err := resolveRolePermissionIDs(db, req)
 	if err != nil {
 		http.Error(w, "failed to resolve permissions", http.StatusInternalServerError)
 		return
 	}
 
 	// Clear and replace permission mapping atomically, and fail fast on DB errors.
-	if err := config.DB.Transaction(func(tx *gorm.DB) error {
+	if err := db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Exec("DELETE FROM business_role_permissions WHERE business_role_id = ?", role.ID).Error; err != nil {
 			return err
 		}
@@ -703,7 +755,7 @@ func UpdateBusinessRole(w http.ResponseWriter, r *http.Request) {
 
 	// Load fresh role with permissions for response
 	var updatedRole models.BusinessRole
-	if err := config.DB.
+	if err := db.
 		Preload("BusinessVertical").
 		Preload("Permissions").
 		First(&updatedRole, "id = ?", role.ID).Error; err != nil {
@@ -737,7 +789,7 @@ func UpdateBusinessRole(w http.ResponseWriter, r *http.Request) {
 	// Invalidate cache for every user currently assigned this business role so
 	// updated permissions apply immediately rather than after the 30s TTL expires.
 	var affectedUserIDs []uuid.UUID
-	config.DB.Model(&models.UserBusinessRole{}).
+	db.Model(&models.UserBusinessRole{}).
 		Where("business_role_id = ? AND is_active = ?", role.ID, true).
 		Pluck("user_id", &affectedUserIDs)
 	for _, uid := range affectedUserIDs {
@@ -753,6 +805,13 @@ func UpdateBusinessRole(w http.ResponseWriter, r *http.Request) {
 
 // DeleteBusinessRole deactivates a business role within the current business context.
 func DeleteBusinessRole(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	businessID := middleware.GetCurrentBusinessID(r)
 	if businessID == uuid.Nil {
 		http.Error(w, "invalid business identifier", http.StatusBadRequest)
@@ -767,7 +826,7 @@ func DeleteBusinessRole(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var role models.BusinessRole
-	if err := config.DB.Where("id = ? AND business_vertical_id = ?", roleID, businessID).First(&role).Error; err != nil {
+	if err := db.Where("id = ? AND business_vertical_id = ?", roleID, businessID).First(&role).Error; err != nil {
 		http.Error(w, "role not found in this business", http.StatusNotFound)
 		return
 	}
@@ -780,7 +839,7 @@ func DeleteBusinessRole(w http.ResponseWriter, r *http.Request) {
 
 	// Refuse deletion when active users are assigned to this role.
 	var activeAssignments int64
-	config.DB.Model(&models.UserBusinessRole{}).
+	db.Model(&models.UserBusinessRole{}).
 		Where("business_role_id = ? AND is_active = ?", role.ID, true).
 		Count(&activeAssignments)
 
@@ -790,7 +849,7 @@ func DeleteBusinessRole(w http.ResponseWriter, r *http.Request) {
 	}
 
 	role.IsActive = false
-	if err := config.DB.Save(&role).Error; err != nil {
+	if err := db.Save(&role).Error; err != nil {
 		http.Error(w, "failed to delete role: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -806,6 +865,13 @@ func DeleteBusinessRole(w http.ResponseWriter, r *http.Request) {
 
 // AssignUserToBusinessRole assigns a user to a role in a business vertical
 func AssignUserToBusinessRole(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	businessID := middleware.GetCurrentBusinessID(r)
 	if businessID == uuid.Nil {
 		http.Error(w, "invalid business identifier", http.StatusBadRequest)
@@ -832,27 +898,27 @@ func AssignUserToBusinessRole(w http.ResponseWriter, r *http.Request) {
 
 	// Verify user and role exist
 	var user models.User
-	if err := config.DB.First(&user, "id = ?", userID).Error; err != nil {
+	if err := db.First(&user, "id = ?", userID).Error; err != nil {
 		http.Error(w, "user not found", http.StatusNotFound)
 		return
 	}
 
 	var role models.BusinessRole
-	if err := config.DB.Where("id = ? AND business_vertical_id = ?", roleID, businessID).First(&role).Error; err != nil {
+	if err := db.Where("id = ? AND business_vertical_id = ?", roleID, businessID).First(&role).Error; err != nil {
 		http.Error(w, "role not found in this business", http.StatusNotFound)
 		return
 	}
 
 	// Check if assignment already exists
 	var existing models.UserBusinessRole
-	if err := config.DB.Where("user_id = ? AND business_role_id = ?", userID, roleID).First(&existing).Error; err == nil {
+	if err := db.Where("user_id = ? AND business_role_id = ?", userID, roleID).First(&existing).Error; err == nil {
 		if existing.IsActive {
 			http.Error(w, "user already has this role", http.StatusConflict)
 			return
 		} else {
 			// Reactivate existing assignment
 			existing.IsActive = true
-			config.DB.Save(&existing)
+			db.Save(&existing)
 		}
 	} else {
 		// Create new assignment
@@ -866,7 +932,7 @@ func AssignUserToBusinessRole(w http.ResponseWriter, r *http.Request) {
 			assignerID, _ := uuid.Parse(currentUser.UserID)
 			assignment.AssignedBy = &assignerID
 		}
-		config.DB.Create(&assignment)
+		db.Create(&assignment)
 	}
 
 	// Evict auth cache so assigned permissions are reflected immediately.
@@ -880,6 +946,13 @@ func AssignUserToBusinessRole(w http.ResponseWriter, r *http.Request) {
 
 // GetBusinessUsers returns all users in a business vertical with their roles
 func GetBusinessUsers(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	businessID := middleware.GetCurrentBusinessID(r)
 	if businessID == uuid.Nil {
 		http.Error(w, "invalid business identifier", http.StatusBadRequest)
@@ -906,7 +979,7 @@ func GetBusinessUsers(w http.ResponseWriter, r *http.Request) {
 	userIDSet := make(map[uuid.UUID]struct{})
 
 	var legacyUserIDs []uuid.UUID
-	config.DB.Table("user_business_roles").
+	db.Table("user_business_roles").
 		Select("DISTINCT user_business_roles.user_id").
 		Joins("JOIN business_roles ON user_business_roles.business_role_id = business_roles.id").
 		Where("business_roles.business_vertical_id = ? AND user_business_roles.is_active = ?", businessID, true).
@@ -916,7 +989,7 @@ func GetBusinessUsers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var rbacUserIDs []uuid.UUID
-	config.DB.Table("user_role_assignments").
+	db.Table("user_role_assignments").
 		Select("DISTINCT user_role_assignments.user_id").
 		Joins("JOIN rbac_roles ON user_role_assignments.role_id = rbac_roles.id").
 		Where("rbac_roles.business_vertical_id = ? AND rbac_roles.scope_type = ? AND rbac_roles.is_active = ? AND user_role_assignments.is_active = ?",
@@ -948,7 +1021,7 @@ func GetBusinessUsers(w http.ResponseWriter, r *http.Request) {
 
 	if len(pageUserIDs) > 0 {
 		var userRecords []models.User
-		if err := config.DB.Where("id IN ?", pageUserIDs).Find(&userRecords).Error; err != nil {
+		if err := db.Where("id IN ?", pageUserIDs).Find(&userRecords).Error; err != nil {
 			http.Error(w, "DB error: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -964,7 +1037,7 @@ func GetBusinessUsers(w http.ResponseWriter, r *http.Request) {
 
 		// Legacy business-role assignments for this page of users.
 		var userBusinessRoles []models.UserBusinessRole
-		if err := config.DB.Preload("BusinessRole").
+		if err := db.Preload("BusinessRole").
 			Joins("JOIN business_roles ON user_business_roles.business_role_id = business_roles.id").
 			Where("user_business_roles.user_id IN ? AND business_roles.business_vertical_id = ? AND user_business_roles.is_active = ?", pageUserIDs, businessID, true).
 			Find(&userBusinessRoles).Error; err != nil {
@@ -989,7 +1062,7 @@ func GetBusinessUsers(w http.ResponseWriter, r *http.Request) {
 
 		// Unified RBAC role assignments for this page of users.
 		var rbacAssignments []models.UserRoleAssignment
-		if err := config.DB.Preload("Role").
+		if err := db.Preload("Role").
 			Joins("JOIN rbac_roles ON user_role_assignments.role_id = rbac_roles.id").
 			Where("user_role_assignments.user_id IN ? AND rbac_roles.business_vertical_id = ? AND rbac_roles.scope_type = ? AND rbac_roles.is_active = ? AND user_role_assignments.is_active = ?",
 				pageUserIDs, businessID, models.RoleScopeBusinessVertical, true, true).
@@ -1044,7 +1117,7 @@ func GetBusinessUsers(w http.ResponseWriter, r *http.Request) {
 // or ported to seed RBACRole instead.
 
 // createDefaultBusinessRoles creates default roles for a new business vertical
-func createDefaultBusinessRoles(businessID uuid.UUID) {
+func createDefaultBusinessRoles(db *gorm.DB, businessID uuid.UUID) {
 	defaultRoles := []struct {
 		Name        string
 		DisplayName string
@@ -1101,7 +1174,7 @@ func createDefaultBusinessRoles(businessID uuid.UUID) {
 	permissionByName := make(map[string]models.Permission, len(permissionNames))
 	if len(permissionNames) > 0 {
 		var permissions []models.Permission
-		if err := config.DB.Where("name IN ?", permissionNames).Find(&permissions).Error; err == nil {
+		if err := db.Where("name IN ?", permissionNames).Find(&permissions).Error; err == nil {
 			for _, permission := range permissions {
 				permissionByName[permission.Name] = permission
 			}
@@ -1118,7 +1191,7 @@ func createDefaultBusinessRoles(businessID uuid.UUID) {
 			IsActive:           true,
 		}
 
-		if err := config.DB.Create(&role).Error; err != nil {
+		if err := db.Create(&role).Error; err != nil {
 			continue
 		}
 
@@ -1128,13 +1201,20 @@ func createDefaultBusinessRoles(businessID uuid.UUID) {
 			if !ok {
 				continue
 			}
-			config.DB.Model(&role).Association("Permissions").Append(&permission)
+			db.Model(&role).Association("Permissions").Append(&permission)
 		}
 	}
 }
 
 // GetUserBusinessAccess returns all business verticals the current user can access
 func GetUserBusinessAccess(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	userCtx, err := authSvc.LoadUserContext(r)
 	if err != nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -1150,7 +1230,7 @@ func GetUserBusinessAccess(w http.ResponseWriter, r *http.Request) {
 	if user.HasPermission("admin_all") || isSuperAdmin {
 		// Super admin can access all business verticals
 		var allBusinesses []models.BusinessVertical
-		if err := config.DB.Where("is_active = ?", true).Find(&allBusinesses).Error; err != nil {
+		if err := db.Where("is_active = ?", true).Find(&allBusinesses).Error; err != nil {
 			http.Error(w, "DB error: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -1235,7 +1315,7 @@ func GetUserBusinessAccess(w http.ResponseWriter, r *http.Request) {
 				Code        string
 				Description string
 			}
-			config.DB.Raw(`
+			db.Raw(`
 				SELECT DISTINCT bv.id, bv.name, bv.code, bv.description
 				FROM user_site_accesses usa
 				JOIN sites s ON s.id = usa.site_id
@@ -1276,6 +1356,13 @@ func GetUserBusinessAccess(w http.ResponseWriter, r *http.Request) {
 
 // GetSuperAdminDashboard returns comprehensive dashboard data for super admins
 func GetSuperAdminDashboard(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	claims := middleware.GetClaims(r)
 	if claims == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -1283,7 +1370,7 @@ func GetSuperAdminDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var user models.User
-	if err := config.DB.Preload("RoleModel.Permissions").Preload("RoleAssignments.Role").First(&user, "id = ?", claims.UserID).Error; err != nil {
+	if err := db.Preload("RoleModel.Permissions").Preload("RoleAssignments.Role").First(&user, "id = ?", claims.UserID).Error; err != nil {
 		http.Error(w, "user not found", http.StatusUnauthorized)
 		return
 	}
@@ -1305,7 +1392,7 @@ func GetSuperAdminDashboard(w http.ResponseWriter, r *http.Request) {
 
 	// Get all business verticals with statistics
 	var businesses []models.BusinessVertical
-	if err := config.DB.Where("is_active = ?", true).Find(&businesses).Error; err != nil {
+	if err := db.Where("is_active = ?", true).Find(&businesses).Error; err != nil {
 		http.Error(w, "DB error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1316,7 +1403,7 @@ func GetSuperAdminDashboard(w http.ResponseWriter, r *http.Request) {
 		BusinessVerticalID uuid.UUID
 		Count              int64
 	}
-	config.DB.Table("user_business_roles").
+	db.Table("user_business_roles").
 		Select("business_roles.business_vertical_id, COUNT(DISTINCT user_business_roles.user_id) as count").
 		Joins("JOIN business_roles ON user_business_roles.business_role_id = business_roles.id").
 		Where("business_roles.business_vertical_id IN ? AND user_business_roles.is_active = ?", func() []uuid.UUID {
@@ -1339,7 +1426,7 @@ func GetSuperAdminDashboard(w http.ResponseWriter, r *http.Request) {
 		BusinessVerticalID uuid.UUID
 		Count              int64
 	}
-	config.DB.Model(&models.BusinessRole{}).
+	db.Model(&models.BusinessRole{}).
 		Select("business_vertical_id, COUNT(*) as count").
 		Where("business_vertical_id IN ? AND is_active = ?", func() []uuid.UUID {
 			ids := make([]uuid.UUID, len(businesses))
@@ -1378,8 +1465,8 @@ func GetSuperAdminDashboard(w http.ResponseWriter, r *http.Request) {
 
 	// Get global statistics
 	var globalUserCount, globalRoleCount int64
-	config.DB.Model(&models.User{}).Where("is_active = ?", true).Count(&globalUserCount)
-	config.DB.Model(&models.Role{}).Where("is_active = ?", true).Count(&globalRoleCount)
+	db.Model(&models.User{}).Where("is_active = ?", true).Count(&globalUserCount)
+	db.Model(&models.Role{}).Where("is_active = ?", true).Count(&globalRoleCount)
 
 	globalRole := ""
 	if user.RoleModel != nil {
@@ -1415,6 +1502,13 @@ func GetSuperAdminDashboard(w http.ResponseWriter, r *http.Request) {
 
 // GetBusinessInfo returns business information by code, name, or ID
 func GetBusinessInfo(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	businessID := middleware.GetCurrentBusinessID(r)
 	if businessID == uuid.Nil {
 		http.Error(w, "business not found", http.StatusNotFound)
@@ -1422,19 +1516,19 @@ func GetBusinessInfo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var business models.BusinessVertical
-	if err := config.DB.First(&business, "id = ?", businessID).Error; err != nil {
+	if err := db.First(&business, "id = ?", businessID).Error; err != nil {
 		http.Error(w, "business not found", http.StatusNotFound)
 		return
 	}
 
 	// Get business statistics
 	var userCount, roleCount int64
-	config.DB.Model(&models.UserBusinessRole{}).
+	db.Model(&models.UserBusinessRole{}).
 		Joins("JOIN business_roles ON user_business_roles.business_role_id = business_roles.id").
 		Where("business_roles.business_vertical_id = ? AND user_business_roles.is_active = ?", businessID, true).
 		Count(&userCount)
 
-	config.DB.Model(&models.BusinessRole{}).
+	db.Model(&models.BusinessRole{}).
 		Where("business_vertical_id = ? AND is_active = ?", businessID, true).
 		Count(&roleCount)
 
