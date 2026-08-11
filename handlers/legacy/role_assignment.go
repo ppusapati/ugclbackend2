@@ -43,6 +43,13 @@ type AssignBusinessRoleRequest struct {
 // - Target user doesn't already have role in this vertical
 // - Business vertical exists and is active
 func AssignBusinessRole(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	userID := vars["id"]
 
@@ -62,7 +69,7 @@ func AssignBusinessRole(w http.ResponseWriter, r *http.Request) {
 
 	// Load current user with all roles
 	var currentUser models.User
-	if err := config.DB.
+	if err := db.
 		Preload("RoleModel").
 		Preload("UserBusinessRoles.BusinessRole").
 		First(&currentUser, "id = ?", claims.UserID).Error; err != nil {
@@ -78,7 +85,7 @@ func AssignBusinessRole(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var businessRole models.BusinessRole
-	if err := config.DB.
+	if err := db.
 		Preload("BusinessVertical").
 		First(&businessRole, "id = ?", businessRoleID).Error; err != nil {
 		http.Error(w, "Business role not found", http.StatusNotFound)
@@ -100,7 +107,7 @@ func AssignBusinessRole(w http.ResponseWriter, r *http.Request) {
 
 	// Ensure target user exists before any assignment work.
 	var targetUser models.User
-	if err := config.DB.First(&targetUser, "id = ?", targetUserID).Error; err != nil {
+	if err := db.First(&targetUser, "id = ?", targetUserID).Error; err != nil {
 		http.Error(w, "Target user not found", http.StatusNotFound)
 		return
 	}
@@ -109,7 +116,7 @@ func AssignBusinessRole(w http.ResponseWriter, r *http.Request) {
 
 	// Check if user already has a role in this vertical
 	var existingRole models.UserBusinessRole
-	err = config.DB.
+	err = db.
 		Joins("JOIN business_roles ON business_roles.id = user_business_roles.business_role_id").
 		Where("user_business_roles.user_id = ? AND business_roles.business_vertical_id = ? AND user_business_roles.is_active = ?",
 			targetUserID, businessRole.BusinessVerticalID, true).
@@ -123,7 +130,7 @@ func AssignBusinessRole(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		// If the same role is already assigned, treat as success (idempotent behavior).
 		if existingRole.BusinessRoleID == businessRoleID {
-			tx := config.DB.Begin()
+			tx := db.Begin()
 			if tx.Error != nil {
 				http.Error(w, "Failed to start transaction: "+tx.Error.Error(), http.StatusInternalServerError)
 				return
@@ -160,7 +167,7 @@ func AssignBusinessRole(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Replace existing role assignment in the same vertical.
-		tx := config.DB.Begin()
+		tx := db.Begin()
 		if tx.Error != nil {
 			http.Error(w, "Failed to start transaction: "+tx.Error.Error(), http.StatusInternalServerError)
 			return
@@ -196,7 +203,7 @@ func AssignBusinessRole(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		config.DB.
+		db.
 			Preload("BusinessRole.BusinessVertical").
 			Preload("User").
 			First(&existingRole, "id = ?", existingRole.ID)
@@ -226,7 +233,7 @@ func AssignBusinessRole(w http.ResponseWriter, r *http.Request) {
 		AssignedBy:     &assignedByID,
 	}
 
-	tx := config.DB.Begin()
+	tx := db.Begin()
 	if tx.Error != nil {
 		http.Error(w, "Failed to start transaction: "+tx.Error.Error(), http.StatusInternalServerError)
 		return
@@ -259,7 +266,7 @@ func AssignBusinessRole(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Load the created record with relationships
-	config.DB.
+	db.
 		Preload("BusinessRole.BusinessVertical").
 		Preload("User").
 		First(&userBusinessRole, "id = ?", userBusinessRole.ID)
@@ -284,6 +291,13 @@ func AssignBusinessRole(w http.ResponseWriter, r *http.Request) {
 // - Current user can remove this role (level check)
 // - Target user has this role
 func RemoveBusinessRole(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	userID := vars["id"]
 	roleID := vars["roleId"]
@@ -297,7 +311,7 @@ func RemoveBusinessRole(w http.ResponseWriter, r *http.Request) {
 
 	// Load current user with all roles
 	var currentUser models.User
-	if err := config.DB.
+	if err := db.
 		Preload("RoleModel").
 		Preload("UserBusinessRoles.BusinessRole").
 		First(&currentUser, "id = ?", claims.UserID).Error; err != nil {
@@ -320,7 +334,7 @@ func RemoveBusinessRole(w http.ResponseWriter, r *http.Request) {
 
 	// Load the user business role
 	var userBusinessRole models.UserBusinessRole
-	if err := config.DB.
+	if err := db.
 		Preload("BusinessRole").
 		Where("id = ? AND user_id = ?", userBusinessRoleID, targetUserID).
 		First(&userBusinessRole).Error; err != nil {
@@ -335,7 +349,7 @@ func RemoveBusinessRole(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Delete the role assignment
-	if err := config.DB.Delete(&userBusinessRole).Error; err != nil {
+	if err := db.Delete(&userBusinessRole).Error; err != nil {
 		http.Error(w, "Failed to remove role: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -357,6 +371,13 @@ func RemoveBusinessRole(w http.ResponseWriter, r *http.Request) {
 // GetUserRoles - GET /api/users/:id/roles
 // Returns all business roles for user with vertical info
 func GetUserRoles(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	userID := vars["id"]
 
@@ -369,7 +390,7 @@ func GetUserRoles(w http.ResponseWriter, r *http.Request) {
 
 	// Load user with business roles
 	var user models.User
-	if err := config.DB.
+	if err := db.
 		Preload("UserBusinessRoles.BusinessRole.BusinessVertical").
 		Preload("UserBusinessRoles.BusinessRole.Permissions").
 		First(&user, "id = ?", targetUserID).Error; err != nil {
@@ -406,6 +427,13 @@ func GetUserRoles(w http.ResponseWriter, r *http.Request) {
 // GetAssignableRoles - GET /api/users/:id/assignable-roles?verticalId=xxx
 // Returns roles current user can assign based on their level
 func GetAssignableRoles(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	verticalID := r.URL.Query().Get("verticalId")
 	if verticalID == "" {
 		http.Error(w, "verticalId parameter required", http.StatusBadRequest)
@@ -421,7 +449,7 @@ func GetAssignableRoles(w http.ResponseWriter, r *http.Request) {
 
 	// Load current user with all roles
 	var currentUser models.User
-	if err := config.DB.
+	if err := db.
 		Preload("RoleModel").
 		Preload("UserBusinessRoles.BusinessRole").
 		First(&currentUser, "id = ?", claims.UserID).Error; err != nil {
@@ -441,7 +469,7 @@ func GetAssignableRoles(w http.ResponseWriter, r *http.Request) {
 
 	// Load all business roles for this vertical
 	var businessRoles []models.BusinessRole
-	if err := config.DB.
+	if err := db.
 		Where("business_vertical_id = ? AND is_active = ?", businessVerticalID, true).
 		Order("level ASC").
 		Find(&businessRoles).Error; err != nil {
@@ -476,6 +504,13 @@ func GetAssignableRoles(w http.ResponseWriter, r *http.Request) {
 // GetVerticalRoles - GET /api/business-verticals/:id/roles
 // Returns all roles for a business vertical
 func GetVerticalRoles(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	verticalID := vars["id"]
 
@@ -488,7 +523,7 @@ func GetVerticalRoles(w http.ResponseWriter, r *http.Request) {
 
 	// Load all business roles for this vertical
 	var businessRoles []models.BusinessRole
-	if err := config.DB.
+	if err := db.
 		Preload("Permissions").
 		Where("business_vertical_id = ? AND is_active = ?", businessVerticalID, true).
 		Order("level ASC").
