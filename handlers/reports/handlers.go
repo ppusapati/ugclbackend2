@@ -774,7 +774,7 @@ func ExecuteReport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Execute report
-	engine := NewReportEngine()
+	engine := NewReportEngine(db)
 	result, err := engine.ExecuteReport(&report, req.Filters, claims.UserID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1727,7 +1727,7 @@ func ExecuteDashboard(w http.ResponseWriter, r *http.Request) {
 			}
 
 			filters := req.WidgetFilters[wgt.ID.String()]
-			engine := NewReportEngine()
+			engine := NewReportEngine(db)
 			result, err := engine.ExecuteReport(wgt.Report, filters, claims.UserID)
 			if err != nil {
 				wr.Error = err.Error()

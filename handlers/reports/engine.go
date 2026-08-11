@@ -12,7 +12,6 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/sync/singleflight"
 	"gorm.io/gorm"
-	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/models"
 )
 
@@ -166,10 +165,10 @@ type ReportEngine struct {
 	db *gorm.DB
 }
 
-// NewReportEngine creates a new report engine
-func NewReportEngine() *ReportEngine {
+// NewReportEngine creates a new report engine bound to a tenant-scoped db
+func NewReportEngine(db *gorm.DB) *ReportEngine {
 	return &ReportEngine{
-		db: config.DB,
+		db: db,
 	}
 }
 

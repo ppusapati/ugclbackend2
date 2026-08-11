@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
+	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/handlers/reports"
 	"p9e.in/ugcl/middleware"
 )
@@ -82,7 +83,14 @@ func RegisterReportRoutes(r *mux.Router) {
 // Handler wrappers for scheduler
 
 func getScheduledReportsHandler(w http.ResponseWriter, r *http.Request) {
-	scheduler := reports.NewReportScheduler()
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
+	scheduler := reports.NewReportScheduler(db)
 	reports, err := scheduler.GetScheduledReports()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -97,6 +105,13 @@ func getScheduledReportsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func scheduleReportHandler(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	reportID := vars["id"]
 
@@ -115,14 +130,14 @@ func scheduleReportHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	scheduler := reports.NewReportScheduler()
+	scheduler := reports.NewReportScheduler(db)
 	reportUUID, _ := uuid.Parse(reportID)
 
 	if req.Timezone == "" {
 		req.Timezone = "UTC"
 	}
 
-	err := scheduler.ScheduleReport(
+	err = scheduler.ScheduleReport(
 		reportUUID,
 		req.Frequency,
 		req.Time,
@@ -145,13 +160,20 @@ func scheduleReportHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func unscheduleReportHandler(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	reportID := vars["id"]
 
-	scheduler := reports.NewReportScheduler()
+	scheduler := reports.NewReportScheduler(db)
 	reportUUID, _ := uuid.Parse(reportID)
 
-	err := scheduler.UnscheduleReport(reportUUID)
+	err = scheduler.UnscheduleReport(reportUUID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -164,14 +186,21 @@ func unscheduleReportHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func executeReportNowHandler(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	reportID := vars["id"]
 	userID := r.Context().Value("userID").(uuid.UUID)
 
-	scheduler := reports.NewReportScheduler()
+	scheduler := reports.NewReportScheduler(db)
 	reportUUID, _ := uuid.Parse(reportID)
 
-	err := scheduler.ExecuteReportNow(reportUUID, userID.String())
+	err = scheduler.ExecuteReportNow(reportUUID, userID.String())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

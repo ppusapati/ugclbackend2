@@ -40,7 +40,7 @@ func ExportReportToExcel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Execute report
-	engine := NewReportEngine()
+	engine := NewReportEngine(db)
 	result, err := engine.ExecuteReport(&report, nil, claims.UserID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -97,7 +97,7 @@ func ExportReportToCSV(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Execute report
-	engine := NewReportEngine()
+	engine := NewReportEngine(db)
 	result, err := engine.ExecuteReport(&report, nil, claims.UserID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -147,7 +147,7 @@ func ExportReportToPDF(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Execute report
-	engine := NewReportEngine()
+	engine := NewReportEngine(db)
 	result, err := engine.ExecuteReport(&report, nil, claims.UserID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

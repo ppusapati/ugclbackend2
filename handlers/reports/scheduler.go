@@ -8,7 +8,6 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
-	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/models"
 )
 
@@ -18,11 +17,11 @@ type ReportScheduler struct {
 	reportEngine *ReportEngine
 }
 
-// NewReportScheduler creates a new report scheduler
-func NewReportScheduler() *ReportScheduler {
+// NewReportScheduler creates a new report scheduler bound to a tenant-scoped db
+func NewReportScheduler(db *gorm.DB) *ReportScheduler {
 	return &ReportScheduler{
-		db:           config.DB,
-		reportEngine: NewReportEngine(),
+		db:           db,
+		reportEngine: NewReportEngine(db),
 	}
 }
 
