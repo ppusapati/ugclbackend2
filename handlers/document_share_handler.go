@@ -18,6 +18,13 @@ import (
 
 // CreateDocumentShareHandler creates a shareable link for a document
 func CreateDocumentShareHandler(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	documentID := vars["id"]
 	userID, err := getDocumentUserID(r)
@@ -41,7 +48,7 @@ func CreateDocumentShareHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Verify document exists
 	var document models.Document
-	if err := config.DB.First(&document, "id = ?", documentID).Error; err != nil {
+	if err := db.First(&document, "id = ?", documentID).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			http.Error(w, "document not found", http.StatusNotFound)
 		} else {
@@ -97,7 +104,7 @@ func CreateDocumentShareHandler(w http.ResponseWriter, r *http.Request) {
 		IsActive:    true,
 	}
 
-	if err := config.DB.Create(&share).Error; err != nil {
+	if err := db.Create(&share).Error; err != nil {
 		http.Error(w, "failed to create share: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -111,7 +118,7 @@ func CreateDocumentShareHandler(w http.ResponseWriter, r *http.Request) {
 		IPAddress:  r.RemoteAddr,
 		UserAgent:  r.UserAgent(),
 	}
-	config.DB.Create(&auditLog)
+	db.Create(&auditLog)
 
 	// Build share URL
 	baseURL := r.Header.Get("Origin")
@@ -130,11 +137,18 @@ func CreateDocumentShareHandler(w http.ResponseWriter, r *http.Request) {
 
 // GetDocumentSharesHandler returns all shares for a document
 func GetDocumentSharesHandler(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	documentID := vars["id"]
 
 	var shares []models.DocumentShare
-	if err := config.DB.Preload("CreatedBy").Where("document_id = ?", documentID).
+	if err := db.Preload("CreatedBy").Where("document_id = ?", documentID).
 		Order("created_at DESC").Find(&shares).Error; err != nil {
 		http.Error(w, "failed to fetch shares: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -146,11 +160,18 @@ func GetDocumentSharesHandler(w http.ResponseWriter, r *http.Request) {
 
 // AccessSharedDocumentHandler handles access to a shared document
 func AccessSharedDocumentHandler(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	shareToken := vars["token"]
 
 	var share models.DocumentShare
-	if err := config.DB.Preload("Document").Preload("Document.Category").Preload("Document.Tags").
+	if err := db.Preload("Document").Preload("Document.Category").Preload("Document.Tags").
 		First(&share, "share_token = ?", shareToken).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			http.Error(w, "share link not found", http.StatusNotFound)
@@ -197,7 +218,7 @@ func AccessSharedDocumentHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Increment access count
-	config.DB.Model(&share).Update("access_count", gorm.Expr("access_count + 1"))
+	db.Model(&share).Update("access_count", gorm.Expr("access_count + 1"))
 
 	// Log access
 	auditLog := models.DocumentAuditLog{
@@ -207,7 +228,7 @@ func AccessSharedDocumentHandler(w http.ResponseWriter, r *http.Request) {
 		IPAddress:  r.RemoteAddr,
 		UserAgent:  r.UserAgent(),
 	}
-	config.DB.Create(&auditLog)
+	db.Create(&auditLog)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -219,11 +240,18 @@ func AccessSharedDocumentHandler(w http.ResponseWriter, r *http.Request) {
 
 // DownloadSharedDocumentHandler handles downloading a shared document
 func DownloadSharedDocumentHandler(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	shareToken := vars["token"]
 
 	var share models.DocumentShare
-	if err := config.DB.Preload("Document").First(&share, "share_token = ?", shareToken).Error; err != nil {
+	if err := db.Preload("Document").First(&share, "share_token = ?", shareToken).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			http.Error(w, "share link not found", http.StatusNotFound)
 		} else {
@@ -257,7 +285,7 @@ func DownloadSharedDocumentHandler(w http.ResponseWriter, r *http.Request) {
 		IPAddress:  r.RemoteAddr,
 		UserAgent:  r.UserAgent(),
 	}
-	config.DB.Create(&auditLog)
+	db.Create(&auditLog)
 
 	if err := serveStoredFile(w, r, share.Document.FilePath, share.Document.FileName, share.Document.FileType, share.Document.FileSize); err != nil {
 		if errors.Is(err, errStoredFileNotFound) {
@@ -270,6 +298,13 @@ func DownloadSharedDocumentHandler(w http.ResponseWriter, r *http.Request) {
 
 // RevokeDocumentShareHandler revokes a share link
 func RevokeDocumentShareHandler(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	shareID := vars["share_id"]
 	userID, err := getDocumentUserID(r)
@@ -279,7 +314,7 @@ func RevokeDocumentShareHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var share models.DocumentShare
-	if err := config.DB.First(&share, "id = ?", shareID).Error; err != nil {
+	if err := db.First(&share, "id = ?", shareID).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			http.Error(w, "share not found", http.StatusNotFound)
 		} else {
@@ -290,7 +325,7 @@ func RevokeDocumentShareHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Deactivate share
 	share.IsActive = false
-	if err := config.DB.Save(&share).Error; err != nil {
+	if err := db.Save(&share).Error; err != nil {
 		http.Error(w, "failed to revoke share: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -304,7 +339,7 @@ func RevokeDocumentShareHandler(w http.ResponseWriter, r *http.Request) {
 		IPAddress:  r.RemoteAddr,
 		UserAgent:  r.UserAgent(),
 	}
-	config.DB.Create(&auditLog)
+	db.Create(&auditLog)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
@@ -314,6 +349,13 @@ func RevokeDocumentShareHandler(w http.ResponseWriter, r *http.Request) {
 
 // GrantDocumentPermissionHandler grants permission to a user or role
 func GrantDocumentPermissionHandler(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	documentID := vars["id"]
 	userID, err := getDocumentUserID(r)
@@ -340,7 +382,7 @@ func GrantDocumentPermissionHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Verify document exists
 	var document models.Document
-	if err := config.DB.First(&document, "id = ?", documentID).Error; err != nil {
+	if err := db.First(&document, "id = ?", documentID).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			http.Error(w, "document not found", http.StatusNotFound)
 		} else {
@@ -386,7 +428,7 @@ func GrantDocumentPermissionHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := config.DB.Create(&permission).Error; err != nil {
+	if err := db.Create(&permission).Error; err != nil {
 		http.Error(w, "failed to grant permission: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -400,7 +442,7 @@ func GrantDocumentPermissionHandler(w http.ResponseWriter, r *http.Request) {
 		IPAddress:  r.RemoteAddr,
 		UserAgent:  r.UserAgent(),
 	}
-	config.DB.Create(&auditLog)
+	db.Create(&auditLog)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -411,11 +453,18 @@ func GrantDocumentPermissionHandler(w http.ResponseWriter, r *http.Request) {
 
 // GetDocumentPermissionsHandler returns all permissions for a document
 func GetDocumentPermissionsHandler(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	documentID := vars["id"]
 
 	var permissions []models.DocumentPermission
-	if err := config.DB.Preload("User").Preload("Role").Preload("BusinessRole").
+	if err := db.Preload("User").Preload("Role").Preload("BusinessRole").
 		Where("document_id = ?", documentID).Find(&permissions).Error; err != nil {
 		http.Error(w, "failed to fetch permissions: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -427,6 +476,13 @@ func GetDocumentPermissionsHandler(w http.ResponseWriter, r *http.Request) {
 
 // RevokeDocumentPermissionHandler revokes a permission
 func RevokeDocumentPermissionHandler(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	permissionID := vars["permission_id"]
 	userID, err := getDocumentUserID(r)
@@ -436,7 +492,7 @@ func RevokeDocumentPermissionHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var permission models.DocumentPermission
-	if err := config.DB.First(&permission, "id = ?", permissionID).Error; err != nil {
+	if err := db.First(&permission, "id = ?", permissionID).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			http.Error(w, "permission not found", http.StatusNotFound)
 		} else {
@@ -445,7 +501,7 @@ func RevokeDocumentPermissionHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := config.DB.Delete(&permission).Error; err != nil {
+	if err := db.Delete(&permission).Error; err != nil {
 		http.Error(w, "failed to revoke permission: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -459,7 +515,7 @@ func RevokeDocumentPermissionHandler(w http.ResponseWriter, r *http.Request) {
 		IPAddress:  r.RemoteAddr,
 		UserAgent:  r.UserAgent(),
 	}
-	config.DB.Create(&auditLog)
+	db.Create(&auditLog)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
