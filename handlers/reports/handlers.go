@@ -213,7 +213,7 @@ func appendSystemReportTable(tables []map[string]interface{}, title string, tabl
 	})
 }
 
-func ensureDefaultReportTemplates() error {
+func ensureDefaultReportTemplates(db *gorm.DB) error {
 	type templateSeed struct {
 		Code        string
 		Name        string
@@ -418,7 +418,7 @@ func ensureDefaultReportTemplates() error {
 
 	for _, template := range templates {
 		var existing models.ReportTemplate
-		err := config.DB.Where("code = ?", template.Code).First(&existing).Error
+		err := db.Where("code = ?", template.Code).First(&existing).Error
 		if err == nil {
 			continue
 		}
@@ -434,7 +434,7 @@ func ensureDefaultReportTemplates() error {
 
 		template.Template = rawPayload
 		template.IsActive = true
-		if createErr := config.DB.Create(&template).Error; createErr != nil {
+		if createErr := db.Create(&template).Error; createErr != nil {
 			return createErr
 		}
 	}
@@ -473,6 +473,13 @@ func CreateReportDefinition(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	claims := middleware.GetClaims(r)
 	if claims == nil {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -499,7 +506,7 @@ func CreateReportDefinition(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := ensureReportViewsForDataSources(config.DB, req.DataSources); err != nil {
+	if err := ensureReportViewsForDataSources(db, req.DataSources); err != nil {
 		http.Error(w, fmt.Sprintf("invalid report data_sources: %v", err), http.StatusBadRequest)
 		return
 	}
@@ -535,7 +542,7 @@ func CreateReportDefinition(w http.ResponseWriter, r *http.Request) {
 		CreatedBy:          claims.UserID,
 	}
 
-	if err := config.DB.Create(report).Error; err != nil {
+	if err := db.Create(report).Error; err != nil {
 		http.Error(w, fmt.Sprintf("Failed to create report: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -803,6 +810,13 @@ func GetFormTableFields(w http.ResponseWriter, r *http.Request) {
 	tableName := vars["table_name"]
 	normalizedTable := strings.ToLower(strings.TrimSpace(tableName))
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	if normalizedTable == "attendance_sessions" {
 		attendanceSessionFields := []map[string]interface{}{
 			{"id": "id", "label": "Session ID", "type": "text", "dataType": "text", "source": "system", "column_name": "id"},
@@ -924,7 +938,7 @@ func GetFormTableFields(w http.ResponseWriter, r *http.Request) {
 	var formFields []map[string]interface{}
 	var formTitle string
 
-	dbErr := config.DB.
+	dbErr := db.
 		Where("is_active = ? AND (LOWER(db_table_name) = LOWER(?) OR LOWER(code) = LOWER(?))", true, tableName, tableName).
 		Select("id", "code", "title", "form_schema", "steps", "core_fields").
 		First(&form).Error
@@ -943,7 +957,7 @@ func GetFormTableFields(w http.ResponseWriter, r *http.Request) {
 			field["column_name"] = columnName
 			formFields = append(formFields, field)
 		}
-		formFields = append(formFields, inferMissingFormFieldsFromSubmissions(form.ID, formFields)...)
+		formFields = append(formFields, inferMissingFormFieldsFromSubmissions(db, form.ID, formFields)...)
 		fmt.Printf("[REPORT BUILDER] Loaded %d form fields for %s\n", len(formFields), form.Code)
 		formTitle = form.Title
 	}
@@ -977,7 +991,7 @@ func GetFormTableFields(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func inferMissingFormFieldsFromSubmissions(formID uuid.UUID, existingFields []map[string]interface{}) []map[string]interface{} {
+func inferMissingFormFieldsFromSubmissions(db *gorm.DB, formID uuid.UUID, existingFields []map[string]interface{}) []map[string]interface{} {
 	seen := make(map[string]struct{}, len(existingFields))
 	for _, field := range existingFields {
 		id, _ := field["id"].(string)
@@ -987,7 +1001,7 @@ func inferMissingFormFieldsFromSubmissions(formID uuid.UUID, existingFields []ma
 	}
 
 	var submissions []models.FormSubmission
-	if err := config.DB.
+	if err := db.
 		Where("form_id = ?", formID).
 		Order("submitted_at DESC").
 		Limit(100).
@@ -1221,7 +1235,14 @@ func GetAvailableFormTables(w http.ResponseWriter, r *http.Request) {
 		verticalToken = strings.TrimSpace(r.URL.Query().Get("vertical_id"))
 	}
 
-	query := config.DB.Model(&models.AppForm{}).Where("is_active = ?", true)
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
+	query := db.Model(&models.AppForm{}).Where("is_active = ?", true)
 
 	if moduleID != "" {
 		moduleUUID, err := uuid.Parse(moduleID)
@@ -1240,7 +1261,7 @@ func GetAvailableFormTables(w http.ResponseWriter, r *http.Request) {
 
 		if verticalUUID, err := uuid.Parse(verticalToken); err == nil {
 			var matched models.BusinessVertical
-			if err := config.DB.Select("id", "code").Where("id = ?", verticalUUID).First(&matched).Error; err == nil {
+			if err := db.Select("id", "code").Where("id = ?", verticalUUID).First(&matched).Error; err == nil {
 				candidateTokens[matched.ID.String()] = struct{}{}
 				if strings.TrimSpace(matched.Code) != "" {
 					candidateTokens[matched.Code] = struct{}{}
@@ -1249,7 +1270,7 @@ func GetAvailableFormTables(w http.ResponseWriter, r *http.Request) {
 			}
 		} else {
 			var matched []models.BusinessVertical
-			if err := config.DB.Select("id", "code").Where("LOWER(code) = LOWER(?)", verticalToken).Find(&matched).Error; err == nil {
+			if err := db.Select("id", "code").Where("LOWER(code) = LOWER(?)", verticalToken).Find(&matched).Error; err == nil {
 				for _, v := range matched {
 					candidateTokens[v.ID.String()] = struct{}{}
 					if strings.TrimSpace(v.Code) != "" {
@@ -1323,8 +1344,15 @@ func CloneReport(w http.ResponseWriter, r *http.Request) {
 	reportID := vars["id"]
 	claims := middleware.GetClaims(r)
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var originalReport models.ReportDefinition
-	if err := config.DB.Where("id = ? AND deleted_at IS NULL", reportID).First(&originalReport).Error; err != nil {
+	if err := db.Where("id = ? AND deleted_at IS NULL", reportID).First(&originalReport).Error; err != nil {
 		http.Error(w, "Report not found", http.StatusNotFound)
 		return
 	}
@@ -1372,14 +1400,21 @@ func ToggleFavoriteReport(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	reportID := vars["id"]
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var report models.ReportDefinition
-	if err := config.DB.Where("id = ?", reportID).First(&report).Error; err != nil {
+	if err := db.Where("id = ?", reportID).First(&report).Error; err != nil {
 		http.Error(w, "Report not found", http.StatusNotFound)
 		return
 	}
 
 	report.IsFavorite = !report.IsFavorite
-	if err := config.DB.Save(&report).Error; err != nil {
+	if err := db.Save(&report).Error; err != nil {
 		http.Error(w, "Failed to update favorite status", http.StatusInternalServerError)
 		return
 	}
@@ -1403,8 +1438,15 @@ func GetReportExecutionHistory(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var executions []models.ReportExecution
-	if err := config.DB.Where("report_id = ?", reportID).
+	if err := db.Where("report_id = ?", reportID).
 		Order("started_at DESC").
 		Limit(limit).
 		Find(&executions).Error; err != nil {
@@ -1439,6 +1481,13 @@ func CreateDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	claims := middleware.GetClaims(r)
 
 	dashboard := &models.Dashboard{
@@ -1454,7 +1503,7 @@ func CreateDashboard(w http.ResponseWriter, r *http.Request) {
 		CreatedBy:          claims.UserID,
 	}
 
-	if err := config.DB.Create(dashboard).Error; err != nil {
+	if err := db.Create(dashboard).Error; err != nil {
 		http.Error(w, "Failed to create dashboard", http.StatusInternalServerError)
 		return
 	}
@@ -1480,7 +1529,14 @@ func GetDashboards(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	query := config.DB.Preload("Widgets").Preload("Widgets.Report").Where("deleted_at IS NULL")
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
+	query := db.Preload("Widgets").Preload("Widgets.Report").Where("deleted_at IS NULL")
 
 	if businessVerticalID != "" {
 		query = query.Where("business_vertical_id = ?", businessVerticalID)
@@ -1511,8 +1567,15 @@ func GetDashboard(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	dashboardID := vars["id"]
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var dashboard models.Dashboard
-	if err := config.DB.Preload("Widgets").Preload("Widgets.Report").
+	if err := db.Preload("Widgets").Preload("Widgets.Report").
 		Where("id = ? AND deleted_at IS NULL", dashboardID).
 		First(&dashboard).Error; err != nil {
 		http.Error(w, "Dashboard not found", http.StatusNotFound)
@@ -1538,8 +1601,15 @@ func ExecuteDashboard(w http.ResponseWriter, r *http.Request) {
 	execCtx, cancel := context.WithTimeout(r.Context(), dashboardExecuteTimeout())
 	defer cancel()
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var dashboard models.Dashboard
-	if err := config.DB.WithContext(execCtx).Preload("Widgets").Preload("Widgets.Report").
+	if err := db.WithContext(execCtx).Preload("Widgets").Preload("Widgets.Report").
 		Where("id = ? AND deleted_at IS NULL", dashboardID).
 		First(&dashboard).Error; err != nil {
 		http.Error(w, "Dashboard not found", http.StatusNotFound)
@@ -1608,7 +1678,7 @@ func ExecuteDashboard(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if err := ensureReportViewsForDataSources(config.DB.WithContext(execCtx), wgt.Report.DataSources); err != nil {
+		if err := ensureReportViewsForDataSources(db.WithContext(execCtx), wgt.Report.DataSources); err != nil {
 			wr.Error = fmt.Sprintf("failed to sync report views: %v", err)
 			results[i] = wr
 			return
@@ -1658,8 +1728,15 @@ func DeleteDashboard(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	dashboardID := vars["id"]
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var dashboard models.Dashboard
-	if err := config.DB.Where("id = ? AND deleted_at IS NULL", dashboardID).First(&dashboard).Error; err != nil {
+	if err := db.Where("id = ? AND deleted_at IS NULL", dashboardID).First(&dashboard).Error; err != nil {
 		http.Error(w, "Dashboard not found", http.StatusNotFound)
 		return
 	}
@@ -1670,7 +1747,7 @@ func DeleteDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := time.Now()
-	tx := config.DB.Begin()
+	tx := db.Begin()
 	if tx.Error != nil {
 		http.Error(w, "Failed to delete dashboard", http.StatusInternalServerError)
 		return
@@ -1714,6 +1791,13 @@ func AddWidgetToDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	dashboardUUID, _ := uuid.Parse(dashboardID)
 
 	widget := &models.ReportWidget{
@@ -1724,7 +1808,7 @@ func AddWidgetToDashboard(w http.ResponseWriter, r *http.Request) {
 		RefreshRate: req.RefreshRate,
 	}
 
-	if err := config.DB.Create(widget).Error; err != nil {
+	if err := db.Create(widget).Error; err != nil {
 		http.Error(w, "Failed to add widget", http.StatusInternalServerError)
 		return
 	}
@@ -1741,7 +1825,14 @@ func RemoveWidgetFromDashboard(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	widgetID := vars["widget_id"]
 
-	if err := config.DB.Delete(&models.ReportWidget{}, "id = ?", widgetID).Error; err != nil {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
+	if err := db.Delete(&models.ReportWidget{}, "id = ?", widgetID).Error; err != nil {
 		http.Error(w, "Failed to remove widget", http.StatusInternalServerError)
 		return
 	}
@@ -1871,6 +1962,13 @@ func CreateReportTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	req.Name = strings.TrimSpace(req.Name)
 	if req.Name == "" {
 		http.Error(w, "Template name is required", http.StatusBadRequest)
@@ -1892,7 +1990,7 @@ func CreateReportTemplate(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var report models.ReportDefinition
-		if err := config.DB.Where("id = ?", req.ReportID).First(&report).Error; err != nil {
+		if err := db.Where("id = ?", req.ReportID).First(&report).Error; err != nil {
 			http.Error(w, "Report not found", http.StatusNotFound)
 			return
 		}
@@ -1923,7 +2021,7 @@ func CreateReportTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var existing models.ReportTemplate
-	if err := config.DB.Where("code = ?", finalCode).First(&existing).Error; err == nil {
+	if err := db.Where("code = ?", finalCode).First(&existing).Error; err == nil {
 		finalCode = fmt.Sprintf("%s_%d", finalCode, time.Now().Unix())
 	} else if err != nil && err != gorm.ErrRecordNotFound {
 		http.Error(w, "Failed to validate template code", http.StatusInternalServerError)
@@ -1940,7 +2038,7 @@ func CreateReportTemplate(w http.ResponseWriter, r *http.Request) {
 		IsActive:    true,
 	}
 
-	if err := config.DB.Create(template).Error; err != nil {
+	if err := db.Create(template).Error; err != nil {
 		http.Error(w, "Failed to create template", http.StatusInternalServerError)
 		return
 	}
@@ -1957,8 +2055,15 @@ func UpdateReportTemplate(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	templateID := vars["template_id"]
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var template models.ReportTemplate
-	if err := config.DB.Where("id = ?", templateID).First(&template).Error; err != nil {
+	if err := db.Where("id = ?", templateID).First(&template).Error; err != nil {
 		http.Error(w, "Template not found", http.StatusNotFound)
 		return
 	}
@@ -1998,7 +2103,7 @@ func UpdateReportTemplate(w http.ResponseWriter, r *http.Request) {
 		nextCode := normalizeTemplateCode(*req.Code)
 		if nextCode != "" && nextCode != template.Code {
 			var existing models.ReportTemplate
-			err := config.DB.Where("code = ?", nextCode).First(&existing).Error
+			err := db.Where("code = ?", nextCode).First(&existing).Error
 			if err == nil && existing.ID != template.ID {
 				http.Error(w, "Template code already exists", http.StatusConflict)
 				return
@@ -2025,7 +2130,7 @@ func UpdateReportTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := config.DB.Save(&template).Error; err != nil {
+	if err := db.Save(&template).Error; err != nil {
 		http.Error(w, "Failed to update template", http.StatusInternalServerError)
 		return
 	}
@@ -2041,12 +2146,19 @@ func UpdateReportTemplate(w http.ResponseWriter, r *http.Request) {
 func GetReportTemplates(w http.ResponseWriter, r *http.Request) {
 	category := r.URL.Query().Get("category")
 
-	if err := ensureDefaultReportTemplates(); err != nil {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
+	if err := ensureDefaultReportTemplates(db); err != nil {
 		http.Error(w, "Failed to initialize default templates", http.StatusInternalServerError)
 		return
 	}
 
-	query := config.DB.Where("is_active = ?", true)
+	query := db.Where("is_active = ?", true)
 
 	if category != "" {
 		query = query.Where("category = ?", category)
@@ -2071,8 +2183,15 @@ func CreateReportFromTemplate(w http.ResponseWriter, r *http.Request) {
 	templateID := vars["template_id"]
 	claims := middleware.GetClaims(r)
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var template models.ReportTemplate
-	if err := config.DB.Where("id = ?", templateID).First(&template).Error; err != nil {
+	if err := db.Where("id = ?", templateID).First(&template).Error; err != nil {
 		http.Error(w, "Template not found", http.StatusNotFound)
 		return
 	}
@@ -2123,13 +2242,13 @@ func CreateReportFromTemplate(w http.ResponseWriter, r *http.Request) {
 		report.Fields, _ = json.Marshal(fields)
 	}
 
-	if err := config.DB.Create(report).Error; err != nil {
+	if err := db.Create(report).Error; err != nil {
 		http.Error(w, "Failed to create report from template", http.StatusInternalServerError)
 		return
 	}
 
 	// Increment usage count
-	config.DB.Model(&template).UpdateColumn("usage_count", template.UsageCount+1)
+	db.Model(&template).UpdateColumn("usage_count", template.UsageCount+1)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -2141,8 +2260,15 @@ func CreateReportFromTemplate(w http.ResponseWriter, r *http.Request) {
 // GetReportAvailableRoles returns global roles that can be used for report sharing.
 // Requires report:read permission (enforced at route level). Does NOT require manage_roles.
 func GetReportAvailableRoles(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var roles []models.Role
-	if err := config.DB.
+	if err := db.
 		Where("is_active = ? AND is_global = ?", true, true).
 		Select("id", "name", "description").
 		Order("name ASC").

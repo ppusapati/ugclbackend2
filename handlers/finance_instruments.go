@@ -95,8 +95,15 @@ func ListBankGuarantees(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var items []models.BankGuarantee
-	query := config.DB.Where("business_vertical_id = ?", businessID)
+	query := db.Where("business_vertical_id = ?", businessID)
 	if status := r.URL.Query().Get("status"); status != "" {
 		query = query.Where("status = ?", status)
 	}
@@ -116,6 +123,13 @@ func CreateBankGuarantee(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "business ID required", http.StatusBadRequest)
 		return
 	}
+
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
 
 	var item models.BankGuarantee
 	if err := json.NewDecoder(r.Body).Decode(&item); err != nil {
@@ -137,7 +151,7 @@ func CreateBankGuarantee(w http.ResponseWriter, r *http.Request) {
 		item.Currency = "INR"
 	}
 
-	tx := config.DB.Begin()
+	tx := db.Begin()
 	if err := tx.Create(&item).Error; err != nil {
 		tx.Rollback()
 		http.Error(w, "failed to create bank guarantee", http.StatusInternalServerError)
@@ -180,8 +194,15 @@ func GetBankGuarantee(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var item models.BankGuarantee
-	if err := config.DB.Where("id = ? AND business_vertical_id = ?", id, businessID).First(&item).Error; err != nil {
+	if err := db.Where("id = ? AND business_vertical_id = ?", id, businessID).First(&item).Error; err != nil {
 		http.Error(w, "bank guarantee not found", http.StatusNotFound)
 		return
 	}
@@ -203,8 +224,15 @@ func UpdateBankGuarantee(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var item models.BankGuarantee
-	if err := config.DB.Where("id = ? AND business_vertical_id = ?", id, businessID).First(&item).Error; err != nil {
+	if err := db.Where("id = ? AND business_vertical_id = ?", id, businessID).First(&item).Error; err != nil {
 		http.Error(w, "bank guarantee not found", http.StatusNotFound)
 		return
 	}
@@ -220,7 +248,7 @@ func UpdateBankGuarantee(w http.ResponseWriter, r *http.Request) {
 	req.CreatedBy = item.CreatedBy
 	req.UpdatedBy = middleware.GetClaims(r).UserID
 
-	if err := config.DB.Model(&item).Updates(req).Error; err != nil {
+	if err := db.Model(&item).Updates(req).Error; err != nil {
 		http.Error(w, "failed to update bank guarantee", http.StatusInternalServerError)
 		return
 	}
@@ -240,8 +268,15 @@ func ListLettersOfCredit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var items []models.LetterOfCredit
-	query := config.DB.Where("business_vertical_id = ?", businessID)
+	query := db.Where("business_vertical_id = ?", businessID)
 	if status := r.URL.Query().Get("status"); status != "" {
 		query = query.Where("status = ?", status)
 	}
@@ -261,6 +296,13 @@ func CreateLetterOfCredit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "business ID required", http.StatusBadRequest)
 		return
 	}
+
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
 
 	var item models.LetterOfCredit
 	if err := json.NewDecoder(r.Body).Decode(&item); err != nil {
@@ -282,7 +324,7 @@ func CreateLetterOfCredit(w http.ResponseWriter, r *http.Request) {
 		item.Currency = "INR"
 	}
 
-	tx := config.DB.Begin()
+	tx := db.Begin()
 	if err := tx.Create(&item).Error; err != nil {
 		tx.Rollback()
 		http.Error(w, "failed to create letter of credit", http.StatusInternalServerError)
@@ -325,8 +367,15 @@ func GetLetterOfCredit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var item models.LetterOfCredit
-	if err := config.DB.Where("id = ? AND business_vertical_id = ?", id, businessID).First(&item).Error; err != nil {
+	if err := db.Where("id = ? AND business_vertical_id = ?", id, businessID).First(&item).Error; err != nil {
 		http.Error(w, "letter of credit not found", http.StatusNotFound)
 		return
 	}
@@ -348,8 +397,15 @@ func UpdateLetterOfCredit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var item models.LetterOfCredit
-	if err := config.DB.Where("id = ? AND business_vertical_id = ?", id, businessID).First(&item).Error; err != nil {
+	if err := db.Where("id = ? AND business_vertical_id = ?", id, businessID).First(&item).Error; err != nil {
 		http.Error(w, "letter of credit not found", http.StatusNotFound)
 		return
 	}
@@ -365,7 +421,7 @@ func UpdateLetterOfCredit(w http.ResponseWriter, r *http.Request) {
 	req.CreatedBy = item.CreatedBy
 	req.UpdatedBy = middleware.GetClaims(r).UserID
 
-	if err := config.DB.Model(&item).Updates(req).Error; err != nil {
+	if err := db.Model(&item).Updates(req).Error; err != nil {
 		http.Error(w, "failed to update letter of credit", http.StatusInternalServerError)
 		return
 	}
@@ -385,8 +441,15 @@ func ListInsurancePolicies(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var items []models.InsurancePolicy
-	query := config.DB.Where("business_vertical_id = ?", businessID)
+	query := db.Where("business_vertical_id = ?", businessID)
 	if status := r.URL.Query().Get("status"); status != "" {
 		query = query.Where("status = ?", status)
 	}
@@ -406,6 +469,13 @@ func CreateInsurancePolicy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "business ID required", http.StatusBadRequest)
 		return
 	}
+
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
 
 	var item models.InsurancePolicy
 	if err := json.NewDecoder(r.Body).Decode(&item); err != nil {
@@ -427,7 +497,7 @@ func CreateInsurancePolicy(w http.ResponseWriter, r *http.Request) {
 		item.Currency = "INR"
 	}
 
-	tx := config.DB.Begin()
+	tx := db.Begin()
 	if err := tx.Create(&item).Error; err != nil {
 		tx.Rollback()
 		http.Error(w, "failed to create insurance policy", http.StatusInternalServerError)
@@ -470,8 +540,15 @@ func GetInsurancePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var item models.InsurancePolicy
-	if err := config.DB.Where("id = ? AND business_vertical_id = ?", id, businessID).First(&item).Error; err != nil {
+	if err := db.Where("id = ? AND business_vertical_id = ?", id, businessID).First(&item).Error; err != nil {
 		http.Error(w, "insurance policy not found", http.StatusNotFound)
 		return
 	}
@@ -493,8 +570,15 @@ func UpdateInsurancePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var item models.InsurancePolicy
-	if err := config.DB.Where("id = ? AND business_vertical_id = ?", id, businessID).First(&item).Error; err != nil {
+	if err := db.Where("id = ? AND business_vertical_id = ?", id, businessID).First(&item).Error; err != nil {
 		http.Error(w, "insurance policy not found", http.StatusNotFound)
 		return
 	}
@@ -510,7 +594,7 @@ func UpdateInsurancePolicy(w http.ResponseWriter, r *http.Request) {
 	req.CreatedBy = item.CreatedBy
 	req.UpdatedBy = middleware.GetClaims(r).UserID
 
-	if err := config.DB.Model(&item).Updates(req).Error; err != nil {
+	if err := db.Model(&item).Updates(req).Error; err != nil {
 		http.Error(w, "failed to update insurance policy", http.StatusInternalServerError)
 		return
 	}
@@ -530,8 +614,15 @@ func ListInsuranceClaims(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var items []models.InsuranceClaim
-	query := config.DB.Where("business_vertical_id = ?", businessID)
+	query := db.Where("business_vertical_id = ?", businessID)
 	if status := r.URL.Query().Get("status"); status != "" {
 		query = query.Where("status = ?", status)
 	}
@@ -555,6 +646,13 @@ func CreateInsuranceClaim(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var item models.InsuranceClaim
 	if err := json.NewDecoder(r.Body).Decode(&item); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -567,7 +665,7 @@ func CreateInsuranceClaim(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var policy models.InsurancePolicy
-	if err := config.DB.Where("id = ? AND business_vertical_id = ?", item.PolicyID, businessID).First(&policy).Error; err != nil {
+	if err := db.Where("id = ? AND business_vertical_id = ?", item.PolicyID, businessID).First(&policy).Error; err != nil {
 		http.Error(w, "policy not found in business context", http.StatusBadRequest)
 		return
 	}
@@ -578,7 +676,7 @@ func CreateInsuranceClaim(w http.ResponseWriter, r *http.Request) {
 		item.Status = "filed"
 	}
 
-	tx := config.DB.Begin()
+	tx := db.Begin()
 	if err := tx.Create(&item).Error; err != nil {
 		tx.Rollback()
 		http.Error(w, "failed to create insurance claim", http.StatusInternalServerError)
@@ -621,8 +719,15 @@ func GetInsuranceClaim(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var item models.InsuranceClaim
-	if err := config.DB.Preload("Policy").Where("id = ? AND business_vertical_id = ?", id, businessID).First(&item).Error; err != nil {
+	if err := db.Preload("Policy").Where("id = ? AND business_vertical_id = ?", id, businessID).First(&item).Error; err != nil {
 		http.Error(w, "insurance claim not found", http.StatusNotFound)
 		return
 	}
@@ -644,8 +749,15 @@ func UpdateInsuranceClaim(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var item models.InsuranceClaim
-	if err := config.DB.Where("id = ? AND business_vertical_id = ?", id, businessID).First(&item).Error; err != nil {
+	if err := db.Where("id = ? AND business_vertical_id = ?", id, businessID).First(&item).Error; err != nil {
 		http.Error(w, "insurance claim not found", http.StatusNotFound)
 		return
 	}
@@ -662,7 +774,7 @@ func UpdateInsuranceClaim(w http.ResponseWriter, r *http.Request) {
 	req.CreatedBy = item.CreatedBy
 	req.UpdatedBy = middleware.GetClaims(r).UserID
 
-	if err := config.DB.Model(&item).Updates(req).Error; err != nil {
+	if err := db.Model(&item).Updates(req).Error; err != nil {
 		http.Error(w, "failed to update insurance claim", http.StatusInternalServerError)
 		return
 	}
@@ -691,8 +803,15 @@ func transitionBankGuaranteeStatus(w http.ResponseWriter, r *http.Request, statu
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var item models.BankGuarantee
-	if err := config.DB.Where("id = ? AND business_vertical_id = ?", id, businessID).First(&item).Error; err != nil {
+	if err := db.Where("id = ? AND business_vertical_id = ?", id, businessID).First(&item).Error; err != nil {
 		http.Error(w, "bank guarantee not found", http.StatusNotFound)
 		return
 	}
@@ -715,7 +834,7 @@ func transitionBankGuaranteeStatus(w http.ResponseWriter, r *http.Request, statu
 		updates["claim_date"] = &now
 	}
 
-	tx := config.DB.Begin()
+	tx := db.Begin()
 	approvalID := item.ApprovalRequestID
 	if status == "approved" {
 		if approvalID == nil || *approvalID == uuid.Nil {
@@ -779,8 +898,15 @@ func transitionLetterOfCreditStatus(w http.ResponseWriter, r *http.Request, stat
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var item models.LetterOfCredit
-	if err := config.DB.Where("id = ? AND business_vertical_id = ?", id, businessID).First(&item).Error; err != nil {
+	if err := db.Where("id = ? AND business_vertical_id = ?", id, businessID).First(&item).Error; err != nil {
 		http.Error(w, "letter of credit not found", http.StatusNotFound)
 		return
 	}
@@ -796,7 +922,7 @@ func transitionLetterOfCreditStatus(w http.ResponseWriter, r *http.Request, stat
 		updates["remarks"] = req.Remarks
 	}
 
-	tx := config.DB.Begin()
+	tx := db.Begin()
 	approvalID := item.ApprovalRequestID
 	if status == "issued" {
 		if approvalID == nil || *approvalID == uuid.Nil {
@@ -860,8 +986,15 @@ func RenewInsurancePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var item models.InsurancePolicy
-	if err := config.DB.Where("id = ? AND business_vertical_id = ?", id, businessID).First(&item).Error; err != nil {
+	if err := db.Where("id = ? AND business_vertical_id = ?", id, businessID).First(&item).Error; err != nil {
 		http.Error(w, "insurance policy not found", http.StatusNotFound)
 		return
 	}
@@ -880,7 +1013,7 @@ func RenewInsurancePolicy(w http.ResponseWriter, r *http.Request) {
 		updates["renewal_date"] = req.RenewalDate
 	}
 
-	tx := config.DB.Begin()
+	tx := db.Begin()
 	approvalID := item.ApprovalRequestID
 	if approvalID == nil || *approvalID == uuid.Nil {
 		newID, err := createFinanceApprovalRequest(tx, businessID, "insurance_policy", item.ID, "insurance:renew", middleware.GetClaims(r).UserID, "Insurance policy renewal action")
@@ -926,8 +1059,15 @@ func transitionInsuranceClaimStatus(w http.ResponseWriter, r *http.Request, stat
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var item models.InsuranceClaim
-	if err := config.DB.Where("id = ? AND business_vertical_id = ?", id, businessID).First(&item).Error; err != nil {
+	if err := db.Where("id = ? AND business_vertical_id = ?", id, businessID).First(&item).Error; err != nil {
 		http.Error(w, "insurance claim not found", http.StatusNotFound)
 		return
 	}
@@ -950,7 +1090,7 @@ func transitionInsuranceClaimStatus(w http.ResponseWriter, r *http.Request, stat
 		updates["settled_date"] = &now
 	}
 
-	tx := config.DB.Begin()
+	tx := db.Begin()
 	approvalID := item.ApprovalRequestID
 	if status == "approved" || status == "settled" {
 		if approvalID == nil || *approvalID == uuid.Nil {

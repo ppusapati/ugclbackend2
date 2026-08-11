@@ -48,9 +48,9 @@ type DocumentContextBackfillResult struct {
 	SkippedInvalid      int  `json:"skipped_invalid"`
 }
 
-func hasDocumentContextColumns() (bool, bool) {
-	projectColumnExists := config.DB.Migrator().HasColumn(&models.Document{}, "project_id")
-	taskColumnExists := config.DB.Migrator().HasColumn(&models.Document{}, "task_id")
+func hasDocumentContextColumns(db *gorm.DB) (bool, bool) {
+	projectColumnExists := db.Migrator().HasColumn(&models.Document{}, "project_id")
+	taskColumnExists := db.Migrator().HasColumn(&models.Document{}, "task_id")
 	return projectColumnExists, taskColumnExists
 }
 
@@ -85,6 +85,13 @@ func BackfillDocumentContextLinksHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var req DocumentContextBackfillRequest
 	if r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&req)
@@ -94,7 +101,7 @@ func BackfillDocumentContextLinksHandler(w http.ResponseWriter, r *http.Request)
 		req.Limit = 0
 	}
 
-	query := config.DB.Model(&models.Document{}).
+	query := db.Model(&models.Document{}).
 		Where("deleted_at IS NULL").
 		Where("(project_id IS NULL AND metadata ? 'project_id') OR (task_id IS NULL AND metadata ? 'task_id')")
 
@@ -144,7 +151,7 @@ func BackfillDocumentContextLinksHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	tx := config.DB.Begin()
+	tx := db.Begin()
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			tx.Rollback()
@@ -214,6 +221,13 @@ func UploadDocumentHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	// Parse multipart form (max 100MB)
 	if err := r.ParseMultipartForm(100 << 20); err != nil {
 		http.Error(w, "failed to parse form: "+err.Error(), http.StatusBadRequest)
@@ -271,7 +285,7 @@ func UploadDocumentHandler(w http.ResponseWriter, r *http.Request) {
 	hasScopedContext := strings.TrimSpace(req.ProjectID) != "" || strings.TrimSpace(req.TaskID) != ""
 	if !hasScopedContext {
 		var existingDoc models.Document
-		if err := config.DB.Where("file_hash = ? AND deleted_at IS NULL", fileHash).First(&existingDoc).Error; err == nil {
+		if err := db.Where("file_hash = ? AND deleted_at IS NULL", fileHash).First(&existingDoc).Error; err == nil {
 			// File already exists, return existing document
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]interface{}{
@@ -341,7 +355,7 @@ func UploadDocumentHandler(w http.ResponseWriter, r *http.Request) {
 	var workflowDef *models.WorkflowDefinition
 	if workflowID != nil {
 		var selectedWorkflow models.WorkflowDefinition
-		if err := config.DB.Where("id = ? AND is_active = ?", *workflowID, true).First(&selectedWorkflow).Error; err != nil {
+		if err := db.Where("id = ? AND is_active = ?", *workflowID, true).First(&selectedWorkflow).Error; err != nil {
 			if err == gorm.ErrRecordNotFound {
 				http.Error(w, "invalid or inactive workflow selected", http.StatusBadRequest)
 			} else {
@@ -382,7 +396,7 @@ func UploadDocumentHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Start transaction
-	tx := config.DB.Begin()
+	tx := db.Begin()
 	defer func() {
 		if r := recover(); r != nil {
 			tx.Rollback()
@@ -421,7 +435,7 @@ func UploadDocumentHandler(w http.ResponseWriter, r *http.Request) {
 		var tags []models.DocumentTag
 		for _, tagName := range req.Tags {
 			var tag models.DocumentTag
-			if err := config.DB.Where("name = ?", tagName).First(&tag).Error; err == gorm.ErrRecordNotFound {
+			if err := db.Where("name = ?", tagName).First(&tag).Error; err == gorm.ErrRecordNotFound {
 				// Create new tag
 				tag = models.DocumentTag{
 					Name:               tagName,
@@ -458,7 +472,7 @@ func UploadDocumentHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Load relationships
-	config.DB.Preload("Category").Preload("Tags").Preload("UploadedBy").First(&document, document.ID)
+	db.Preload("Category").Preload("Tags").Preload("UploadedBy").First(&document, document.ID)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -505,10 +519,17 @@ func GetDocumentsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	// Build query
 	// Preload Category and Tags (small); UploadedBy is restricted to list-safe columns
 	// to avoid transferring full User rows on every page request.
-	query := config.DB.Model(&models.Document{}).
+	query := db.Model(&models.Document{}).
 		Preload("Category").
 		Preload("Tags").
 		Preload("UploadedBy", func(db *gorm.DB) *gorm.DB {
@@ -527,7 +548,7 @@ func GetDocumentsHandler(w http.ResponseWriter, r *http.Request) {
 		query = query.Where("business_vertical_id = ?", businessVerticalID)
 	}
 
-	projectColumnExists, taskColumnExists := hasDocumentContextColumns()
+	projectColumnExists, taskColumnExists := hasDocumentContextColumns(db)
 
 	if projectID != "" {
 		if projectColumnExists {
@@ -593,6 +614,13 @@ func GetDocumentHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	documentID := vars["id"]
 
@@ -603,7 +631,7 @@ func GetDocumentHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var document models.Document
-	if err := config.DB.Preload("Category").Preload("Tags").Preload("UploadedBy").
+	if err := db.Preload("Category").Preload("Tags").Preload("UploadedBy").
 		Preload("Versions").Preload("Permissions").
 		First(&document, "id = ?", documentID).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
@@ -615,7 +643,7 @@ func GetDocumentHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Increment view count
-	config.DB.Model(&document).Update("view_count", gorm.Expr("view_count + 1"))
+	db.Model(&document).Update("view_count", gorm.Expr("view_count + 1"))
 
 	// Log audit with user ID
 	userID := user.ID
@@ -626,7 +654,7 @@ func GetDocumentHandler(w http.ResponseWriter, r *http.Request) {
 		IPAddress:  r.RemoteAddr,
 		UserAgent:  r.UserAgent(),
 	}
-	config.DB.Create(&auditLog)
+	db.Create(&auditLog)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(document)
@@ -648,12 +676,19 @@ func UpdateDocumentHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	documentID := vars["id"]
 	userID := user.ID
 
 	var document models.Document
-	if err := config.DB.First(&document, "id = ?", documentID).Error; err != nil {
+	if err := db.First(&document, "id = ?", documentID).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			http.Error(w, "document not found", http.StatusNotFound)
 		} else {
@@ -702,7 +737,7 @@ func UpdateDocumentHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Save changes
-	if err := config.DB.Save(&document).Error; err != nil {
+	if err := db.Save(&document).Error; err != nil {
 		http.Error(w, "failed to update document: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -712,13 +747,13 @@ func UpdateDocumentHandler(w http.ResponseWriter, r *http.Request) {
 		var tags []models.DocumentTag
 		for _, tagName := range req.Tags {
 			var tag models.DocumentTag
-			if err := config.DB.Where("name = ?", tagName).First(&tag).Error; err == gorm.ErrRecordNotFound {
+			if err := db.Where("name = ?", tagName).First(&tag).Error; err == gorm.ErrRecordNotFound {
 				tag = models.DocumentTag{Name: tagName}
-				config.DB.Create(&tag)
+				db.Create(&tag)
 			}
 			tags = append(tags, tag)
 		}
-		config.DB.Model(&document).Association("Tags").Replace(tags)
+		db.Model(&document).Association("Tags").Replace(tags)
 	}
 
 	// Log audit
@@ -730,10 +765,10 @@ func UpdateDocumentHandler(w http.ResponseWriter, r *http.Request) {
 		IPAddress:  r.RemoteAddr,
 		UserAgent:  r.UserAgent(),
 	}
-	config.DB.Create(&auditLog)
+	db.Create(&auditLog)
 
 	// Reload with relationships
-	config.DB.Preload("Category").Preload("Tags").Preload("UploadedBy").First(&document, document.ID)
+	db.Preload("Category").Preload("Tags").Preload("UploadedBy").First(&document, document.ID)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -758,12 +793,19 @@ func DeleteDocumentHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	documentID := vars["id"]
 	userID := user.ID
 
 	var document models.Document
-	if err := config.DB.First(&document, "id = ?", documentID).Error; err != nil {
+	if err := db.First(&document, "id = ?", documentID).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			http.Error(w, "document not found", http.StatusNotFound)
 		} else {
@@ -773,7 +815,7 @@ func DeleteDocumentHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Soft delete
-	if err := config.DB.Delete(&document).Error; err != nil {
+	if err := db.Delete(&document).Error; err != nil {
 		http.Error(w, "failed to delete document: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -786,7 +828,7 @@ func DeleteDocumentHandler(w http.ResponseWriter, r *http.Request) {
 		IPAddress:  r.RemoteAddr,
 		UserAgent:  r.UserAgent(),
 	}
-	config.DB.Create(&auditLog)
+	db.Create(&auditLog)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
@@ -810,12 +852,19 @@ func DownloadDocumentHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	documentID := vars["id"]
 	userID := user.ID
 
 	var document models.Document
-	if err := config.DB.First(&document, "id = ?", documentID).Error; err != nil {
+	if err := db.First(&document, "id = ?", documentID).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			http.Error(w, "document not found", http.StatusNotFound)
 		} else {
@@ -825,7 +874,7 @@ func DownloadDocumentHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Increment download count
-	config.DB.Model(&document).Update("download_count", gorm.Expr("download_count + 1"))
+	db.Model(&document).Update("download_count", gorm.Expr("download_count + 1"))
 
 	// Log audit
 	auditLog := models.DocumentAuditLog{
@@ -835,7 +884,7 @@ func DownloadDocumentHandler(w http.ResponseWriter, r *http.Request) {
 		IPAddress:  r.RemoteAddr,
 		UserAgent:  r.UserAgent(),
 	}
-	config.DB.Create(&auditLog)
+	db.Create(&auditLog)
 
 	if err := serveStoredFile(w, r, document.FilePath, document.FileName, document.FileType, document.FileSize); err != nil {
 		if errors.Is(err, errStoredFileNotFound) {
@@ -848,11 +897,18 @@ func DownloadDocumentHandler(w http.ResponseWriter, r *http.Request) {
 
 // GetDocumentAuditLogsHandler returns audit logs for a document
 func GetDocumentAuditLogsHandler(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	documentID := vars["id"]
 
 	var logs []models.DocumentAuditLog
-	if err := config.DB.Preload("User").Where("document_id = ?", documentID).
+	if err := db.Preload("User").Where("document_id = ?", documentID).
 		Order("created_at DESC").Find(&logs).Error; err != nil {
 		http.Error(w, "failed to fetch audit logs: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -870,11 +926,18 @@ func SearchDocumentsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	// Perform search
 	var documents []models.Document
 	searchPattern := "%" + strings.ToLower(query) + "%"
 
-	if err := config.DB.Preload("Category").Preload("Tags").Preload("UploadedBy").
+	if err := db.Preload("Category").Preload("Tags").Preload("UploadedBy").
 		Where("LOWER(title) LIKE ? OR LOWER(description) LIKE ? OR LOWER(file_name) LIKE ? OR LOWER(metadata::text) LIKE ?",
 			searchPattern, searchPattern, searchPattern, searchPattern).
 		Order("created_at DESC").

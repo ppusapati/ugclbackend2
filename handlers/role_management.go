@@ -130,6 +130,13 @@ type PermissionResponse struct {
 
 // GetAllRoles returns all roles with their permissions
 func GetAllRoles(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	pageStr := r.URL.Query().Get("page")
 	limitStr := r.URL.Query().Get("limit")
 
@@ -145,7 +152,7 @@ func GetAllRoles(w http.ResponseWriter, r *http.Request) {
 	offset := (page - 1) * limit
 
 	var roles []models.Role
-	if err := config.DB.
+	if err := db.
 		Preload("Permissions").
 		Where("is_active = ?", true).
 		Limit(limit).
@@ -156,7 +163,7 @@ func GetAllRoles(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var total int64
-	if err := config.DB.
+	if err := db.
 		Model(&models.Role{}).
 		Where("is_active = ?", true).
 		Count(&total).Error; err != nil {
@@ -199,6 +206,13 @@ func GetAllRoles(w http.ResponseWriter, r *http.Request) {
 
 // GetAllPermissions returns all available permissions
 func GetAllPermissions(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	if payload, ok := getCachedPermissionsList(); ok {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(payload)
@@ -211,7 +225,7 @@ func GetAllPermissions(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var permissions []models.Permission
-		if err := config.DB.Find(&permissions).Error; err != nil {
+		if err := db.Find(&permissions).Error; err != nil {
 			return nil, err
 		}
 
@@ -244,12 +258,19 @@ func GetAllPermissions(w http.ResponseWriter, r *http.Request) {
 }
 
 func CreatePermission(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var perm models.Permission
 	if err := json.NewDecoder(r.Body).Decode(&perm); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
-	if err := config.DB.Create(&perm).Error; err != nil {
+	if err := db.Create(&perm).Error; err != nil {
 		http.Error(w, "failed to create permission: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -262,6 +283,13 @@ func CreatePermission(w http.ResponseWriter, r *http.Request) {
 
 // CreateRole creates a new role with specified permissions
 func CreateRole(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var req createRoleReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
@@ -275,7 +303,7 @@ func CreateRole(w http.ResponseWriter, r *http.Request) {
 		IsActive:    true,
 	}
 
-	if err := config.DB.Create(&role).Error; err != nil {
+	if err := db.Create(&role).Error; err != nil {
 		http.Error(w, "failed to create role: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -284,14 +312,14 @@ func CreateRole(w http.ResponseWriter, r *http.Request) {
 	// Assign permissions
 	for _, permName := range req.Permissions {
 		var permission models.Permission
-		if err := config.DB.Where("name = ?", permName).First(&permission).Error; err != nil {
+		if err := db.Where("name = ?", permName).First(&permission).Error; err != nil {
 			continue // Skip invalid permissions
 		}
-		config.DB.Model(&role).Association("Permissions").Append(&permission)
+		db.Model(&role).Association("Permissions").Append(&permission)
 	}
 
 	// Load permissions for response
-	config.DB.Preload("Permissions").First(&role, role.ID)
+	db.Preload("Permissions").First(&role, role.ID)
 
 	// Convert to response format
 	permissions := make([]PermissionResponse, len(role.Permissions))
@@ -322,6 +350,13 @@ func CreateRole(w http.ResponseWriter, r *http.Request) {
 
 // UpdateRole updates an existing role
 func UpdateRole(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	roleID := vars["id"]
 
@@ -339,7 +374,7 @@ func UpdateRole(w http.ResponseWriter, r *http.Request) {
 
 	// Get existing role
 	var role models.Role
-	if err := config.DB.Preload("Permissions").First(&role, "id = ?", id).Error; err != nil {
+	if err := db.Preload("Permissions").First(&role, "id = ?", id).Error; err != nil {
 		http.Error(w, "role not found", http.StatusNotFound)
 		return
 	}
@@ -348,25 +383,25 @@ func UpdateRole(w http.ResponseWriter, r *http.Request) {
 	role.Name = req.Name
 	role.Description = req.Description
 
-	if err := config.DB.Save(&role).Error; err != nil {
+	if err := db.Save(&role).Error; err != nil {
 		http.Error(w, "failed to update role: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	// Clear existing permissions
-	config.DB.Model(&role).Association("Permissions").Clear()
+	db.Model(&role).Association("Permissions").Clear()
 
 	// Assign new permissions
 	for _, permName := range req.Permissions {
 		var permission models.Permission
-		if err := config.DB.Where("name = ?", permName).First(&permission).Error; err != nil {
+		if err := db.Where("name = ?", permName).First(&permission).Error; err != nil {
 			continue // Skip invalid permissions
 		}
-		config.DB.Model(&role).Association("Permissions").Append(&permission)
+		db.Model(&role).Association("Permissions").Append(&permission)
 	}
 
 	// Reload with permissions
-	config.DB.Preload("Permissions").First(&role, role.ID)
+	db.Preload("Permissions").First(&role, role.ID)
 
 	// Convert to response format
 	permissions := make([]PermissionResponse, len(role.Permissions))
@@ -391,7 +426,7 @@ func UpdateRole(w http.ResponseWriter, r *http.Request) {
 	// Invalidate cache for every user assigned this global role so updated permissions
 	// apply immediately rather than after the 30s TTL expires.
 	var affectedUserIDs []uuid.UUID
-	config.DB.Model(&models.User{}).Where("role_id = ?", id).Pluck("id", &affectedUserIDs)
+	db.Model(&models.User{}).Where("role_id = ?", id).Pluck("id", &affectedUserIDs)
 	for _, uid := range affectedUserIDs {
 		middleware.InvalidateUserCache(uid.String())
 	}
@@ -406,6 +441,13 @@ func UpdateRole(w http.ResponseWriter, r *http.Request) {
 
 // DeleteRole soft deletes a role
 func DeleteRole(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	roleID := vars["id"]
 
@@ -416,14 +458,14 @@ func DeleteRole(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var role models.Role
-	if err := config.DB.First(&role, "id = ?", id).Error; err != nil {
+	if err := db.First(&role, "id = ?", id).Error; err != nil {
 		http.Error(w, "role not found", http.StatusNotFound)
 		return
 	}
 
 	// Check if any users are using this role
 	var userCount int64
-	config.DB.Model(&models.User{}).Where("role_id = ?", id).Count(&userCount)
+	db.Model(&models.User{}).Where("role_id = ?", id).Count(&userCount)
 	if userCount > 0 {
 		http.Error(w, "cannot delete role: users are assigned to this role", http.StatusBadRequest)
 		return
@@ -431,7 +473,7 @@ func DeleteRole(w http.ResponseWriter, r *http.Request) {
 
 	// Soft delete
 	role.IsActive = false
-	if err := config.DB.Save(&role).Error; err != nil {
+	if err := db.Save(&role).Error; err != nil {
 		http.Error(w, "failed to delete role: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -473,6 +515,13 @@ type BusinessVerticalInfo struct {
 //   - include_business=true|false (default: true) - Include business roles
 //   - business_vertical_id=uuid - Filter by specific vertical (optional)
 func GetAllRolesUnified(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	includeBusiness := r.URL.Query().Get("include_business") != "false" // Default true
 	businessVerticalID := r.URL.Query().Get("business_vertical_id")
 	cacheKey := unifiedRolesCacheKey(includeBusiness, businessVerticalID)
@@ -492,7 +541,7 @@ func GetAllRolesUnified(w http.ResponseWriter, r *http.Request) {
 
 		// 1. Fetch Global Roles
 		var globalRoles []models.Role
-		if err := config.DB.Preload("Permissions").
+		if err := db.Preload("Permissions").
 			Where("is_active = ?", true).
 			Order("level ASC").
 			Find(&globalRoles).Error; err != nil {
@@ -511,7 +560,7 @@ func GetAllRolesUnified(w http.ResponseWriter, r *http.Request) {
 				RoleID uuid.UUID
 				Count  int64
 			}
-			config.DB.Model(&models.User{}).
+			db.Model(&models.User{}).
 				Select("role_id, COUNT(*) as count").
 				Where("role_id IN ?", globalRoleIDs).
 				Group("role_id").
@@ -552,7 +601,7 @@ func GetAllRolesUnified(w http.ResponseWriter, r *http.Request) {
 
 		// 2. Fetch Business Roles (if requested)
 		if includeBusiness {
-			query := config.DB.Preload("Permissions").
+			query := db.Preload("Permissions").
 				Preload("BusinessVertical").
 				Where("is_active = ?", true)
 
@@ -580,7 +629,7 @@ func GetAllRolesUnified(w http.ResponseWriter, r *http.Request) {
 					BusinessRoleID uuid.UUID
 					Count          int64
 				}
-				config.DB.Model(&models.UserBusinessRole{}).
+				db.Model(&models.UserBusinessRole{}).
 					Select("business_role_id, COUNT(*) as count").
 					Where("business_role_id IN ? AND is_active = ?", roleIDs, true).
 					Group("business_role_id").

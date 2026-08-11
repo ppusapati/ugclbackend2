@@ -14,6 +14,13 @@ import (
 )
 
 func GetAllEways(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	params, err := models.ParseReportParams(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -25,7 +32,7 @@ func GetAllEways(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	service := models.NewReportService(config.DB, models.Eway{})
+	service := models.NewReportService(db, models.Eway{})
 	response, err := service.GetReport(params)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -37,41 +44,76 @@ func GetAllEways(w http.ResponseWriter, r *http.Request) {
 }
 
 func CreateEway(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var item models.Eway
 	json.NewDecoder(r.Body).Decode(&item)
 	user := middleware.GetUser(r)
 	item.EnteredBy = user.Name
-	config.DB.Create(&item)
+	db.Create(&item)
 	json.NewEncoder(w).Encode(item)
 }
 
 func GetEway(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	params := mux.Vars(r)
 	id, _ := strconv.Atoi(params["id"])
 	var item models.Eway
-	config.DB.First(&item, id)
+	db.First(&item, id)
 	json.NewEncoder(w).Encode(item)
 }
 
 func UpdateEway(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	params := mux.Vars(r)
 	id, _ := strconv.Atoi(params["id"])
 	var item models.Eway
-	config.DB.First(&item, id)
+	db.First(&item, id)
 	json.NewDecoder(r.Body).Decode(&item)
-	config.DB.Save(&item)
+	db.Save(&item)
 	json.NewEncoder(w).Encode(item)
 }
 
 func DeleteEway(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	params := mux.Vars(r)
 	id, _ := strconv.Atoi(params["id"])
-	config.DB.Delete(&models.Eway{}, id)
+	db.Delete(&models.Eway{}, id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // BatchContractorReports handles POST /api/v1/contractor/batch
 func BatchEwayss(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var batch []models.Eway
 	if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -83,7 +125,7 @@ func BatchEwayss(w http.ResponseWriter, r *http.Request) {
 
 	}
 
-	if err := config.DB.
+	if err := db.
 		Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "id"}},
 			DoNothing: true,

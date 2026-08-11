@@ -600,7 +600,7 @@ func GetSiteUsers(w http.ResponseWriter, r *http.Request) {
 
 	// Get total count
 	var total int64
-	config.DB.Table("user_site_accesses").
+	db.Table("user_site_accesses").
 		Where("user_site_accesses.site_id = ?", siteID).
 		Count(&total)
 

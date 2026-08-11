@@ -13,6 +13,13 @@ import (
 )
 
 func GetAllDieselReports(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	params, err := models.ParseReportParams(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -24,7 +31,7 @@ func GetAllDieselReports(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	service := models.NewReportService(config.DB, models.Diesel{})
+	service := models.NewReportService(db, models.Diesel{})
 	response, err := service.GetReport(params)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -36,42 +43,77 @@ func GetAllDieselReports(w http.ResponseWriter, r *http.Request) {
 }
 
 func CreateDieselReport(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var item models.Diesel
 	json.NewDecoder(r.Body).Decode(&item)
 	user := middleware.GetUser(r)
 	item.PersonFilled = user.Name
 	item.PersonPhone = user.Phone
-	config.DB.Create(&item)
+	db.Create(&item)
 	json.NewEncoder(w).Encode(item)
 }
 
 func GetDieselReport(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	params := mux.Vars(r)
 	id, _ := strconv.Atoi(params["id"])
 	var item models.Diesel
-	config.DB.First(&item, id)
+	db.First(&item, id)
 	json.NewEncoder(w).Encode(item)
 }
 
 func UpdateDieselReport(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	params := mux.Vars(r)
 	id, _ := strconv.Atoi(params["id"])
 	var item models.Diesel
-	config.DB.First(&item, id)
+	db.First(&item, id)
 	json.NewDecoder(r.Body).Decode(&item)
-	config.DB.Save(&item)
+	db.Save(&item)
 	json.NewEncoder(w).Encode(item)
 }
 
 func DeleteDieselReport(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	params := mux.Vars(r)
 	id, _ := strconv.Atoi(params["id"])
-	config.DB.Delete(&models.Diesel{}, id)
+	db.Delete(&models.Diesel{}, id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // BatchDieselReports handles POST /api/v1/diesel/batch
 func BatchDiesels(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var batch []models.Diesel
 	if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -82,7 +124,7 @@ func BatchDiesels(w http.ResponseWriter, r *http.Request) {
 		batch[i].PersonFilled = user.Name
 		batch[i].PersonPhone = user.Phone
 	}
-	if err := config.DB.
+	if err := db.
 		Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "id"}},
 			DoNothing: true,

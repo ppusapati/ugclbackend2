@@ -13,6 +13,13 @@ import (
 )
 
 func GetAllWaterTankerReports(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	// Get business context (contains permissions, roles, business ID)
 	businessContext := middleware.GetUserBusinessContext(r)
 	if businessContext == nil {
@@ -33,7 +40,7 @@ func GetAllWaterTankerReports(w http.ResponseWriter, r *http.Request) {
 	// If site context exists, filter by accessible sites
 	if siteContext != nil && len(siteContext.AccessibleSiteIDs) > 0 {
 		// Optimized: Select only names instead of loading full site objects
-		config.DB.Model(&models.Site{}).
+		db.Model(&models.Site{}).
 			Select("name").
 			Where("id IN ?", siteContext.AccessibleSiteIDs).
 			Pluck("name", &accessibleSiteNames)
@@ -60,13 +67,13 @@ func GetAllWaterTankerReports(w http.ResponseWriter, r *http.Request) {
 		// For IN queries, we'll need to handle this differently
 
 		// Build custom query with site filtering
-		jsonToDB, err := models.BuildJSONtoDBColumnMap(config.DB, models.Water{})
+		jsonToDB, err := models.BuildJSONtoDBColumnMap(db, models.Water{})
 		if err != nil {
 			http.Error(w, "failed to build column mapping", http.StatusInternalServerError)
 			return
 		}
 
-		query := config.DB.Model(&models.Water{}).
+		query := db.Model(&models.Water{}).
 			Where("business_vertical_id = ?", businessID).
 			Where("site_name IN ?", accessibleSiteNames)
 
@@ -120,7 +127,7 @@ func GetAllWaterTankerReports(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// No site filtering - use original service method
-	service := models.NewReportService(config.DB, models.Water{})
+	service := models.NewReportService(db, models.Water{})
 	response, err := service.GetReport(params)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -132,6 +139,13 @@ func GetAllWaterTankerReports(w http.ResponseWriter, r *http.Request) {
 }
 
 func CreateWaterTankerReport(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var item models.Water
 	if err := json.NewDecoder(r.Body).Decode(&item); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -155,7 +169,7 @@ func CreateWaterTankerReport(w http.ResponseWriter, r *http.Request) {
 	if siteContext != nil {
 		// Find the site by name
 		var site models.Site
-		if err := config.DB.Where("name = ? AND business_vertical_id = ?", item.SiteName, item.BusinessVerticalID).First(&site).Error; err != nil {
+		if err := db.Where("name = ? AND business_vertical_id = ?", item.SiteName, item.BusinessVerticalID).First(&site).Error; err != nil {
 			http.Error(w, "site not found", http.StatusNotFound)
 			return
 		}
@@ -184,7 +198,7 @@ func CreateWaterTankerReport(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := config.DB.Create(&item).Error; err != nil {
+	if err := db.Create(&item).Error; err != nil {
 		http.Error(w, "failed to create record", http.StatusInternalServerError)
 		return
 	}
@@ -194,6 +208,13 @@ func CreateWaterTankerReport(w http.ResponseWriter, r *http.Request) {
 }
 
 func GetWaterTankerReport(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	params := mux.Vars(r)
 	id := params["id"]
 
@@ -211,7 +232,7 @@ func GetWaterTankerReport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var item models.Water
-	result := config.DB.Where("id = ? AND business_vertical_id = ?", id, businessID).First(&item)
+	result := db.Where("id = ? AND business_vertical_id = ?", id, businessID).First(&item)
 	if result.Error != nil {
 		http.Error(w, "record not found", http.StatusNotFound)
 		return
@@ -222,7 +243,7 @@ func GetWaterTankerReport(w http.ResponseWriter, r *http.Request) {
 	if siteContext != nil {
 		// Find the site
 		var site models.Site
-		if err := config.DB.Where("name = ? AND business_vertical_id = ?", item.SiteName, businessID).First(&site).Error; err != nil {
+		if err := db.Where("name = ? AND business_vertical_id = ?", item.SiteName, businessID).First(&site).Error; err != nil {
 			http.Error(w, "site not found", http.StatusNotFound)
 			return
 		}
@@ -247,6 +268,13 @@ func GetWaterTankerReport(w http.ResponseWriter, r *http.Request) {
 }
 
 func UpdateWaterTankerReport(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	params := mux.Vars(r)
 	id := params["id"]
 
@@ -264,7 +292,7 @@ func UpdateWaterTankerReport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var item models.Water
-	result := config.DB.Where("id = ? AND business_vertical_id = ?", id, businessID).First(&item)
+	result := db.Where("id = ? AND business_vertical_id = ?", id, businessID).First(&item)
 	if result.Error != nil {
 		http.Error(w, "record not found", http.StatusNotFound)
 		return
@@ -275,7 +303,7 @@ func UpdateWaterTankerReport(w http.ResponseWriter, r *http.Request) {
 	if siteContext != nil {
 		// Find the site
 		var site models.Site
-		if err := config.DB.Where("name = ? AND business_vertical_id = ?", item.SiteName, businessID).First(&site).Error; err != nil {
+		if err := db.Where("name = ? AND business_vertical_id = ?", item.SiteName, businessID).First(&site).Error; err != nil {
 			http.Error(w, "site not found", http.StatusNotFound)
 			return
 		}
@@ -305,7 +333,7 @@ func UpdateWaterTankerReport(w http.ResponseWriter, r *http.Request) {
 	// Ensure business_vertical_id cannot be changed
 	item.BusinessVerticalID = businessID
 
-	if err := config.DB.Save(&item).Error; err != nil {
+	if err := db.Save(&item).Error; err != nil {
 		http.Error(w, "failed to update record", http.StatusInternalServerError)
 		return
 	}
@@ -315,6 +343,13 @@ func UpdateWaterTankerReport(w http.ResponseWriter, r *http.Request) {
 }
 
 func DeleteWaterTankerReport(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	params := mux.Vars(r)
 	id := params["id"]
 
@@ -336,14 +371,14 @@ func DeleteWaterTankerReport(w http.ResponseWriter, r *http.Request) {
 	if siteContext != nil {
 		// Get existing record to check site
 		var item models.Water
-		if err := config.DB.Where("id = ? AND business_vertical_id = ?", id, businessID).First(&item).Error; err != nil {
+		if err := db.Where("id = ? AND business_vertical_id = ?", id, businessID).First(&item).Error; err != nil {
 			http.Error(w, "record not found", http.StatusNotFound)
 			return
 		}
 
 		// Find the site
 		var site models.Site
-		if err := config.DB.Where("name = ? AND business_vertical_id = ?", item.SiteName, businessID).First(&site).Error; err != nil {
+		if err := db.Where("name = ? AND business_vertical_id = ?", item.SiteName, businessID).First(&site).Error; err != nil {
 			http.Error(w, "site not found", http.StatusNotFound)
 			return
 		}
@@ -365,7 +400,7 @@ func DeleteWaterTankerReport(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	result := config.DB.Where("id = ? AND business_vertical_id = ?", id, businessID).Delete(&models.Water{})
+	result := db.Where("id = ? AND business_vertical_id = ?", id, businessID).Delete(&models.Water{})
 	if result.Error != nil {
 		http.Error(w, "failed to delete record", http.StatusInternalServerError)
 		return
@@ -379,6 +414,13 @@ func DeleteWaterTankerReport(w http.ResponseWriter, r *http.Request) {
 }
 
 func BatchWaterReports(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var batch []models.Water
 	if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -400,7 +442,7 @@ func BatchWaterReports(w http.ResponseWriter, r *http.Request) {
 	if siteContext != nil {
 		// Build map of accessible site names for quick lookup
 		var sites []models.Site
-		if err := config.DB.Where("id IN ?", siteContext.AccessibleSiteIDs).Find(&sites).Error; err != nil {
+		if err := db.Where("id IN ?", siteContext.AccessibleSiteIDs).Find(&sites).Error; err != nil {
 			http.Error(w, "failed to fetch accessible sites", http.StatusInternalServerError)
 			return
 		}
@@ -431,7 +473,7 @@ func BatchWaterReports(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := config.DB.
+	if err := db.
 		Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "id"}},
 			DoNothing: true,
