@@ -68,9 +68,9 @@ func CreateDocumentCategoryHandler(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			category.BusinessVerticalID = &bvID
 		}
-	} else if len(user.UserBusinessRoles) > 0 && user.UserBusinessRoles[0].BusinessRole.BusinessVerticalID != uuid.Nil {
+	} else if verticalIDs := user.AccessibleVerticalIDs(); len(verticalIDs) > 0 {
 		// Use user's primary business vertical
-		bvID := user.UserBusinessRoles[0].BusinessRole.BusinessVerticalID
+		bvID := verticalIDs[0]
 		category.BusinessVerticalID = &bvID
 	}
 
@@ -365,9 +365,9 @@ func CreateDocumentTagHandler(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			tag.BusinessVerticalID = &bvID
 		}
-	} else if len(user.UserBusinessRoles) > 0 && user.UserBusinessRoles[0].BusinessRole.BusinessVerticalID != uuid.Nil {
+	} else if verticalIDs := user.AccessibleVerticalIDs(); len(verticalIDs) > 0 {
 		// Use user's primary business vertical
-		bvID := user.UserBusinessRoles[0].BusinessRole.BusinessVerticalID
+		bvID := verticalIDs[0]
 		tag.BusinessVerticalID = &bvID
 	}
 

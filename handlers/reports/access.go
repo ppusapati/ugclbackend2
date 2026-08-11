@@ -3,6 +3,7 @@ package reports
 import (
 	"net/http"
 
+	"github.com/google/uuid"
 	"p9e.in/ugcl/middleware"
 	"p9e.in/ugcl/models"
 )
@@ -42,12 +43,22 @@ func canViewReport(r *http.Request, report *models.ReportDefinition) bool {
 
 	// Rule 4: role-based access
 	if len(report.AllowedRoles) > 0 {
-		userRole := ""
+		userRoles := make(map[string]struct{})
 		if userCtx.User.RoleModel != nil {
-			userRole = userCtx.User.RoleModel.Name
+			userRoles[userCtx.User.RoleModel.Name] = struct{}{}
+		}
+		for _, a := range userCtx.User.RoleAssignments {
+			if a.IsActive && a.Role.IsActive {
+				userRoles[a.Role.Name] = struct{}{}
+			}
+		}
+		for _, ubr := range userCtx.User.UserBusinessRoles {
+			if ubr.IsActive && ubr.BusinessRole.ID != uuid.Nil {
+				userRoles[ubr.BusinessRole.Name] = struct{}{}
+			}
 		}
 		for _, r := range report.AllowedRoles {
-			if r == userRole {
+			if _, ok := userRoles[r]; ok {
 				return true
 			}
 		}

@@ -308,9 +308,9 @@ func UploadDocumentHandler(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			businessVerticalID = &bvid
 		}
-	} else if len(user.UserBusinessRoles) > 0 && user.UserBusinessRoles[0].BusinessRole.BusinessVerticalID != uuid.Nil {
-		// Use user's primary business vertical from their business role
-		bvID := user.UserBusinessRoles[0].BusinessRole.BusinessVerticalID
+	} else if verticalIDs := user.AccessibleVerticalIDs(); len(verticalIDs) > 0 {
+		// Use user's primary business vertical from their role assignments
+		bvID := verticalIDs[0]
 		businessVerticalID = &bvID
 	}
 

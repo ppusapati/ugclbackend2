@@ -676,6 +676,13 @@ func TransitionFormSubmission(w http.ResponseWriter, r *http.Request) {
 	userRole := ""
 	if user.RoleModel != nil {
 		userRole = user.RoleModel.Name
+	} else {
+		for _, a := range user.RoleAssignments {
+			if a.IsActive && a.Role.IsActive && a.Role.ScopeType == models.RoleScopeGlobal {
+				userRole = a.Role.Name
+				break
+			}
+		}
 	}
 
 	// Perform transition

@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"p9e.in/ugcl/middleware"
+	"p9e.in/ugcl/models"
 )
 
 var workflowEngineDedicated *WorkflowEngineDedicated
@@ -327,6 +328,13 @@ func TransitionFormSubmissionDedicated(w http.ResponseWriter, r *http.Request) {
 	userRole := ""
 	if user.RoleModel != nil {
 		userRole = user.RoleModel.Name
+	} else {
+		for _, a := range user.RoleAssignments {
+			if a.IsActive && a.Role.IsActive && a.Role.ScopeType == models.RoleScopeGlobal {
+				userRole = a.Role.Name
+				break
+			}
+		}
 	}
 
 	// Perform transition

@@ -550,11 +550,38 @@ func GetCurrentUser(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
+	// Unified RBAC: derive the legacy business_roles shape from RoleAssignments
+	// when there are no legacy UserBusinessRoles rows (post-cutover).
+	if len(businessRoles) == 0 {
+		for _, a := range user.RoleAssignments {
+			if !a.IsActive || !a.Role.IsActive || a.Role.ScopeType != models.RoleScopeBusinessVertical {
+				continue
+			}
+			entry := map[string]interface{}{
+				"role_id": a.Role.ID,
+				"role_name": a.Role.DisplayName,
+				"vertical_id": a.Role.BusinessVerticalID,
+				"level": a.Role.Level,
+			}
+			if a.Role.BusinessVertical != nil {
+				entry["vertical_name"] = a.Role.BusinessVertical.Name
+				entry["vertical_code"] = a.Role.BusinessVertical.Code
+			}
+			businessRoles = append(businessRoles, entry)
+		}
+	}
 
 	// 5) Return enhanced user info
 	var globalRoleName string
 	if user.RoleModel != nil {
 		globalRoleName = user.RoleModel.Name
+	} else {
+		for _, a := range user.RoleAssignments {
+			if a.IsActive && a.Role.IsActive && a.Role.ScopeType == models.RoleScopeGlobal {
+				globalRoleName = a.Role.Name
+				break
+			}
+		}
 	}
 
 	resp := map[string]interface{}{

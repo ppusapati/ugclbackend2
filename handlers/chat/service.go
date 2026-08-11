@@ -1359,6 +1359,13 @@ func (s *ChatService) ListUsersForChat(currentUserID string, search string, page
 
 		if u.RoleModel != nil {
 			dto.Role = u.RoleModel.Name
+		} else {
+			for _, a := range u.RoleAssignments {
+				if a.IsActive && a.Role.IsActive && a.Role.ScopeType == models.RoleScopeGlobal {
+					dto.Role = a.Role.Name
+					break
+				}
+			}
 		}
 
 		if u.BusinessVertical != nil {

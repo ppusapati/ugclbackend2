@@ -103,8 +103,10 @@ func unifiedAccessibleBusinessIDs(user models.User) []uuid.UUID {
 	return ids
 }
 
-// hasActiveGlobalRBACRole reports whether the user has any active global-scoped RBAC assignment.
-func hasActiveGlobalRBACRole(user models.User) bool {
+// HasActiveGlobalRBACRole reports whether the user has any active global-scoped RBAC assignment.
+func HasActiveGlobalRBACRole(user models.User) bool {
+	return hasActiveGlobalRBACRole(user)
+}
 	for _, a := range user.RoleAssignments {
 		if a.IsActive && a.Role.IsActive && a.Role.ScopeType == models.RoleScopeGlobal {
 			return true

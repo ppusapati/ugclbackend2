@@ -137,11 +137,24 @@ func GetModules(w http.ResponseWriter, r *http.Request) {
 // getUserVerticalCodes returns the list of vertical codes the user has access to
 func getUserVerticalCodes(user *models.User) []string {
 	verticalMap := make(map[string]bool)
+
+	// Unified RBAC: business-vertical-scoped role assignments.
+	for _, a := range user.RoleAssignments {
+		if !a.IsActive || !a.Role.IsActive || a.Role.ScopeType != models.RoleScopeBusinessVertical {
+			continue
+		}
+		if a.Role.BusinessVertical != nil && a.Role.BusinessVertical.IsActive {
+			verticalMap[a.Role.BusinessVertical.Code] = true
+		}
+	}
+
+	// Legacy: business role assignments.
 	for _, ubr := range user.UserBusinessRoles {
 		if ubr.IsActive && ubr.BusinessRole.BusinessVerticalID != uuid.Nil && ubr.BusinessRole.BusinessVertical.IsActive {
 			verticalMap[ubr.BusinessRole.BusinessVertical.Code] = true
 		}
 	}
+
 	var codes []string
 	for code := range verticalMap {
 		codes = append(codes, code)

@@ -329,12 +329,34 @@ func GetFormsForVertical(w http.ResponseWriter, r *http.Request) {
 	moduleMap := make(map[string][]models.AppFormDTO)
 
 	// Build a set of vertical UUIDs matched for this request (used for business-role permission check).
-	matchedVerticalIDSet := make(map[uuid.UUID]struct{}, len(matchedVerticals)+len(user.UserBusinessRoles))
+	matchedVerticalIDSet := make(map[uuid.UUID]struct{}, len(matchedVerticals)+len(user.UserBusinessRoles)+len(user.RoleAssignments))
 	for _, v := range matchedVerticals {
 		matchedVerticalIDSet[v.ID] = struct{}{}
 	}
 
-	// Fallback: derive vertical mapping from user's business roles when DB code lookup misses.
+	// Fallback: derive vertical mapping from unified RBAC role assignments when DB code lookup misses.
+	for _, a := range user.RoleAssignments {
+		if !a.IsActive || !a.Role.IsActive || a.Role.ScopeType != models.RoleScopeBusinessVertical || a.Role.BusinessVerticalID == nil {
+			continue
+		}
+
+		roleVerticalID := strings.ToLower(strings.TrimSpace(a.Role.BusinessVerticalID.String()))
+		roleVerticalCode := ""
+		if a.Role.BusinessVertical != nil {
+			roleVerticalCode = strings.ToLower(strings.TrimSpace(a.Role.BusinessVertical.Code))
+		}
+
+		if requestedVertical == roleVerticalID || requestedVertical == roleVerticalCode {
+			matchedVerticalIDSet[*a.Role.BusinessVerticalID] = struct{}{}
+			candidateTokens[a.Role.BusinessVerticalID.String()] = struct{}{}
+			if a.Role.BusinessVertical != nil && strings.TrimSpace(a.Role.BusinessVertical.Code) != "" {
+				candidateTokens[a.Role.BusinessVertical.Code] = struct{}{}
+				candidateTokens[strings.ToUpper(a.Role.BusinessVertical.Code)] = struct{}{}
+			}
+		}
+	}
+
+	// Fallback: derive vertical mapping from user's legacy business roles when DB code lookup misses.
 	for _, ubr := range user.UserBusinessRoles {
 		if !ubr.IsActive || ubr.BusinessRole.ID == uuid.Nil {
 			continue
@@ -475,9 +497,22 @@ func GetFormByCode(w http.ResponseWriter, r *http.Request) {
 		var verticalForForm []models.BusinessVertical
 		_ = config.DB.Where("LOWER(code) = LOWER(?)", verticalCode).Find(&verticalForForm)
 		requestedVertical := strings.ToLower(strings.TrimSpace(verticalCode))
-		verticalIDSet := make(map[uuid.UUID]struct{}, len(verticalForForm)+len(user.UserBusinessRoles))
+		verticalIDSet := make(map[uuid.UUID]struct{}, len(verticalForForm)+len(user.UserBusinessRoles)+len(user.RoleAssignments))
 		for _, v := range verticalForForm {
 			verticalIDSet[v.ID] = struct{}{}
+		}
+		for _, a := range user.RoleAssignments {
+			if !a.IsActive || !a.Role.IsActive || a.Role.ScopeType != models.RoleScopeBusinessVertical || a.Role.BusinessVerticalID == nil {
+				continue
+			}
+			roleVerticalID := strings.ToLower(strings.TrimSpace(a.Role.BusinessVerticalID.String()))
+			roleVerticalCode := ""
+			if a.Role.BusinessVertical != nil {
+				roleVerticalCode = strings.ToLower(strings.TrimSpace(a.Role.BusinessVertical.Code))
+			}
+			if requestedVertical == roleVerticalID || requestedVertical == roleVerticalCode {
+				verticalIDSet[*a.Role.BusinessVerticalID] = struct{}{}
+			}
 		}
 		for _, ubr := range user.UserBusinessRoles {
 			if !ubr.IsActive || ubr.BusinessRole.ID == uuid.Nil {
@@ -702,9 +737,22 @@ func GetFormLookupOptions(w http.ResponseWriter, r *http.Request) {
 		_ = config.DB.Where("LOWER(code) = LOWER(?)", verticalCode).Find(&verticals)
 
 		requestedVertical := strings.ToLower(strings.TrimSpace(verticalCode))
-		verticalIDSet := make(map[uuid.UUID]struct{}, len(verticals)+len(user.UserBusinessRoles))
+		verticalIDSet := make(map[uuid.UUID]struct{}, len(verticals)+len(user.UserBusinessRoles)+len(user.RoleAssignments))
 		for _, v := range verticals {
 			verticalIDSet[v.ID] = struct{}{}
+		}
+		for _, a := range user.RoleAssignments {
+			if !a.IsActive || !a.Role.IsActive || a.Role.ScopeType != models.RoleScopeBusinessVertical || a.Role.BusinessVerticalID == nil {
+				continue
+			}
+			roleVerticalID := strings.ToLower(strings.TrimSpace(a.Role.BusinessVerticalID.String()))
+			roleVerticalCode := ""
+			if a.Role.BusinessVertical != nil {
+				roleVerticalCode = strings.ToLower(strings.TrimSpace(a.Role.BusinessVertical.Code))
+			}
+			if requestedVertical == roleVerticalID || requestedVertical == roleVerticalCode {
+				verticalIDSet[*a.Role.BusinessVerticalID] = struct{}{}
+			}
 		}
 		for _, ubr := range user.UserBusinessRoles {
 			if !ubr.IsActive || ubr.BusinessRole.ID == uuid.Nil {

@@ -1138,6 +1138,35 @@ func GetUserBusinessAccess(w http.ResponseWriter, r *http.Request) {
 		for _, business := range businessMap {
 			accessibleBusinesses = append(accessibleBusinesses, business)
 		}
+
+		// Global-role users with no business-scoped assignment: add every vertical
+		// they have a site access entry in so the mobile can resolve a business context.
+		if len(accessibleBusinesses) == 0 && middleware.HasActiveGlobalRBACRole(*userCtx.User) {
+			var siteBVs []struct {
+				ID          uuid.UUID
+				Name        string
+				Code        string
+				Description string
+			}
+			config.DB.Raw(`
+				SELECT DISTINCT bv.id, bv.name, bv.code, bv.description
+				FROM user_site_accesses usa
+				JOIN sites s ON s.id = usa.site_id
+				JOIN business_verticals bv ON bv.id = s.business_vertical_id
+				WHERE usa.user_id = ? AND s.is_active = true AND bv.is_active = true
+			`, userCtx.User.ID).Scan(&siteBVs)
+			for _, bv := range siteBVs {
+				accessibleBusinesses = append(accessibleBusinesses, map[string]interface{}{
+					"id":          bv.ID,
+					"name":        bv.Name,
+					"code":        bv.Code,
+					"description": bv.Description,
+					"access_type": "business_role",
+					"roles":       []string{},
+					"permissions": []string{},
+				})
+			}
+		}
 	}
 
 	globalRoleName := ""

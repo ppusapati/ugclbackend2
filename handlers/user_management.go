@@ -41,6 +41,13 @@ func buildAdminUserResponse(user models.User) adminUserOut {
 	globalRoleName := ""
 	if user.RoleModel != nil {
 		globalRoleName = user.RoleModel.Name
+	} else {
+		for _, a := range user.RoleAssignments {
+			if a.IsActive && a.Role.IsActive && a.Role.ScopeType == models.RoleScopeGlobal {
+				globalRoleName = a.Role.Name
+				break
+			}
+		}
 	}
 
 	businessVerticalName := ""

@@ -45,6 +45,22 @@ func (u *User) HasPermission(permissionName string) bool {
 			}
 		}
 	}
+
+	// Unified RBAC: global-scoped role assignments.
+	for _, a := range u.RoleAssignments {
+		if !a.IsActive || !a.Role.IsActive || a.Role.ScopeType != RoleScopeGlobal {
+			continue
+		}
+		if a.Role.Name == "super_admin" {
+			return true
+		}
+		for _, perm := range a.Role.Permissions {
+			if matchesPermission(perm.Name, permissionName) {
+				return true
+			}
+		}
+	}
+
 	return false
 }
 
@@ -145,12 +161,27 @@ func (u *User) HasPermissionInVertical(permission string, verticalID uuid.UUID) 
 		return true
 	}
 	for _, a := range u.RoleAssignments {
-		if a.IsActive && a.Role.IsActive && a.Role.Name == "super_admin" {
+		if a.IsActive && a.Role.IsActive && a.Role.ScopeType == RoleScopeGlobal && a.Role.Name == "super_admin" {
 			return true
 		}
 	}
 
-	// Check if user has role in this vertical with the required permission
+	// Unified RBAC: business-vertical-scoped role assignments.
+	for _, a := range u.RoleAssignments {
+		if !a.IsActive || !a.Role.IsActive || a.Role.ScopeType != RoleScopeBusinessVertical {
+			continue
+		}
+		if a.Role.BusinessVerticalID == nil || *a.Role.BusinessVerticalID != verticalID {
+			continue
+		}
+		for _, perm := range a.Role.Permissions {
+			if matchesPermission(perm.Name, permission) {
+				return true
+			}
+		}
+	}
+
+	// Legacy: business role in this vertical with the required permission.
 	for _, ubr := range u.UserBusinessRoles {
 		if ubr.IsActive &&
 			ubr.BusinessRole.ID != uuid.Nil &&
@@ -165,4 +196,32 @@ func (u *User) HasPermissionInVertical(permission string, verticalID uuid.UUID) 
 	}
 
 	return false
+}
+
+// AccessibleVerticalIDs returns the distinct business vertical IDs the user has
+// an active role in, combining unified RBAC role assignments and legacy
+// business role assignments.
+func (u *User) AccessibleVerticalIDs() []uuid.UUID {
+	seen := make(map[uuid.UUID]struct{})
+
+	for _, a := range u.RoleAssignments {
+		if !a.IsActive || !a.Role.IsActive || a.Role.ScopeType != RoleScopeBusinessVertical {
+			continue
+		}
+		if a.Role.BusinessVerticalID != nil && *a.Role.BusinessVerticalID != uuid.Nil {
+			seen[*a.Role.BusinessVerticalID] = struct{}{}
+		}
+	}
+
+	for _, ubr := range u.UserBusinessRoles {
+		if ubr.IsActive && ubr.BusinessRole.BusinessVerticalID != uuid.Nil {
+			seen[ubr.BusinessRole.BusinessVerticalID] = struct{}{}
+		}
+	}
+
+	ids := make([]uuid.UUID, 0, len(seen))
+	for id := range seen {
+		ids = append(ids, id)
+	}
+	return ids
 }

@@ -110,6 +110,13 @@ func handleProfile(w http.ResponseWriter, r *http.Request) {
 	var globalRoleName string
 	if user.RoleModel != nil {
 		globalRoleName = user.RoleModel.Name
+	} else {
+		for _, a := range user.RoleAssignments {
+			if a.IsActive && a.Role.IsActive && a.Role.ScopeType == models.RoleScopeGlobal {
+				globalRoleName = a.Role.Name
+				break
+			}
+		}
 	}
 
 	businessRoles := make([]map[string]interface{}, 0)
@@ -137,6 +144,36 @@ func handleProfile(w http.ResponseWriter, r *http.Request) {
 			"is_admin":               isBusinessAdmin,
 			"permissions":            rolePermissions,
 		})
+	}
+	// Unified RBAC: derive the legacy business_roles shape from RoleAssignments
+	// when there are no legacy UserBusinessRoles rows (post-cutover).
+	if len(businessRoles) == 0 {
+		for _, a := range user.RoleAssignments {
+			if !a.IsActive || !a.Role.IsActive || a.Role.ScopeType != models.RoleScopeBusinessVertical {
+				continue
+			}
+			rolePermissions := make([]string, 0, len(a.Role.Permissions))
+			isBusinessAdmin := false
+			for _, perm := range a.Role.Permissions {
+				rolePermissions = append(rolePermissions, perm.Name)
+				if perm.Name == "business_admin" || perm.Name == "*:*:*" {
+					isBusinessAdmin = true
+				}
+			}
+			entry := map[string]interface{}{
+				"business_vertical_id": a.Role.BusinessVerticalID,
+				"business_role_id":     a.Role.ID,
+				"business_role_name":   a.Role.Name,
+				"display_name":         a.Role.DisplayName,
+				"is_admin":             isBusinessAdmin,
+				"permissions":          rolePermissions,
+			}
+			if a.Role.BusinessVertical != nil {
+				entry["business_vertical_name"] = a.Role.BusinessVertical.Name
+				entry["business_vertical_code"] = a.Role.BusinessVertical.Code
+			}
+			businessRoles = append(businessRoles, entry)
+		}
 	}
 
 	accessScope := "global/basic"

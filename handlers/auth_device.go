@@ -37,14 +37,16 @@ type trustedDeviceStatusResponse struct {
 }
 
 type offlineBootstrapSite struct {
-	SiteID             uuid.UUID `json:"siteId"`
-	BusinessVerticalID uuid.UUID `json:"businessVerticalId"`
-	Name               string    `json:"name"`
-	Code               string    `json:"code"`
-	CanRead            bool      `json:"canRead"`
-	CanCreate          bool      `json:"canCreate"`
-	CanUpdate          bool      `json:"canUpdate"`
-	CanDelete          bool      `json:"canDelete"`
+	SiteID               uuid.UUID `json:"siteId"`
+	BusinessVerticalID   uuid.UUID `json:"businessVerticalId"`
+	BusinessVerticalName string    `json:"businessVerticalName"`
+	BusinessVerticalCode string    `json:"businessVerticalCode"`
+	Name                 string    `json:"name"`
+	Code                 string    `json:"code"`
+	CanRead              bool      `json:"canRead"`
+	CanCreate            bool      `json:"canCreate"`
+	CanUpdate            bool      `json:"canUpdate"`
+	CanDelete            bool      `json:"canDelete"`
 }
 
 type revokeTrustedDeviceRequest struct {
@@ -639,19 +641,23 @@ func loadOfflineSites(userID uuid.UUID, isSuperAdmin bool) ([]offlineBootstrapSi
 	}
 
 	var rows []struct {
-		SiteID             uuid.UUID
-		BusinessVerticalID uuid.UUID
-		Name               string
-		Code               string
-		CanRead            bool
-		CanCreate          bool
-		CanUpdate          bool
-		CanDelete          bool
+		SiteID               uuid.UUID
+		BusinessVerticalID   uuid.UUID
+		BusinessVerticalName string
+		BusinessVerticalCode string
+		Name                 string
+		Code                 string
+		CanRead              bool
+		CanCreate            bool
+		CanUpdate            bool
+		CanDelete            bool
 	}
 
 	err := config.DB.Table("user_site_accesses").
 		Select(`user_site_accesses.site_id,
 			sites.business_vertical_id,
+			bv.name AS business_vertical_name,
+			bv.code AS business_vertical_code,
 			sites.name,
 			sites.code,
 			user_site_accesses.can_read,
@@ -659,6 +665,7 @@ func loadOfflineSites(userID uuid.UUID, isSuperAdmin bool) ([]offlineBootstrapSi
 			user_site_accesses.can_update,
 			user_site_accesses.can_delete`).
 		Joins("JOIN sites ON sites.id = user_site_accesses.site_id").
+		Joins("JOIN business_verticals bv ON bv.id = sites.business_vertical_id").
 		Where("user_site_accesses.user_id = ? AND sites.is_active = ?", userID, true).
 		Find(&rows).Error
 	if err != nil {
@@ -668,14 +675,16 @@ func loadOfflineSites(userID uuid.UUID, isSuperAdmin bool) ([]offlineBootstrapSi
 	result := make([]offlineBootstrapSite, 0, len(rows))
 	for _, row := range rows {
 		result = append(result, offlineBootstrapSite{
-			SiteID:             row.SiteID,
-			BusinessVerticalID: row.BusinessVerticalID,
-			Name:               row.Name,
-			Code:               row.Code,
-			CanRead:            row.CanRead,
-			CanCreate:          row.CanCreate,
-			CanUpdate:          row.CanUpdate,
-			CanDelete:          row.CanDelete,
+			SiteID:               row.SiteID,
+			BusinessVerticalID:   row.BusinessVerticalID,
+			BusinessVerticalName: row.BusinessVerticalName,
+			BusinessVerticalCode: row.BusinessVerticalCode,
+			Name:                 row.Name,
+			Code:                 row.Code,
+			CanRead:              row.CanRead,
+			CanCreate:            row.CanCreate,
+			CanUpdate:            row.CanUpdate,
+			CanDelete:            row.CanDelete,
 		})
 	}
 	return result, nil

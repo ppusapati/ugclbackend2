@@ -171,6 +171,11 @@ func GetMyPendingApprovals(w http.ResponseWriter, r *http.Request) {
 	if user.RoleModel != nil {
 		userRoles = append(userRoles, user.RoleModel.Name)
 	}
+	for _, a := range user.RoleAssignments {
+		if a.IsActive && a.Role.IsActive {
+			userRoles = append(userRoles, a.Role.Name)
+		}
+	}
 
 	limitStr := r.URL.Query().Get("limit")
 	offsetStr := r.URL.Query().Get("offset")
