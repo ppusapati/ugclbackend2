@@ -7,8 +7,8 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"strings"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -207,6 +207,13 @@ func invalidateFormsCache() {
 // GetFormsForVertical returns all forms accessible in a specific business vertical
 // GET /api/v1/business/{vertical}/forms
 func GetFormsForVertical(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	claims := middleware.GetClaims(r)
 	if claims == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -223,7 +230,8 @@ func GetFormsForVertical(w http.ResponseWriter, r *http.Request) {
 
 	isMobileClient := strings.Contains(r.Header.Get("User-Agent"), "Dart")
 	normalizedVertical := strings.ToUpper(strings.TrimSpace(verticalCode))
-	formsListCacheKey := versionedFormsListCacheKey(strings.Join([]string{claims.UserID, normalizedVertical, fmt.Sprintf("mobile:%t", isMobileClient)}, "|"))
+	tenantSchema := config.TenantSchemaFromContext(r.Context())
+	formsListCacheKey := versionedFormsListCacheKey(strings.Join([]string{tenantSchema, claims.UserID, normalizedVertical, fmt.Sprintf("mobile:%t", isMobileClient)}, "|"))
 	if payload, state := getCachedJSONState(formsListCache, &formsListCacheMu, formsListCacheKey); state == cacheLookupStateFresh {
 		w.Header().Set("X-App-Forms-Cache", cacheStateHit)
 		writeJSONBytesWithETag(w, r, payload)
@@ -254,7 +262,7 @@ func GetFormsForVertical(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var matchedVerticals []models.BusinessVertical
-	if err := config.DB.Where("LOWER(code) = LOWER(?)", verticalCode).Find(&matchedVerticals).Error; err != nil {
+	if err := db.Where("LOWER(code) = LOWER(?)", verticalCode).Find(&matchedVerticals).Error; err != nil {
 		log.Printf("⚠️ Failed to resolve business vertical %s: %v", verticalCode, err)
 	}
 
@@ -293,7 +301,7 @@ func GetFormsForVertical(w http.ResponseWriter, r *http.Request) {
 		filterCondition = filterCondition + " OR COALESCE(accessible_verticals::jsonb, '[]'::jsonb) ?| ARRAY[" + strings.Join(arrayPlaceholders, ",") + "]"
 	}
 
-	query := config.DB.
+	query := db.
 		Select("id, code, title, description, module_id, route, icon, display_order, required_permission, accessible_verticals, is_active").
 		Preload("Module").
 		Where(filterCondition, filterArgs...).
@@ -306,7 +314,7 @@ func GetFormsForVertical(w http.ResponseWriter, r *http.Request) {
 	if err := query.Find(&forms).Error; err != nil {
 		log.Printf("⚠️ Primary forms query failed, attempting fallback query: %v", err)
 
-		fallbackQuery := config.DB.
+		fallbackQuery := db.
 			Select("id, code, title, description, module_id, route, icon, display_order, required_permission, accessible_verticals, is_active").
 			Preload("Module").
 			Order("display_order ASC, title ASC")
@@ -442,6 +450,13 @@ func GetFormsForVertical(w http.ResponseWriter, r *http.Request) {
 // GetFormByCode returns a specific form by its code with full schema
 // GET /api/v1/business/{vertical}/forms/{code}
 func GetFormByCode(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	claims := middleware.GetClaims(r)
 	if claims == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -452,7 +467,8 @@ func GetFormByCode(w http.ResponseWriter, r *http.Request) {
 	verticalCode := vars["businessCode"]
 	formCode := vars["code"]
 
-	formByCodeCacheKey := versionedFormByCodeCacheKey(strings.Join([]string{claims.UserID, strings.ToUpper(strings.TrimSpace(verticalCode)), strings.TrimSpace(formCode)}, "|"))
+	tenantSchema := config.TenantSchemaFromContext(r.Context())
+	formByCodeCacheKey := versionedFormByCodeCacheKey(strings.Join([]string{tenantSchema, claims.UserID, strings.ToUpper(strings.TrimSpace(verticalCode)), strings.TrimSpace(formCode)}, "|"))
 	if payload, state := getCachedJSONState(formByCodeCache, &formByCodeCacheMu, formByCodeCacheKey); state == cacheLookupStateFresh {
 		w.Header().Set("X-App-Form-Cache", cacheStateHit)
 		writeJSONBytesWithETag(w, r, payload)
@@ -482,7 +498,7 @@ func GetFormByCode(w http.ResponseWriter, r *http.Request) {
 
 	// Get the form
 	var form models.AppForm
-	if err := config.DB.
+	if err := db.
 		Preload("Module").
 		Where("code = ? AND is_active = ?", formCode, true).
 		// Where("accessible_verticals @> ?", `["`+verticalCode+`"]`).
@@ -495,7 +511,7 @@ func GetFormByCode(w http.ResponseWriter, r *http.Request) {
 	// Check permission — allow via global role OR any business role in this vertical
 	if !isPublicFormPermission(form.RequiredPermission) {
 		var verticalForForm []models.BusinessVertical
-		_ = config.DB.Where("LOWER(code) = LOWER(?)", verticalCode).Find(&verticalForForm)
+		_ = db.Where("LOWER(code) = LOWER(?)", verticalCode).Find(&verticalForForm)
 		requestedVertical := strings.ToLower(strings.TrimSpace(verticalCode))
 		verticalIDSet := make(map[uuid.UUID]struct{}, len(verticalForForm)+len(user.UserBusinessRoles)+len(user.RoleAssignments))
 		for _, v := range verticalForForm {
@@ -599,12 +615,20 @@ func buildSafeDropdownProxyEndpoint(rawEndpoint, businessCode string) (string, b
 // GetAllForms returns all forms in the system (admin only)
 // GET /api/v1/admin/forms
 func GetAllAppForms(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	if middleware.GetClaims(r) == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 
-	allAdminFormsCacheKey := versionedFormsListCacheKey("admin:all")
+	tenantSchema := config.TenantSchemaFromContext(r.Context())
+	allAdminFormsCacheKey := versionedFormsListCacheKey(tenantSchema + ":admin:all")
 	if payload, state := getCachedJSONState(formsListCache, &formsListCacheMu, allAdminFormsCacheKey); state == cacheLookupStateFresh {
 		writeJSONBytesWithETag(w, r, payload)
 		return
@@ -614,7 +638,7 @@ func GetAllAppForms(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var forms []models.AppForm
-	if err := config.DB.
+	if err := db.
 		Preload("Module").
 		Order("module_id ASC, display_order ASC").
 		Find(&forms).Error; err != nil {
@@ -692,6 +716,13 @@ func normalizeLookupFieldValue(value interface{}) interface{} {
 // GetFormLookupOptions exposes flattened dedicated-form submissions as dropdown options.
 // GET /api/v1/business/{businessCode}/forms/{formCode}/lookup
 func GetFormLookupOptions(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	claims := middleware.GetClaims(r)
 	if claims == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -727,14 +758,14 @@ func GetFormLookupOptions(w http.ResponseWriter, r *http.Request) {
 	user := userCtx.User
 
 	var form models.AppForm
-	if err := config.DB.Preload("Module").Where("code = ? AND is_active = ?", formCode, true).First(&form).Error; err != nil {
+	if err := db.Preload("Module").Where("code = ? AND is_active = ?", formCode, true).First(&form).Error; err != nil {
 		http.Error(w, "form not found", http.StatusNotFound)
 		return
 	}
 
 	if !isPublicFormPermission(form.RequiredPermission) {
 		var verticals []models.BusinessVertical
-		_ = config.DB.Where("LOWER(code) = LOWER(?)", verticalCode).Find(&verticals)
+		_ = db.Where("LOWER(code) = LOWER(?)", verticalCode).Find(&verticals)
 
 		requestedVertical := strings.ToLower(strings.TrimSpace(verticalCode))
 		verticalIDSet := make(map[uuid.UUID]struct{}, len(verticals)+len(user.UserBusinessRoles)+len(user.RoleAssignments))
@@ -828,6 +859,13 @@ func GetFormLookupOptions(w http.ResponseWriter, r *http.Request) {
 // UpdateFormVerticalAccess updates which verticals have access to a form (admin only)
 // POST /api/v1/admin/forms/{formCode}/verticals
 func UpdateFormVerticalAccess(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	claims := middleware.GetClaims(r)
 	if claims == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -848,14 +886,14 @@ func UpdateFormVerticalAccess(w http.ResponseWriter, r *http.Request) {
 
 	// Get the form
 	var form models.AppForm
-	if err := config.DB.Where("code = ?", formCode).First(&form).Error; err != nil {
+	if err := db.Where("code = ?", formCode).First(&form).Error; err != nil {
 		http.Error(w, "form not found", http.StatusNotFound)
 		return
 	}
 
 	// Update accessible verticals
 	form.AccessibleVerticals = requestBody.VerticalCodes
-	if err := config.DB.Save(&form).Error; err != nil {
+	if err := db.Save(&form).Error; err != nil {
 		log.Printf("❌ Error updating form: %v", err)
 		http.Error(w, "failed to update form", http.StatusInternalServerError)
 		return
@@ -876,6 +914,13 @@ func UpdateFormVerticalAccess(w http.ResponseWriter, r *http.Request) {
 // CreateForm creates a new form (admin only)
 // POST /api/v1/admin/forms
 func CreateForm(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	claims := middleware.GetClaims(r)
 	if claims == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -911,7 +956,7 @@ func CreateForm(w http.ResponseWriter, r *http.Request) {
 
 	// Get the module to retrieve its schema name
 	var module models.Module
-	if err := config.DB.First(&module, "id = ?", form.ModuleID).Error; err != nil {
+	if err := db.First(&module, "id = ?", form.ModuleID).Error; err != nil {
 		log.Printf("❌ Module not found for form %s: %v", form.Code, err)
 		http.Error(w, "module not found", http.StatusBadRequest)
 		return
@@ -923,7 +968,7 @@ func CreateForm(w http.ResponseWriter, r *http.Request) {
 		form.DBTableName = generateTableName(form.Code)
 	}
 
-	tx := config.DB.Begin()
+	tx := db.Begin()
 	if tx.Error != nil {
 		log.Printf("❌ Error starting transaction for form create: %v", tx.Error)
 		http.Error(w, "failed to create form", http.StatusInternalServerError)
@@ -1021,6 +1066,13 @@ func generateTableName(formCode string) string {
 // ToggleFormStatus activates or deactivates a form (admin only)
 // PATCH /api/v1/admin/app-forms/{formCode}/status
 func ToggleFormStatus(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	claims := middleware.GetClaims(r)
 	if claims == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -1039,12 +1091,12 @@ func ToggleFormStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var form models.AppForm
-	if err := config.DB.Where("code = ?", formCode).First(&form).Error; err != nil {
+	if err := db.Where("code = ?", formCode).First(&form).Error; err != nil {
 		http.Error(w, "form not found", http.StatusNotFound)
 		return
 	}
 
-	tx := config.DB.Begin()
+	tx := db.Begin()
 	if tx.Error != nil {
 		log.Printf("❌ Error starting transaction for form status update: %v", tx.Error)
 		http.Error(w, "failed to update form status", http.StatusInternalServerError)
@@ -1091,6 +1143,13 @@ func ToggleFormStatus(w http.ResponseWriter, r *http.Request) {
 // UpdateForm updates an existing form (admin only)
 // PUT /api/v1/admin/app-forms/{formCode}
 func UpdateForm(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	claims := middleware.GetClaims(r)
 	if claims == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -1102,7 +1161,7 @@ func UpdateForm(w http.ResponseWriter, r *http.Request) {
 
 	// Get existing form
 	var existingForm models.AppForm
-	if err := config.DB.Where("code = ?", formCode).First(&existingForm).Error; err != nil {
+	if err := db.Where("code = ?", formCode).First(&existingForm).Error; err != nil {
 		http.Error(w, "form not found", http.StatusNotFound)
 		return
 	}
@@ -1172,7 +1231,7 @@ func UpdateForm(w http.ResponseWriter, r *http.Request) {
 		existingForm.IsActive = updateData.IsActive
 	}
 
-	tx := config.DB.Begin()
+	tx := db.Begin()
 	if tx.Error != nil {
 		log.Printf("❌ Error starting transaction for form update: %v", tx.Error)
 		http.Error(w, "failed to update form", http.StatusInternalServerError)
@@ -1215,6 +1274,13 @@ func UpdateForm(w http.ResponseWriter, r *http.Request) {
 // DeleteForm permanently deletes a form (admin only)
 // DELETE /api/v1/admin/app-forms/{formCode}
 func DeleteForm(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	claims := middleware.GetClaims(r)
 	if claims == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -1225,12 +1291,12 @@ func DeleteForm(w http.ResponseWriter, r *http.Request) {
 	formCode := vars["formCode"]
 
 	var form models.AppForm
-	if err := config.DB.Where("code = ?", formCode).First(&form).Error; err != nil {
+	if err := db.Where("code = ?", formCode).First(&form).Error; err != nil {
 		http.Error(w, "form not found", http.StatusNotFound)
 		return
 	}
 
-	if err := config.DB.Delete(&form).Error; err != nil {
+	if err := db.Delete(&form).Error; err != nil {
 		log.Printf("❌ Error deleting form %s: %v", formCode, err)
 		http.Error(w, "failed to delete form", http.StatusInternalServerError)
 		return
