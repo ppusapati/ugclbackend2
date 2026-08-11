@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
@@ -56,8 +57,15 @@ func WebhookEventTriggerMiddleware(eventType models.WebhookEventType, resourceTy
 		}
 
 		// Trigger webhooks asynchronously
+		tenantSchema := config.TenantSchemaFromContext(c.Request.Context())
 		go func() {
-			webhookService := utils.NewWebhookService(config.DB)
+			bgCtx := config.WithTenantSchema(context.Background(), tenantSchema)
+			db, cleanup, err := config.DBFromContext(bgCtx)
+			if err != nil {
+				return
+			}
+			defer cleanup()
+			webhookService := utils.NewWebhookService(db)
 			webhookService.TriggerWebhook(eventType, resourceType, resourceID, businessID, responseData)
 		}()
 	}
@@ -173,6 +181,7 @@ func AutoTriggerWebhookMiddleware(c *gin.Context) {
 	}
 
 	// Trigger webhooks asynchronously
+	tenantSchema := config.TenantSchemaFromContext(c.Request.Context())
 	go func() {
 		responseData := make(map[string]interface{})
 		if v, exists := c.Get("response_data"); exists {
@@ -181,7 +190,13 @@ func AutoTriggerWebhookMiddleware(c *gin.Context) {
 			}
 		}
 
-		webhookService := utils.NewWebhookService(config.DB)
+		bgCtx := config.WithTenantSchema(context.Background(), tenantSchema)
+		db, cleanup, err := config.DBFromContext(bgCtx)
+		if err != nil {
+			return
+		}
+		defer cleanup()
+		webhookService := utils.NewWebhookService(db)
 		webhookService.TriggerWebhook(eventType, resourceType, resourceID, businessID, responseData)
 	}()
 }

@@ -141,9 +141,9 @@ func resolveBusinessIdentifier(identifier string) uuid.UUID {
 		}
 
 		var business models.BusinessVertical
-		if dbErr := config.DB.
-			Where("is_active = ? AND (UPPER(code) = ? OR UPPER(name) = ?)", true, normalizedIdentifier, normalizedIdentifier).
-			First(&business).Error; dbErr != nil {
+		if dbErr := config.DB. // config-db-ok: result cached process-wide in businessIdentifierCache, no request threaded into resolveBusinessIdentifier
+					Where("is_active = ? AND (UPPER(code) = ? OR UPPER(name) = ?)", true, normalizedIdentifier, normalizedIdentifier).
+					First(&business).Error; dbErr != nil {
 			return uuid.Nil, dbErr
 		}
 
@@ -246,8 +246,8 @@ func loadUserWithAuthGraph(userID uuid.UUID) (models.User, error) {
 		}
 
 		var freshUser models.User
-		if dbErr := preloadAuthorizationGraph(config.DB).
-			First(&freshUser, "id = ?", userID).Error; dbErr != nil {
+		if dbErr := preloadAuthorizationGraph(config.DB). // config-db-ok: result cached process-wide in userCache, no request threaded into loadUserWithAuthGraph
+									First(&freshUser, "id = ?", userID).Error; dbErr != nil {
 			return nil, dbErr
 		}
 

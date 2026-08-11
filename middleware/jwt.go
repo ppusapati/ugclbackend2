@@ -190,10 +190,13 @@ func GetUser(r *http.Request) models.User {
 		// Load from DB but do NOT write to cache. Uses the same preload chain as
 		// LoadUserContext so RBAC role assignments (and legacy fields, when RBAC is
 		// disabled) are populated identically to the authoritative fast path.
-		var user models.User
-		if err := preloadAuthorizationGraph(config.DB).
-			First(&user, "id = ?", c.UserID).Error; err == nil {
-			return user
+		if db, cleanup, dbErr := config.DBFromContext(r.Context()); dbErr == nil {
+			defer cleanup()
+			var user models.User
+			if err := preloadAuthorizationGraph(db).
+				First(&user, "id = ?", c.UserID).Error; err == nil {
+				return user
+			}
 		}
 		// Fallback: return minimal user from claims so callers still get a non-nil struct.
 		return models.User{Name: c.Name, Phone: c.Phone}
@@ -335,9 +338,9 @@ func startThirdPartyAccessBatcher() {
 					delete(pending, id)
 					continue
 				}
-				if err := config.DB.Model(&models.ThirdPartyIntegration{}).
-					Where("id = ?", id).
-					Updates(map[string]interface{}{
+				if err := config.DB.Model(&models.ThirdPartyIntegration{}). // config-db-ok: background batcher goroutine started once at process init, not per-request
+												Where("id = ?", id).
+												Updates(map[string]interface{}{
 						"last_access_at": now,
 						"access_count":   gorm.Expr("access_count + ?", count),
 					}).Error; err != nil {
@@ -493,7 +496,7 @@ func lookupThirdPartyIntegrationConfig(apiKey string) (APIClientConfig, bool) {
 	}
 
 	var items []models.ThirdPartyIntegration
-	if err := config.DB.Where("status = ?", models.IntegrationStatusActive).Find(&items).Error; err != nil {
+	if err := config.DB.Where("status = ?", models.IntegrationStatusActive).Find(&items).Error; err != nil { // config-db-ok: result cached process-wide in thirdPartyAPIKeyLookupCache; runs in SecurityMiddleware ahead of JWT/tenant resolution
 		log.Printf("[SECURITY] failed to load third-party integrations: %v", err)
 		return APIClientConfig{}, false
 	}
