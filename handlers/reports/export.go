@@ -16,13 +16,20 @@ import (
 
 // ExportReportToExcel exports report data to Excel format
 func ExportReportToExcel(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	reportID := vars["id"]
 	claims := middleware.GetClaims(r)
 
 	// Get report definition
 	var report models.ReportDefinition
-	if err := config.DB.Where("id = ? AND deleted_at IS NULL", reportID).First(&report).Error; err != nil {
+	if err := db.Where("id = ? AND deleted_at IS NULL", reportID).First(&report).Error; err != nil {
 		http.Error(w, "Report not found", http.StatusNotFound)
 		return
 	}
@@ -66,13 +73,20 @@ func ExportReportToExcel(w http.ResponseWriter, r *http.Request) {
 
 // ExportReportToCSV exports report data to CSV format
 func ExportReportToCSV(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	reportID := vars["id"]
 	claims := middleware.GetClaims(r)
 
 	// Get report definition
 	var report models.ReportDefinition
-	if err := config.DB.Where("id = ? AND deleted_at IS NULL", reportID).First(&report).Error; err != nil {
+	if err := db.Where("id = ? AND deleted_at IS NULL", reportID).First(&report).Error; err != nil {
 		http.Error(w, "Report not found", http.StatusNotFound)
 		return
 	}
@@ -109,13 +123,20 @@ func ExportReportToCSV(w http.ResponseWriter, r *http.Request) {
 
 // ExportReportToPDF exports report data to PDF format
 func ExportReportToPDF(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	reportID := vars["id"]
 	claims := middleware.GetClaims(r)
 
 	// Get report definition
 	var report models.ReportDefinition
-	if err := config.DB.Where("id = ? AND deleted_at IS NULL", reportID).First(&report).Error; err != nil {
+	if err := db.Where("id = ? AND deleted_at IS NULL", reportID).First(&report).Error; err != nil {
 		http.Error(w, "Report not found", http.StatusNotFound)
 		return
 	}

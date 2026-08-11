@@ -116,10 +116,17 @@ func WebhookContract(w http.ResponseWriter, r *http.Request) {
 
 // IntegrationFormCatalog returns active form definitions for third-party discovery.
 func IntegrationFormCatalog(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	allowedCodes := allowedThirdPartyFormCodes()
 	allowAll := len(allowedCodes) == 0
 
-	query := config.DB.Model(&models.AppForm{}).
+	query := db.Model(&models.AppForm{}).
 		Select("code, title").
 		Where("is_active = ?", true)
 
@@ -343,9 +350,15 @@ func isAllowedDropdownTarget(r *http.Request, targetURL *url.URL) bool {
 
 	normalized, err := normalizeIntegrationURL(targetURL.String())
 	if err == nil {
+		db, cleanup, dbCtxErr := config.DBFromContext(r.Context())
+		if dbCtxErr != nil {
+			return false
+		}
+		defer cleanup()
+
 		needle := strings.ReplaceAll(normalized, "\"", "\\\"")
 		var count int64
-		if dbErr := config.DB.Model(&models.ThirdPartyIntegration{}).
+		if dbErr := db.Model(&models.ThirdPartyIntegration{}).
 			Where("status = ?", models.IntegrationStatusActive).
 			Where("allowed_urls @> ?", datatypes.JSON([]byte("[\""+needle+"\"]"))).
 			Count(&count).Error; dbErr == nil && count > 0 {
