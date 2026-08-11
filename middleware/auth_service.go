@@ -43,11 +43,11 @@ func PrewarmAuthorizationCaches(userLimit int) {
 
 	// Preload active users with full auth graph used by LoadUserContext.
 	var users []models.User
-	if err := preloadAuthorizationGraph(config.DB).
-		Where("is_active = ?", true).
-		Order("updated_at DESC").
-		Limit(userLimit).
-		Find(&users).Error; err != nil {
+	if err := preloadAuthorizationGraph(config.DB). // config-db-ok: startup prewarm, runs before any request exists
+							Where("is_active = ?", true).
+							Order("updated_at DESC").
+							Limit(userLimit).
+							Find(&users).Error; err != nil {
 		log.Printf("[PREWARM] auth cache users load failed: %v", err)
 	} else {
 		for _, u := range users {
@@ -58,7 +58,7 @@ func PrewarmAuthorizationCaches(userLimit int) {
 
 	// Preload active business vertical IDs for super-admin fast path.
 	var verticals []models.BusinessVertical
-	if err := config.DB.Where("is_active = ?", true).Find(&verticals).Error; err != nil {
+	if err := config.DB.Where("is_active = ?", true).Find(&verticals).Error; err != nil { // config-db-ok: startup prewarm, runs before any request exists
 		log.Printf("[PREWARM] super-admin vertical cache load failed: %v", err)
 		return
 	}
@@ -134,8 +134,14 @@ func (s *AuthService) LoadUserContext(r *http.Request) (*UserContext, error) {
 				return authLoadResult{user: cachedUser, globalPermissions: cachedPermissions}, nil
 			}
 
+			db, cleanup, dbErr := config.DBFromContext(r.Context())
+			if dbErr != nil {
+				return nil, dbErr
+			}
+			defer cleanup()
+
 			var freshUser models.User
-			if err := preloadAuthorizationGraph(config.DB.WithContext(r.Context())).
+			if err := preloadAuthorizationGraph(db.WithContext(r.Context())).
 				First(&freshUser, "id = ?", userID).Error; err != nil {
 				return nil, err
 			}
@@ -370,7 +376,7 @@ func (s *AuthService) GetAccessibleBusinessVerticals(user models.User) []uuid.UU
 			superAdminAccessibleVerticalsCache.mu.RUnlock()
 
 			var verticals []models.BusinessVertical
-			config.DB.Where("is_active = ?", true).Find(&verticals)
+			config.DB.Where("is_active = ?", true).Find(&verticals) // config-db-ok: result cached process-wide in superAdminAccessibleVerticalsCache, no request threaded into GetAccessibleBusinessVerticals
 
 			verticalIDs := make([]uuid.UUID, len(verticals))
 			for i, v := range verticals {
@@ -402,7 +408,7 @@ func (s *AuthService) GetAccessibleBusinessVerticals(user models.User) []uuid.UU
 		// verticals so routing succeeds — handler-level site checks enforce boundaries.
 		if hasActiveGlobalRBACRole(user) {
 			var verticalIDs []uuid.UUID
-			config.DB.Model(&models.BusinessVertical{}).Where("is_active = ?", true).Pluck("id", &verticalIDs)
+			config.DB.Model(&models.BusinessVertical{}).Where("is_active = ?", true).Pluck("id", &verticalIDs) // config-db-ok: no request threaded into GetAccessibleBusinessVerticals
 			return verticalIDs
 		}
 		return nil

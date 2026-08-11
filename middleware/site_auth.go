@@ -53,9 +53,16 @@ func RequireSiteAccess() func(http.Handler) http.Handler {
 				return
 			}
 
+			db, cleanup, dbErr := config.DBFromContext(r.Context())
+			if dbErr != nil {
+				http.Error(w, "database unavailable", http.StatusInternalServerError)
+				return
+			}
+			defer cleanup()
+
 			// Get all sites the user has access to in this business vertical
 			var siteAccess []models.UserSiteAccess
-			err := config.DB.
+			err := db.
 				Joins("JOIN sites ON sites.id = user_site_accesses.site_id").
 				Where("user_site_accesses.user_id = ? AND sites.business_vertical_id = ?", user.ID, businessID).
 				Find(&siteAccess).Error
