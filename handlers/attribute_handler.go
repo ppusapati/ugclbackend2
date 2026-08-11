@@ -15,13 +15,20 @@ import (
 
 // CreateAttribute creates a new attribute definition
 func CreateAttribute(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var attribute models.Attribute
 	if err := json.NewDecoder(r.Body).Decode(&attribute); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	attributeService := abac.NewAttributeService(config.DB)
+	attributeService := abac.NewAttributeService(db)
 	createdAttr, err := attributeService.CreateAttribute(attribute)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -35,6 +42,13 @@ func CreateAttribute(w http.ResponseWriter, r *http.Request) {
 
 // UpdateAttribute updates an attribute definition
 func UpdateAttribute(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	attributeID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -48,7 +62,7 @@ func UpdateAttribute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	attributeService := abac.NewAttributeService(config.DB)
+	attributeService := abac.NewAttributeService(db)
 	updatedAttr, err := attributeService.UpdateAttribute(attributeID, updates)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -61,6 +75,13 @@ func UpdateAttribute(w http.ResponseWriter, r *http.Request) {
 
 // DeleteAttribute deletes an attribute definition
 func DeleteAttribute(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	attributeID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -68,7 +89,7 @@ func DeleteAttribute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	attributeService := abac.NewAttributeService(config.DB)
+	attributeService := abac.NewAttributeService(db)
 	if err := attributeService.DeleteAttribute(attributeID); err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -79,6 +100,13 @@ func DeleteAttribute(w http.ResponseWriter, r *http.Request) {
 
 // ListAttributes lists all attributes with optional filtering
 func ListAttributes(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	typeStr := r.URL.Query().Get("type")
 	activeStr := r.URL.Query().Get("active")
 
@@ -99,7 +127,7 @@ func ListAttributes(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	attributeService := abac.NewAttributeService(config.DB)
+	attributeService := abac.NewAttributeService(db)
 	attributes, err := attributeService.ListAttributes(attrType, isActive)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -112,6 +140,13 @@ func ListAttributes(w http.ResponseWriter, r *http.Request) {
 
 // AssignUserAttribute assigns an attribute to a user
 func AssignUserAttribute(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	userID, err := uuid.Parse(vars["user_id"])
 	if err != nil {
@@ -142,7 +177,7 @@ func AssignUserAttribute(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid assigned by user ID", http.StatusInternalServerError)
 		return
 	}
-	attributeService := abac.NewAttributeService(config.DB)
+	attributeService := abac.NewAttributeService(db)
 
 	if err := attributeService.AssignUserAttribute(userID, attributeID, assignedBy, req.Value, req.ValidUntil); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -155,6 +190,13 @@ func AssignUserAttribute(w http.ResponseWriter, r *http.Request) {
 
 // RemoveUserAttribute removes an attribute from a user
 func RemoveUserAttribute(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	userID, err := uuid.Parse(vars["user_id"])
 	if err != nil {
@@ -168,7 +210,7 @@ func RemoveUserAttribute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	attributeService := abac.NewAttributeService(config.DB)
+	attributeService := abac.NewAttributeService(db)
 	if err := attributeService.RemoveUserAttribute(userID, attributeID); err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -179,6 +221,13 @@ func RemoveUserAttribute(w http.ResponseWriter, r *http.Request) {
 
 // GetUserAttributes retrieves all attributes for a user
 func GetUserAttributes(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	userID, err := uuid.Parse(vars["user_id"])
 	if err != nil {
@@ -186,7 +235,7 @@ func GetUserAttributes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	attributeService := abac.NewAttributeService(config.DB)
+	attributeService := abac.NewAttributeService(db)
 	attributes, err := attributeService.GetUserAttributes(userID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -199,6 +248,13 @@ func GetUserAttributes(w http.ResponseWriter, r *http.Request) {
 
 // BulkAssignUserAttributes assigns multiple attributes to a user
 func BulkAssignUserAttributes(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	userID, err := uuid.Parse(vars["user_id"])
 	if err != nil {
@@ -221,7 +277,7 @@ func BulkAssignUserAttributes(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid assigned by user ID", http.StatusInternalServerError)
 		return
 	}
-	attributeService := abac.NewAttributeService(config.DB)
+	attributeService := abac.NewAttributeService(db)
 
 	if err := attributeService.BulkAssignUserAttributes(userID, assignedBy, req.Attributes); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -234,6 +290,13 @@ func BulkAssignUserAttributes(w http.ResponseWriter, r *http.Request) {
 
 // AssignResourceAttribute assigns an attribute to a resource
 func AssignResourceAttribute(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var req struct {
 		ResourceType string     `json:"resource_type"`
 		ResourceID   string     `json:"resource_id"`
@@ -265,7 +328,7 @@ func AssignResourceAttribute(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid assigned by user ID", http.StatusInternalServerError)
 		return
 	}
-	attributeService := abac.NewAttributeService(config.DB)
+	attributeService := abac.NewAttributeService(db)
 
 	if err := attributeService.AssignResourceAttribute(req.ResourceType, resourceID, attributeID, assignedBy, req.Value, req.ValidUntil); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -278,6 +341,13 @@ func AssignResourceAttribute(w http.ResponseWriter, r *http.Request) {
 
 // RemoveResourceAttribute removes an attribute from a resource
 func RemoveResourceAttribute(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	resourceType := vars["resource_type"]
 
@@ -293,7 +363,7 @@ func RemoveResourceAttribute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	attributeService := abac.NewAttributeService(config.DB)
+	attributeService := abac.NewAttributeService(db)
 	if err := attributeService.RemoveResourceAttribute(resourceType, resourceID, attributeID); err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -304,6 +374,13 @@ func RemoveResourceAttribute(w http.ResponseWriter, r *http.Request) {
 
 // GetResourceAttributes retrieves all attributes for a resource
 func GetResourceAttributes(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	resourceType := vars["resource_type"]
 
@@ -313,7 +390,7 @@ func GetResourceAttributes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	attributeService := abac.NewAttributeService(config.DB)
+	attributeService := abac.NewAttributeService(db)
 	attributes, err := attributeService.GetResourceAttributes(resourceType, resourceID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -326,6 +403,13 @@ func GetResourceAttributes(w http.ResponseWriter, r *http.Request) {
 
 // GetUserAttributeHistory retrieves attribute assignment history for a user
 func GetUserAttributeHistory(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	userID, err := uuid.Parse(vars["user_id"])
 	if err != nil {
@@ -339,7 +423,7 @@ func GetUserAttributeHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	attributeService := abac.NewAttributeService(config.DB)
+	attributeService := abac.NewAttributeService(db)
 	history, err := attributeService.GetUserAttributeHistory(userID, attributeID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
