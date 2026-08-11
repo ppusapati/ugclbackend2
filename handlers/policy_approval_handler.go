@@ -15,11 +15,18 @@ import (
 
 // CreateApprovalRequest creates a new policy approval request
 func CreateApprovalRequest(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var req struct {
-		PolicyID        string          `json:"policy_id"`
-		RequestType     string          `json:"request_type"` // create, update, activate, deactivate, delete
-		Notes           string          `json:"notes"`
-		ChangesProposed models.JSONMap  `json:"changes_proposed"`
+		PolicyID        string         `json:"policy_id"`
+		RequestType     string         `json:"request_type"` // create, update, activate, deactivate, delete
+		Notes           string         `json:"notes"`
+		ChangesProposed models.JSONMap `json:"changes_proposed"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -40,7 +47,7 @@ func CreateApprovalRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	approvalService := abac.NewApprovalService(config.DB)
+	approvalService := abac.NewApprovalService(db)
 	request, err := approvalService.CreateApprovalRequest(policyID, req.RequestType, userID, req.Notes, req.ChangesProposed)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -54,6 +61,13 @@ func CreateApprovalRequest(w http.ResponseWriter, r *http.Request) {
 
 // ApproveRequest approves a policy approval request
 func ApproveRequest(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	requestID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -73,7 +87,7 @@ func ApproveRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	approvalService := abac.NewApprovalService(config.DB)
+	approvalService := abac.NewApprovalService(db)
 	request, err := approvalService.ApproveRequest(requestID, approverID, req.Comments)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -86,6 +100,13 @@ func ApproveRequest(w http.ResponseWriter, r *http.Request) {
 
 // RejectRequest rejects a policy approval request
 func RejectRequest(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	requestID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -108,7 +129,7 @@ func RejectRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	approvalService := abac.NewApprovalService(config.DB)
+	approvalService := abac.NewApprovalService(db)
 	request, err := approvalService.RejectRequest(requestID, approverID, req.Comments)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -121,6 +142,13 @@ func RejectRequest(w http.ResponseWriter, r *http.Request) {
 
 // GetPendingApprovals gets all pending approval requests
 func GetPendingApprovals(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	limitStr := r.URL.Query().Get("limit")
 	offsetStr := r.URL.Query().Get("offset")
 
@@ -138,7 +166,7 @@ func GetPendingApprovals(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	approvalService := abac.NewApprovalService(config.DB)
+	approvalService := abac.NewApprovalService(db)
 	requests, total, err := approvalService.GetPendingApprovals(limit, offset)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -158,6 +186,13 @@ func GetPendingApprovals(w http.ResponseWriter, r *http.Request) {
 
 // GetMyPendingApprovals gets pending approvals for current user
 func GetMyPendingApprovals(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	userIDStr := middleware.GetUserID(r)
 	userID, err := uuid.Parse(userIDStr)
 	if err != nil {
@@ -194,7 +229,7 @@ func GetMyPendingApprovals(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	approvalService := abac.NewApprovalService(config.DB)
+	approvalService := abac.NewApprovalService(db)
 	requests, total, err := approvalService.GetUserPendingApprovals(userID, userRoles, limit, offset)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -214,6 +249,13 @@ func GetMyPendingApprovals(w http.ResponseWriter, r *http.Request) {
 
 // GetApprovalRequest gets a specific approval request
 func GetApprovalRequest(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	requestID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -221,7 +263,7 @@ func GetApprovalRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	approvalService := abac.NewApprovalService(config.DB)
+	approvalService := abac.NewApprovalService(db)
 	request, err := approvalService.GetApprovalRequest(requestID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
@@ -234,6 +276,13 @@ func GetApprovalRequest(w http.ResponseWriter, r *http.Request) {
 
 // GetPolicyVersions gets all versions of a policy
 func GetPolicyVersions(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	policyID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -241,7 +290,7 @@ func GetPolicyVersions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	approvalService := abac.NewApprovalService(config.DB)
+	approvalService := abac.NewApprovalService(db)
 	versions, err := approvalService.GetPolicyVersions(policyID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -254,6 +303,13 @@ func GetPolicyVersions(w http.ResponseWriter, r *http.Request) {
 
 // GetPolicyChangeLogs gets change history for a policy
 func GetPolicyChangeLogs(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	policyID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -278,7 +334,7 @@ func GetPolicyChangeLogs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	approvalService := abac.NewApprovalService(config.DB)
+	approvalService := abac.NewApprovalService(db)
 	logs, total, err := approvalService.GetPolicyChangeLogs(policyID, limit, offset)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -298,13 +354,20 @@ func GetPolicyChangeLogs(w http.ResponseWriter, r *http.Request) {
 
 // CreateWorkflow creates a new approval workflow
 func CreateWorkflow(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var workflow models.PolicyApprovalWorkflow
 	if err := json.NewDecoder(r.Body).Decode(&workflow); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	approvalService := abac.NewApprovalService(config.DB)
+	approvalService := abac.NewApprovalService(db)
 	if err := approvalService.CreateWorkflow(&workflow); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -317,7 +380,14 @@ func CreateWorkflow(w http.ResponseWriter, r *http.Request) {
 
 // GetWorkflows gets all approval workflows
 func GetWorkflows(w http.ResponseWriter, r *http.Request) {
-	approvalService := abac.NewApprovalService(config.DB)
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
+	approvalService := abac.NewApprovalService(db)
 	workflows, err := approvalService.GetWorkflows()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
