@@ -13,6 +13,13 @@ import (
 )
 
 func GetAllSiteEngineerReports(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	params, err := models.ParseReportParams(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -24,7 +31,7 @@ func GetAllSiteEngineerReports(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	service := models.NewReportService(config.DB, models.DprSite{})
+	service := models.NewReportService(db, models.DprSite{})
 	response, err := service.GetReport(params)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -193,43 +200,78 @@ func GetAllSiteEngineerReports(w http.ResponseWriter, r *http.Request) {
 // }
 
 func CreateSiteEngineerReport(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var report models.DprSite
 	json.NewDecoder(r.Body).Decode(&report)
 	user := middleware.GetUser(r)
 	report.InformationEnteredBy = user.Name
 	report.PhoneNumberOfInformationEnteredPerson = user.Phone
 
-	config.DB.Create(&report)
+	db.Create(&report)
 	json.NewEncoder(w).Encode(report)
 }
 
 func GetSiteEngineerReport(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	params := mux.Vars(r)
 	id, _ := strconv.Atoi(params["id"])
 	var report models.DprSite
-	config.DB.First(&report, id)
+	db.First(&report, id)
 	json.NewEncoder(w).Encode(report)
 }
 
 func UpdateSiteEngineerReport(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	params := mux.Vars(r)
 	id, _ := strconv.Atoi(params["id"])
 	var report models.DprSite
-	config.DB.First(&report, id)
+	db.First(&report, id)
 	json.NewDecoder(r.Body).Decode(&report)
-	config.DB.Save(&report)
+	db.Save(&report)
 	json.NewEncoder(w).Encode(report)
 }
 
 func DeleteSiteEngineerReport(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	params := mux.Vars(r)
 	id, _ := strconv.Atoi(params["id"])
-	config.DB.Delete(&models.DprSite{}, id)
+	db.Delete(&models.DprSite{}, id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // BatchContractorReports handles POST /api/v1/contractor/batch
 func BatchDprSites(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var batch []models.DprSite
 	// fmt.Println(json.NewDecoder(r.Body).Decode(&batch))
 	if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
@@ -241,7 +283,7 @@ func BatchDprSites(w http.ResponseWriter, r *http.Request) {
 		batch[i].InformationEnteredBy = user.Name
 		batch[i].PhoneNumberOfInformationEnteredPerson = user.Phone
 	}
-	if err := config.DB.
+	if err := db.
 		Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "id"}},
 			DoNothing: true,

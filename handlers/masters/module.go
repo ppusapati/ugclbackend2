@@ -40,8 +40,15 @@ func GetModules(w http.ResponseWriter, r *http.Request) {
 	verticalCode := r.URL.Query().Get("vertical")
 	showAll := r.URL.Query().Get("all") == "true"
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var modules []models.Module
-	if err := config.DB.
+	if err := db.
 		Where("is_active = ?", true).
 		Order("display_order ASC, name ASC").
 		Find(&modules).Error; err != nil {
@@ -54,7 +61,7 @@ func GetModules(w http.ResponseWriter, r *http.Request) {
 	if isSuperAdmin && showAll {
 		// Get all business verticals
 		var verticals []models.BusinessVertical
-		config.DB.Where("is_active = ?", true).Order("name ASC").Find(&verticals)
+		db.Where("is_active = ?", true).Order("name ASC").Find(&verticals)
 
 		// Group modules by vertical
 		verticalModules := make(map[string][]models.Module)
@@ -180,6 +187,14 @@ func CreateModule(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var module models.Module
 	if err := json.NewDecoder(r.Body).Decode(&module); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -200,7 +215,7 @@ func CreateModule(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create module record in database
-	if err := config.DB.Create(&module).Error; err != nil {
+	if err := db.Create(&module).Error; err != nil {
 		// Attempt to clean up the schema if module creation fails
 		_ = schemaManager.DropSchema(schemaName, true)
 		log.Printf("Failed to create module %s: %v", module.Code, err)
@@ -227,6 +242,13 @@ func UpdateModule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	idStr := vars["id"]
 	id, err := uuid.Parse(idStr)
@@ -236,7 +258,7 @@ func UpdateModule(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var existing models.Module
-	if err := config.DB.First(&existing, "id = ?", id).Error; err != nil {
+	if err := db.First(&existing, "id = ?", id).Error; err != nil {
 		http.Error(w, "module not found", http.StatusNotFound)
 		return
 	}
@@ -254,7 +276,7 @@ func UpdateModule(w http.ResponseWriter, r *http.Request) {
 	existing.DisplayOrder = input.DisplayOrder
 	existing.IsActive = input.IsActive
 
-	if err := config.DB.Save(&existing).Error; err != nil {
+	if err := db.Save(&existing).Error; err != nil {
 		log.Printf("Failed to update module %s: %v", id, err)
 		http.Error(w, "failed to update module", http.StatusInternalServerError)
 		return
@@ -276,6 +298,13 @@ func DeleteModule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	idStr := vars["id"]
 	id, err := uuid.Parse(idStr)
@@ -285,12 +314,12 @@ func DeleteModule(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var existing models.Module
-	if err := config.DB.First(&existing, "id = ?", id).Error; err != nil {
+	if err := db.First(&existing, "id = ?", id).Error; err != nil {
 		http.Error(w, "module not found", http.StatusNotFound)
 		return
 	}
 
-	if err := config.DB.Delete(&existing).Error; err != nil {
+	if err := db.Delete(&existing).Error; err != nil {
 		log.Printf("Failed to delete module %s: %v", id, err)
 		http.Error(w, "failed to delete module", http.StatusInternalServerError)
 		return

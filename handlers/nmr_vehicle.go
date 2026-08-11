@@ -14,6 +14,13 @@ import (
 )
 
 func GetAllNmrVehicle(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	params, err := models.ParseReportParams(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -25,7 +32,7 @@ func GetAllNmrVehicle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	service := models.NewReportService(config.DB, models.Nmr_Vehicle{})
+	service := models.NewReportService(db, models.Nmr_Vehicle{})
 	response, err := service.GetReport(params)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -37,41 +44,76 @@ func GetAllNmrVehicle(w http.ResponseWriter, r *http.Request) {
 }
 
 func CreateNmrVehicle(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var item models.Nmr_Vehicle
 	json.NewDecoder(r.Body).Decode(&item)
 	user := middleware.GetUser(r)
 	item.AttendanceTakenBy = user.Name
 	item.AttendancePhone = user.Phone
-	config.DB.Create(&item)
+	db.Create(&item)
 	json.NewEncoder(w).Encode(item)
 }
 
 func GetNmrVehicle(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	params := mux.Vars(r)
 	id, _ := strconv.Atoi(params["id"])
 	var item models.Nmr_Vehicle
-	config.DB.First(&item, id)
+	db.First(&item, id)
 	json.NewEncoder(w).Encode(item)
 }
 
 func UpdateNmrVehicle(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	params := mux.Vars(r)
 	id, _ := strconv.Atoi(params["id"])
 	var item models.Nmr_Vehicle
-	config.DB.First(&item, id)
+	db.First(&item, id)
 	json.NewDecoder(r.Body).Decode(&item)
-	config.DB.Save(&item)
+	db.Save(&item)
 	json.NewEncoder(w).Encode(item)
 }
 
 func DeleteNmrVehicle(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	params := mux.Vars(r)
 	id, _ := strconv.Atoi(params["id"])
-	config.DB.Delete(&models.Nmr_Vehicle{}, id)
+	db.Delete(&models.Nmr_Vehicle{}, id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func BatchNmrVehicle(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var batch []models.Nmr_Vehicle
 	if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -84,7 +126,7 @@ func BatchNmrVehicle(w http.ResponseWriter, r *http.Request) {
 		batch[i].AttendancePhone = user.Phone
 	}
 
-	if err := config.DB.
+	if err := db.
 		Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "id"}},
 			DoNothing: true,
