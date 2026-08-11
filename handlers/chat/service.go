@@ -8,9 +8,8 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
-	"p9e.in/ugcl/config"
-	"p9e.in/ugcl/models"
 	"p9e.in/ugcl/handlers"
+	"p9e.in/ugcl/models"
 )
 
 // ChatService handles chat business logic
@@ -18,10 +17,10 @@ type ChatService struct {
 	db *gorm.DB
 }
 
-// NewChatService creates a new ChatService instance
-func NewChatService() *ChatService {
+// NewChatService creates a new ChatService instance bound to a tenant-scoped db
+func NewChatService(db *gorm.DB) *ChatService {
 	return &ChatService{
-		db: config.DB,
+		db: db,
 	}
 }
 

@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -10,6 +11,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
+	"gorm.io/gorm"
+	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/middleware"
 	"p9e.in/ugcl/models"
 )
@@ -17,13 +20,8 @@ import (
 // ChatHandler handles chat HTTP endpoints
 type ChatHandler struct{}
 
-var chatServiceInstance *ChatService
-
-func getChatService() *ChatService {
-	if chatServiceInstance == nil {
-		chatServiceInstance = NewChatService()
-	}
-	return chatServiceInstance
+func getChatService(db *gorm.DB) *ChatService {
+	return NewChatService(db)
 }
 
 // ============================================================================
@@ -38,6 +36,13 @@ func (h *ChatHandler) CreateConversation(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
 
 	var req models.CreateConversationRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -55,7 +60,7 @@ func (h *ChatHandler) CreateConversation(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	conversation, err := getChatService().CreateConversation(claims.UserID, req)
+	conversation, err := getChatService(db).CreateConversation(claims.UserID, req)
 	if err != nil {
 		log.Printf("❌ Error creating conversation: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -79,6 +84,13 @@ func (h *ChatHandler) CreateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var req models.CreateGroupRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -95,7 +107,7 @@ func (h *ChatHandler) CreateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	group, err := getChatService().CreateGroup(claims.UserID, req)
+	group, err := getChatService(db).CreateGroup(claims.UserID, req)
 	if err != nil {
 		log.Printf("❌ Error creating group: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -119,6 +131,13 @@ func (h *ChatHandler) GetConversation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	conversationID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -126,7 +145,7 @@ func (h *ChatHandler) GetConversation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conversation, err := getChatService().GetConversation(conversationID, claims.UserID)
+	conversation, err := getChatService(db).GetConversation(conversationID, claims.UserID)
 	if err != nil {
 		log.Printf("❌ Error getting conversation: %v", err)
 		if err.Error() == "conversation not found" || err.Error() == "user is not a participant in this conversation" {
@@ -138,7 +157,7 @@ func (h *ChatHandler) GetConversation(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get unread count
-	unreadCount, _ := getChatService().GetUnreadCount(conversationID, claims.UserID)
+	unreadCount, _ := getChatService(db).GetUnreadCount(conversationID, claims.UserID)
 
 	dto := conversation.ToDTOForUser(claims.UserID)
 	dto.UnreadCount = int(unreadCount)
@@ -158,6 +177,13 @@ func (h *ChatHandler) ListConversations(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	// Parse query parameters
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
@@ -176,7 +202,7 @@ func (h *ChatHandler) ListConversations(w http.ResponseWriter, r *http.Request) 
 		pageSize = 20
 	}
 
-	conversations, totalCount, err := getChatService().ListUserConversations(claims.UserID, page, pageSize, includeArchived, convType)
+	conversations, totalCount, err := getChatService(db).ListUserConversations(claims.UserID, page, pageSize, includeArchived, convType)
 	if err != nil {
 		log.Printf("❌ Error listing conversations: %v", err)
 		http.Error(w, "failed to list conversations", http.StatusInternalServerError)
@@ -187,7 +213,7 @@ func (h *ChatHandler) ListConversations(w http.ResponseWriter, r *http.Request) 
 	dtos := make([]models.ConversationDTO, len(conversations))
 	for i, conv := range conversations {
 		dtos[i] = conv.ToDTOForUser(claims.UserID)
-		unreadCount, _ := getChatService().GetUnreadCount(conv.ID, claims.UserID)
+		unreadCount, _ := getChatService(db).GetUnreadCount(conv.ID, claims.UserID)
 		dtos[i].UnreadCount = int(unreadCount)
 	}
 
@@ -210,6 +236,13 @@ func (h *ChatHandler) UpdateConversation(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	conversationID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -223,7 +256,7 @@ func (h *ChatHandler) UpdateConversation(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	conversation, err := getChatService().UpdateConversation(conversationID, claims.UserID, req)
+	conversation, err := getChatService(db).UpdateConversation(conversationID, claims.UserID, req)
 	if err != nil {
 		log.Printf("❌ Error updating conversation: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -246,6 +279,13 @@ func (h *ChatHandler) DeleteConversation(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	conversationID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -253,7 +293,7 @@ func (h *ChatHandler) DeleteConversation(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if err := getChatService().DeleteConversation(conversationID, claims.UserID); err != nil {
+	if err := getChatService(db).DeleteConversation(conversationID, claims.UserID); err != nil {
 		log.Printf("❌ Error deleting conversation: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -271,6 +311,13 @@ func (h *ChatHandler) ArchiveConversation(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	conversationID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -286,7 +333,7 @@ func (h *ChatHandler) ArchiveConversation(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	conversation, err := getChatService().ArchiveConversation(conversationID, claims.UserID, req.Archive)
+	conversation, err := getChatService(db).ArchiveConversation(conversationID, claims.UserID, req.Archive)
 	if err != nil {
 		log.Printf("❌ Error archiving conversation: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -318,6 +365,13 @@ func (h *ChatHandler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	conversationID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -336,7 +390,7 @@ func (h *ChatHandler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	message, err := getChatService().SendMessage(conversationID, claims.UserID, req)
+	message, err := getChatService(db).SendMessage(conversationID, claims.UserID, req)
 	if err != nil {
 		log.Printf("❌ Error sending message: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -344,8 +398,16 @@ func (h *ChatHandler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Send notifications to other participants (async, don't block response)
+	tenantSchema := config.TenantSchemaFromContext(r.Context())
 	go func() {
-		if err := getChatService().SendChatNotifications(message, claims.Name); err != nil {
+		bgCtx := config.WithTenantSchema(context.Background(), tenantSchema)
+		bgDB, bgCleanup, err := config.DBFromContext(bgCtx)
+		if err != nil {
+			log.Printf("⚠️ Error resolving db for chat notifications: %v", err)
+			return
+		}
+		defer bgCleanup()
+		if err := getChatService(bgDB).SendChatNotifications(message, claims.Name); err != nil {
 			log.Printf("⚠️ Error sending chat notifications: %v", err)
 		}
 	}()
@@ -366,6 +428,13 @@ func (h *ChatHandler) GetMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	messageID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -373,7 +442,7 @@ func (h *ChatHandler) GetMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	message, err := getChatService().GetMessage(messageID, claims.UserID)
+	message, err := getChatService(db).GetMessage(messageID, claims.UserID)
 	if err != nil {
 		log.Printf("❌ Error getting message: %v", err)
 		if err.Error() == "message not found" {
@@ -398,6 +467,13 @@ func (h *ChatHandler) ListMessages(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
 
 	vars := mux.Vars(r)
 	conversationID, err := uuid.Parse(vars["id"])
@@ -429,7 +505,7 @@ func (h *ChatHandler) ListMessages(w http.ResponseWriter, r *http.Request) {
 		pageSize = 50
 	}
 
-	messages, totalCount, hasMore, err := getChatService().ListMessages(conversationID, claims.UserID, page, pageSize, beforeMessageID, afterMessageID)
+	messages, totalCount, hasMore, err := getChatService(db).ListMessages(conversationID, claims.UserID, page, pageSize, beforeMessageID, afterMessageID)
 	if err != nil {
 		log.Printf("❌ Error listing messages: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -459,6 +535,13 @@ func (h *ChatHandler) UpdateMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	messageID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -477,7 +560,7 @@ func (h *ChatHandler) UpdateMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	message, err := getChatService().UpdateMessage(messageID, claims.UserID, req)
+	message, err := getChatService(db).UpdateMessage(messageID, claims.UserID, req)
 	if err != nil {
 		log.Printf("❌ Error updating message: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -499,6 +582,13 @@ func (h *ChatHandler) DeleteMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	messageID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -506,7 +596,7 @@ func (h *ChatHandler) DeleteMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := getChatService().DeleteMessage(messageID, claims.UserID); err != nil {
+	if err := getChatService(db).DeleteMessage(messageID, claims.UserID); err != nil {
 		log.Printf("❌ Error deleting message: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -523,6 +613,13 @@ func (h *ChatHandler) SearchMessages(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
 
 	vars := mux.Vars(r)
 	conversationID, err := uuid.Parse(vars["id"])
@@ -547,7 +644,7 @@ func (h *ChatHandler) SearchMessages(w http.ResponseWriter, r *http.Request) {
 		pageSize = 20
 	}
 
-	messages, totalCount, err := getChatService().SearchMessages(conversationID, claims.UserID, query, page, pageSize)
+	messages, totalCount, err := getChatService(db).SearchMessages(conversationID, claims.UserID, query, page, pageSize)
 	if err != nil {
 		log.Printf("❌ Error searching messages: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -580,6 +677,13 @@ func (h *ChatHandler) AddParticipant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	conversationID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -598,7 +702,7 @@ func (h *ChatHandler) AddParticipant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	participant, err := getChatService().AddParticipant(conversationID, claims.UserID, req)
+	participant, err := getChatService(db).AddParticipant(conversationID, claims.UserID, req)
 	if err != nil {
 		log.Printf("❌ Error adding participant: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -622,6 +726,13 @@ func (h *ChatHandler) RemoveParticipant(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	conversationID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -635,7 +746,7 @@ func (h *ChatHandler) RemoveParticipant(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if err := getChatService().RemoveParticipant(conversationID, claims.UserID, targetUserID); err != nil {
+	if err := getChatService(db).RemoveParticipant(conversationID, claims.UserID, targetUserID); err != nil {
 		log.Printf("❌ Error removing participant: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -652,6 +763,13 @@ func (h *ChatHandler) ListParticipants(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
 
 	vars := mux.Vars(r)
 	conversationID, err := uuid.Parse(vars["id"])
@@ -670,7 +788,7 @@ func (h *ChatHandler) ListParticipants(w http.ResponseWriter, r *http.Request) {
 		pageSize = 50
 	}
 
-	participants, totalCount, err := getChatService().ListParticipants(conversationID, claims.UserID, page, pageSize)
+	participants, totalCount, err := getChatService(db).ListParticipants(conversationID, claims.UserID, page, pageSize)
 	if err != nil {
 		log.Printf("❌ Error listing participants: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -699,6 +817,13 @@ func (h *ChatHandler) UpdateParticipantRole(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	conversationID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -723,7 +848,7 @@ func (h *ChatHandler) UpdateParticipantRole(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	participant, err := getChatService().UpdateParticipantRole(conversationID, claims.UserID, targetUserID, req)
+	participant, err := getChatService(db).UpdateParticipantRole(conversationID, claims.UserID, targetUserID, req)
 	if err != nil {
 		log.Printf("❌ Error updating participant role: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -750,6 +875,13 @@ func (h *ChatHandler) MarkAsRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	conversationID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -771,7 +903,7 @@ func (h *ChatHandler) MarkAsRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := getChatService().MarkAsRead(conversationID, messageID, claims.UserID); err != nil {
+	if err := getChatService(db).MarkAsRead(conversationID, messageID, claims.UserID); err != nil {
 		log.Printf("❌ Error marking as read: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -792,6 +924,13 @@ func (h *ChatHandler) SendTypingIndicator(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	conversationID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -799,7 +938,7 @@ func (h *ChatHandler) SendTypingIndicator(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if err := getChatService().SendTypingIndicator(conversationID, claims.UserID); err != nil {
+	if err := getChatService(db).SendTypingIndicator(conversationID, claims.UserID); err != nil {
 		log.Printf("❌ Error sending typing indicator: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -820,6 +959,13 @@ func (h *ChatHandler) GetTypingUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	conversationID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -827,7 +973,7 @@ func (h *ChatHandler) GetTypingUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userIDs, err := getChatService().GetTypingUsers(conversationID, claims.UserID)
+	userIDs, err := getChatService(db).GetTypingUsers(conversationID, claims.UserID)
 	if err != nil {
 		log.Printf("❌ Error getting typing users: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -853,6 +999,13 @@ func (h *ChatHandler) AddReaction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	messageID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -871,7 +1024,7 @@ func (h *ChatHandler) AddReaction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reaction, err := getChatService().AddReaction(messageID, claims.UserID, req)
+	reaction, err := getChatService(db).AddReaction(messageID, claims.UserID, req)
 	if err != nil {
 		log.Printf("❌ Error adding reaction: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -894,6 +1047,13 @@ func (h *ChatHandler) RemoveReaction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	messageID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -907,7 +1067,7 @@ func (h *ChatHandler) RemoveReaction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := getChatService().RemoveReaction(messageID, claims.UserID, reaction); err != nil {
+	if err := getChatService(db).RemoveReaction(messageID, claims.UserID, reaction); err != nil {
 		log.Printf("❌ Error removing reaction: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -925,6 +1085,13 @@ func (h *ChatHandler) ListReactions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	messageID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -932,7 +1099,7 @@ func (h *ChatHandler) ListReactions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reactions, err := getChatService().ListReactions(messageID, claims.UserID)
+	reactions, err := getChatService(db).ListReactions(messageID, claims.UserID)
 	if err != nil {
 		log.Printf("❌ Error listing reactions: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -958,6 +1125,13 @@ func (h *ChatHandler) SendAttachment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	conversationID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -982,7 +1156,7 @@ func (h *ChatHandler) SendAttachment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	attachment, err := getChatService().SendAttachment(conversationID, messageID, claims.UserID, req)
+	attachment, err := getChatService(db).SendAttachment(conversationID, messageID, claims.UserID, req)
 	if err != nil {
 		log.Printf("❌ Error sending attachment: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -1005,6 +1179,13 @@ func (h *ChatHandler) ListAttachments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	conversationID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -1022,7 +1203,7 @@ func (h *ChatHandler) ListAttachments(w http.ResponseWriter, r *http.Request) {
 		pageSize = 20
 	}
 
-	attachments, totalCount, err := getChatService().ListAttachments(conversationID, claims.UserID, page, pageSize)
+	attachments, totalCount, err := getChatService(db).ListAttachments(conversationID, claims.UserID, page, pageSize)
 	if err != nil {
 		log.Printf("❌ Error listing attachments: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -1055,6 +1236,13 @@ func (h *ChatHandler) ListUsersForChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	search := r.URL.Query().Get("search")
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
@@ -1066,7 +1254,7 @@ func (h *ChatHandler) ListUsersForChat(w http.ResponseWriter, r *http.Request) {
 		pageSize = 100
 	}
 
-	users, totalCount, err := getChatService().ListUsersForChat(claims.UserID, search, page, pageSize)
+	users, totalCount, err := getChatService(db).ListUsersForChat(claims.UserID, search, page, pageSize)
 	if err != nil {
 		log.Printf("❌ Error listing users for chat: %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1090,6 +1278,13 @@ func (h *ChatHandler) StreamChatEvents(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -1122,7 +1317,7 @@ func (h *ChatHandler) StreamChatEvents(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-ticker.C:
-			events, err := getChatService().GetNewEventsForUser(claims.UserID, since)
+			events, err := getChatService(db).GetNewEventsForUser(claims.UserID, since)
 			if err == nil && len(events) > 0 {
 				for _, event := range events {
 					data, merr := json.Marshal(event)
