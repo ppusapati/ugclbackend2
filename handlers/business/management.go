@@ -3,6 +3,7 @@ package business
 import (
 	"encoding/json"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -883,65 +884,125 @@ func GetBusinessUsers(w http.ResponseWriter, r *http.Request) {
 	}
 	offset := (page - 1) * limit
 
-	// Get total count of unique users
-	var totalUsers int64
-	config.DB.Table("user_business_roles").
-		Select("DISTINCT user_id").
-		Joins("JOIN business_roles ON user_business_roles.business_role_id = business_roles.id").
-		Where("business_roles.business_vertical_id = ? AND user_business_roles.is_active = ?", businessID, true).
-		Count(&totalUsers)
+	// Union of user IDs from the legacy business-role table and unified RBAC
+	// role assignments scoped to this business vertical.
+	userIDSet := make(map[uuid.UUID]struct{})
 
-	// Get paginated user IDs first
-	var userIDs []uuid.UUID
+	var legacyUserIDs []uuid.UUID
 	config.DB.Table("user_business_roles").
 		Select("DISTINCT user_business_roles.user_id").
 		Joins("JOIN business_roles ON user_business_roles.business_role_id = business_roles.id").
 		Where("business_roles.business_vertical_id = ? AND user_business_roles.is_active = ?", businessID, true).
-		Limit(limit).
-		Offset(offset).
-		Pluck("user_id", &userIDs)
+		Pluck("user_id", &legacyUserIDs)
+	for _, id := range legacyUserIDs {
+		userIDSet[id] = struct{}{}
+	}
 
-	// Get all roles for these users
-	var userBusinessRoles []models.UserBusinessRole
-	if len(userIDs) > 0 {
-		if err := config.DB.Preload("User").
-			Preload("BusinessRole").
-			Joins("JOIN business_roles ON user_business_roles.business_role_id = business_roles.id").
-			Where("user_business_roles.user_id IN ? AND business_roles.business_vertical_id = ? AND user_business_roles.is_active = ?", userIDs, businessID, true).
-			Find(&userBusinessRoles).Error; err != nil {
+	var rbacUserIDs []uuid.UUID
+	config.DB.Table("user_role_assignments").
+		Select("DISTINCT user_role_assignments.user_id").
+		Joins("JOIN rbac_roles ON user_role_assignments.role_id = rbac_roles.id").
+		Where("rbac_roles.business_vertical_id = ? AND rbac_roles.scope_type = ? AND rbac_roles.is_active = ? AND user_role_assignments.is_active = ?",
+			businessID, models.RoleScopeBusinessVertical, true, true).
+		Pluck("user_id", &rbacUserIDs)
+	for _, id := range rbacUserIDs {
+		userIDSet[id] = struct{}{}
+	}
+
+	allUserIDs := make([]uuid.UUID, 0, len(userIDSet))
+	for id := range userIDSet {
+		allUserIDs = append(allUserIDs, id)
+	}
+	sort.Slice(allUserIDs, func(i, j int) bool { return allUserIDs[i].String() < allUserIDs[j].String() })
+
+	totalUsers := int64(len(allUserIDs))
+
+	pageStart := offset
+	if pageStart > len(allUserIDs) {
+		pageStart = len(allUserIDs)
+	}
+	pageEnd := pageStart + limit
+	if pageEnd > len(allUserIDs) {
+		pageEnd = len(allUserIDs)
+	}
+	pageUserIDs := allUserIDs[pageStart:pageEnd]
+
+	userMap := make(map[uuid.UUID]map[string]interface{})
+
+	if len(pageUserIDs) > 0 {
+		var userRecords []models.User
+		if err := config.DB.Where("id IN ?", pageUserIDs).Find(&userRecords).Error; err != nil {
 			http.Error(w, "DB error: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-	}
-
-	// Group by user
-	userMap := make(map[uuid.UUID]map[string]interface{})
-	for _, ubr := range userBusinessRoles {
-		if _, exists := userMap[ubr.UserID]; !exists {
-			userMap[ubr.UserID] = map[string]interface{}{
-				"id":    ubr.User.ID,
-				"name":  ubr.User.Name,
-				"email": ubr.User.Email,
-				"phone": ubr.User.Phone,
+		for _, u := range userRecords {
+			userMap[u.ID] = map[string]interface{}{
+				"id":    u.ID,
+				"name":  u.Name,
+				"email": u.Email,
+				"phone": u.Phone,
 				"roles": []map[string]interface{}{},
 			}
 		}
 
-		roles := userMap[ubr.UserID]["roles"].([]map[string]interface{})
-		roles = append(roles, map[string]interface{}{
-			"id":           ubr.BusinessRole.ID,
-			"name":         ubr.BusinessRole.Name,
-			"display_name": ubr.BusinessRole.DisplayName,
-			"level":        ubr.BusinessRole.Level,
-			"assigned_at":  ubr.AssignedAt,
-		})
-		userMap[ubr.UserID]["roles"] = roles
+		// Legacy business-role assignments for this page of users.
+		var userBusinessRoles []models.UserBusinessRole
+		if err := config.DB.Preload("BusinessRole").
+			Joins("JOIN business_roles ON user_business_roles.business_role_id = business_roles.id").
+			Where("user_business_roles.user_id IN ? AND business_roles.business_vertical_id = ? AND user_business_roles.is_active = ?", pageUserIDs, businessID, true).
+			Find(&userBusinessRoles).Error; err != nil {
+			http.Error(w, "DB error: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		for _, ubr := range userBusinessRoles {
+			entry, ok := userMap[ubr.UserID]
+			if !ok {
+				continue
+			}
+			roles := entry["roles"].([]map[string]interface{})
+			roles = append(roles, map[string]interface{}{
+				"id":           ubr.BusinessRole.ID,
+				"name":         ubr.BusinessRole.Name,
+				"display_name": ubr.BusinessRole.DisplayName,
+				"level":        ubr.BusinessRole.Level,
+				"assigned_at":  ubr.AssignedAt,
+			})
+			entry["roles"] = roles
+		}
+
+		// Unified RBAC role assignments for this page of users.
+		var rbacAssignments []models.UserRoleAssignment
+		if err := config.DB.Preload("Role").
+			Joins("JOIN rbac_roles ON user_role_assignments.role_id = rbac_roles.id").
+			Where("user_role_assignments.user_id IN ? AND rbac_roles.business_vertical_id = ? AND rbac_roles.scope_type = ? AND rbac_roles.is_active = ? AND user_role_assignments.is_active = ?",
+				pageUserIDs, businessID, models.RoleScopeBusinessVertical, true, true).
+			Find(&rbacAssignments).Error; err != nil {
+			http.Error(w, "DB error: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		for _, a := range rbacAssignments {
+			entry, ok := userMap[a.UserID]
+			if !ok {
+				continue
+			}
+			roles := entry["roles"].([]map[string]interface{})
+			roles = append(roles, map[string]interface{}{
+				"id":           a.Role.ID,
+				"name":         a.Role.Name,
+				"display_name": a.Role.DisplayName,
+				"level":        a.Role.Level,
+				"assigned_at":  a.AssignedAt,
+			})
+			entry["roles"] = roles
+		}
 	}
 
-	// Convert to array
-	var users []map[string]interface{}
-	for _, user := range userMap {
-		users = append(users, user)
+	// Preserve the sorted user-ID order in the response.
+	users := make([]map[string]interface{}, 0, len(pageUserIDs))
+	for _, id := range pageUserIDs {
+		if entry, ok := userMap[id]; ok {
+			users = append(users, entry)
+		}
 	}
 
 	// Return paginated response

@@ -187,12 +187,11 @@ func GetUser(r *http.Request) models.User {
 			return *cached
 		}
 		// Slow path: cache miss (e.g. test/debug endpoints bypassing auth middleware).
-		// Load from DB but do NOT write to cache — the partial preload here lacks
-		// RoleModel.Permissions which permission checks depend on.
+		// Load from DB but do NOT write to cache. Uses the same preload chain as
+		// LoadUserContext so RBAC role assignments (and legacy fields, when RBAC is
+		// disabled) are populated identically to the authoritative fast path.
 		var user models.User
-		if err := config.DB.
-			Preload("RoleModel").
-			Preload("UserBusinessRoles.BusinessRole").
+		if err := preloadAuthorizationGraph(config.DB).
 			First(&user, "id = ?", c.UserID).Error; err == nil {
 			return user
 		}

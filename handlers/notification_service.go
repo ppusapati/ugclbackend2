@@ -276,7 +276,11 @@ func (ns *NotificationService) resolveRecipients(
 	return result, nil
 }
 
-// getUsersByRole gets all user IDs with a specific role
+// getUsersByRole gets all user IDs with a specific global role. The recipient
+// configuration stores a legacy `roles.id`; this resolves it to the unified
+// RBAC role it was migrated into (via LegacySourceID) and also checks the
+// legacy table directly, so recipients resolve correctly regardless of
+// whether the assignment lives in the old or new system.
 func (ns *NotificationService) getUsersByRole(roleID string) ([]string, error) {
 	if roleID == "" {
 		return nil, nil
@@ -287,20 +291,43 @@ func (ns *NotificationService) getUsersByRole(roleID string) ([]string, error) {
 		return nil, err
 	}
 
+	userIDMap := make(map[string]bool)
+
+	// Unified RBAC: resolve the legacy role ID to its migrated rbac_roles row,
+	// then find users via active role assignments.
+	var rbacRole models.RBACRole
+	if err := ns.db.
+		Where("legacy_source_type = ? AND legacy_source_id = ?", "roles", roleUUID).
+		First(&rbacRole).Error; err == nil {
+		var assignments []models.UserRoleAssignment
+		if err := ns.db.Where("role_id = ? AND is_active = ?", rbacRole.ID, true).Find(&assignments).Error; err == nil {
+			for _, a := range assignments {
+				userIDMap[a.UserID.String()] = true
+			}
+		}
+	}
+
+	// Legacy: users still directly assigned this role via the old global-role column.
 	var users []models.User
 	if err := ns.db.Where("role_id = ?", roleUUID).Find(&users).Error; err != nil {
 		return nil, err
 	}
+	for _, user := range users {
+		userIDMap[user.ID.String()] = true
+	}
 
-	userIDs := make([]string, len(users))
-	for i, user := range users {
-		userIDs[i] = user.ID.String()
+	userIDs := make([]string, 0, len(userIDMap))
+	for userID := range userIDMap {
+		userIDs = append(userIDs, userID)
 	}
 
 	return userIDs, nil
 }
 
-// getUsersByBusinessRole gets all user IDs with a specific business role
+// getUsersByBusinessRole gets all user IDs with a specific business role. The
+// recipient configuration stores a legacy `business_roles.id`; this resolves
+// it to the unified RBAC role it was migrated into (via LegacySourceID) and
+// also checks the legacy table directly.
 func (ns *NotificationService) getUsersByBusinessRole(businessRoleID string, businessVerticalID uuid.UUID) ([]string, error) {
 	if businessRoleID == "" {
 		return nil, nil
@@ -311,31 +338,48 @@ func (ns *NotificationService) getUsersByBusinessRole(businessRoleID string, bus
 		return nil, err
 	}
 
-	var userBusinessRoles []models.UserBusinessRole
-	if err := ns.db.Where("business_role_id = ?", roleUUID).Find(&userBusinessRoles).Error; err != nil {
-		return nil, err
-	}
+	userIDMap := make(map[string]bool)
 
-	// Filter by business vertical
-	var filteredRoles []models.UserBusinessRole
-	for _, ubr := range userBusinessRoles {
-		var businessRole models.BusinessRole
-		if err := ns.db.First(&businessRole, ubr.BusinessRoleID).Error; err == nil {
-			if businessRole.BusinessVerticalID == businessVerticalID {
-				filteredRoles = append(filteredRoles, ubr)
+	// Unified RBAC: resolve the legacy business role ID to its migrated rbac_roles row.
+	var rbacRole models.RBACRole
+	if err := ns.db.
+		Where("legacy_source_type = ? AND legacy_source_id = ?", "business_roles", roleUUID).
+		First(&rbacRole).Error; err == nil {
+		if rbacRole.BusinessVerticalID == nil || *rbacRole.BusinessVerticalID == businessVerticalID {
+			var assignments []models.UserRoleAssignment
+			if err := ns.db.Where("role_id = ? AND is_active = ?", rbacRole.ID, true).Find(&assignments).Error; err == nil {
+				for _, a := range assignments {
+					userIDMap[a.UserID.String()] = true
+				}
 			}
 		}
 	}
 
-	userIDs := make([]string, len(filteredRoles))
-	for i, ubr := range filteredRoles {
-		userIDs[i] = ubr.UserID.String()
+	// Legacy: users still assigned this business role directly.
+	var userBusinessRoles []models.UserBusinessRole
+	if err := ns.db.Where("business_role_id = ? AND is_active = ?", roleUUID, true).Find(&userBusinessRoles).Error; err != nil {
+		return nil, err
+	}
+	for _, ubr := range userBusinessRoles {
+		var businessRole models.BusinessRole
+		if err := ns.db.First(&businessRole, ubr.BusinessRoleID).Error; err == nil {
+			if businessRole.BusinessVerticalID == businessVerticalID {
+				userIDMap[ubr.UserID.String()] = true
+			}
+		}
+	}
+
+	userIDs := make([]string, 0, len(userIDMap))
+	for userID := range userIDMap {
+		userIDs = append(userIDs, userID)
 	}
 
 	return userIDs, nil
 }
 
-// getUsersByPermission gets all user IDs with a specific permission
+// getUsersByPermission gets all user IDs with a specific permission, across
+// both the unified RBAC role assignments and the legacy global/business role
+// tables.
 func (ns *NotificationService) getUsersByPermission(permissionCode string) ([]string, error) {
 	if permissionCode == "" {
 		return nil, nil
@@ -348,6 +392,23 @@ func (ns *NotificationService) getUsersByPermission(permissionCode string) ([]st
 	}
 
 	userIDMap := make(map[string]bool)
+
+	// Unified RBAC: roles (global or business-vertical scoped) granting this permission.
+	var rbacRoleIDs []uuid.UUID
+	if err := ns.db.Table("rbac_role_permissions").
+		Where("permission_id = ?", permission.ID).
+		Pluck("role_id", &rbacRoleIDs).Error; err != nil {
+		return nil, err
+	}
+	if len(rbacRoleIDs) > 0 {
+		var assignments []models.UserRoleAssignment
+		if err := ns.db.Where("role_id IN ? AND is_active = ?", rbacRoleIDs, true).Find(&assignments).Error; err != nil {
+			return nil, err
+		}
+		for _, a := range assignments {
+			userIDMap[a.UserID.String()] = true
+		}
+	}
 
 	// Get all global roles with this permission
 	var rolePermissions []models.RolePermission
