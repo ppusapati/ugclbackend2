@@ -17,20 +17,19 @@ import (
 )
 
 // ProjectPhase1Handler exposes execution-planning and billing controls.
-type ProjectPhase1Handler struct {
-	db *gorm.DB
-}
+type ProjectPhase1Handler struct{}
 
 func NewProjectPhase1Handler() *ProjectPhase1Handler {
-	return &ProjectPhase1Handler{db: config.DB}
+	return &ProjectPhase1Handler{}
 }
 
 func (h *ProjectPhase1Handler) CreateWBSNode(w http.ResponseWriter, r *http.Request) {
-	project, claims, err := h.requireProjectScope(r)
+	db, cleanup, project, claims, err := h.requireProjectScope(r)
 	if err != nil {
 		h.writeErr(w, err)
 		return
 	}
+	defer cleanup()
 
 	var req struct {
 		ParentID         *uuid.UUID `json:"parent_id"`
@@ -78,7 +77,7 @@ func (h *ProjectPhase1Handler) CreateWBSNode(w http.ResponseWriter, r *http.Requ
 		CreatedBy:        claims.UserID,
 	}
 
-	if err := h.db.Create(&node).Error; err != nil {
+	if err := db.Create(&node).Error; err != nil {
 		http.Error(w, "failed to create WBS node", http.StatusInternalServerError)
 		return
 	}
@@ -87,13 +86,14 @@ func (h *ProjectPhase1Handler) CreateWBSNode(w http.ResponseWriter, r *http.Requ
 }
 
 func (h *ProjectPhase1Handler) ListWBSNodes(w http.ResponseWriter, r *http.Request) {
-	project, _, err := h.requireProjectScope(r)
+	db, cleanup, project, _, err := h.requireProjectScope(r)
 	if err != nil {
 		h.writeErr(w, err)
 		return
 	}
+	defer cleanup()
 
-	query := h.db.Where("project_id = ?", project.ID).Order("sort_order ASC, code ASC")
+	query := db.Where("project_id = ?", project.ID).Order("sort_order ASC, code ASC")
 	if parentID := r.URL.Query().Get("parent_id"); parentID != "" {
 		query = query.Where("parent_id = ?", parentID)
 	}
@@ -111,11 +111,12 @@ func (h *ProjectPhase1Handler) ListWBSNodes(w http.ResponseWriter, r *http.Reque
 }
 
 func (h *ProjectPhase1Handler) CreateTaskDependency(w http.ResponseWriter, r *http.Request) {
-	project, claims, err := h.requireProjectScope(r)
+	db, cleanup, project, claims, err := h.requireProjectScope(r)
 	if err != nil {
 		h.writeErr(w, err)
 		return
 	}
+	defer cleanup()
 
 	var req struct {
 		PredecessorTaskID uuid.UUID `json:"predecessor_task_id"`
@@ -144,7 +145,7 @@ func (h *ProjectPhase1Handler) CreateTaskDependency(w http.ResponseWriter, r *ht
 	}
 
 	var count int64
-	if err := h.db.Model(&models.Tasks{}).Where("project_id = ? AND id IN ?", project.ID, []uuid.UUID{req.PredecessorTaskID, req.SuccessorTaskID}).Count(&count).Error; err != nil || count != 2 {
+	if err := db.Model(&models.Tasks{}).Where("project_id = ? AND id IN ?", project.ID, []uuid.UUID{req.PredecessorTaskID, req.SuccessorTaskID}).Count(&count).Error; err != nil || count != 2 {
 		http.Error(w, "tasks must belong to the same project", http.StatusBadRequest)
 		return
 	}
@@ -160,7 +161,7 @@ func (h *ProjectPhase1Handler) CreateTaskDependency(w http.ResponseWriter, r *ht
 		CreatedBy:         claims.UserID,
 	}
 
-	if err := h.db.Create(&dep).Error; err != nil {
+	if err := db.Create(&dep).Error; err != nil {
 		http.Error(w, "failed to create task dependency", http.StatusInternalServerError)
 		return
 	}
@@ -169,13 +170,14 @@ func (h *ProjectPhase1Handler) CreateTaskDependency(w http.ResponseWriter, r *ht
 }
 
 func (h *ProjectPhase1Handler) ListTaskDependencies(w http.ResponseWriter, r *http.Request) {
-	project, _, err := h.requireProjectScope(r)
+	db, cleanup, project, _, err := h.requireProjectScope(r)
 	if err != nil {
 		h.writeErr(w, err)
 		return
 	}
+	defer cleanup()
 
-	query := h.db.Where("project_id = ?", project.ID).Order("created_at DESC")
+	query := db.Where("project_id = ?", project.ID).Order("created_at DESC")
 	if taskID := r.URL.Query().Get("task_id"); taskID != "" {
 		query = query.Where("predecessor_task_id = ? OR successor_task_id = ?", taskID, taskID)
 	}
@@ -190,11 +192,12 @@ func (h *ProjectPhase1Handler) ListTaskDependencies(w http.ResponseWriter, r *ht
 }
 
 func (h *ProjectPhase1Handler) CreateBOQItem(w http.ResponseWriter, r *http.Request) {
-	project, claims, err := h.requireProjectScope(r)
+	db, cleanup, project, claims, err := h.requireProjectScope(r)
 	if err != nil {
 		h.writeErr(w, err)
 		return
 	}
+	defer cleanup()
 
 	var req struct {
 		WBSNodeID       *uuid.UUID `json:"wbs_node_id"`
@@ -236,7 +239,7 @@ func (h *ProjectPhase1Handler) CreateBOQItem(w http.ResponseWriter, r *http.Requ
 		CreatedBy:       claims.UserID,
 	}
 
-	if err := h.db.Create(&item).Error; err != nil {
+	if err := db.Create(&item).Error; err != nil {
 		http.Error(w, "failed to create BOQ item", http.StatusInternalServerError)
 		return
 	}
@@ -245,13 +248,14 @@ func (h *ProjectPhase1Handler) CreateBOQItem(w http.ResponseWriter, r *http.Requ
 }
 
 func (h *ProjectPhase1Handler) ListBOQItems(w http.ResponseWriter, r *http.Request) {
-	project, _, err := h.requireProjectScope(r)
+	db, cleanup, project, _, err := h.requireProjectScope(r)
 	if err != nil {
 		h.writeErr(w, err)
 		return
 	}
+	defer cleanup()
 
-	query := h.db.Where("project_id = ?", project.ID).Order("code ASC")
+	query := db.Where("project_id = ?", project.ID).Order("code ASC")
 	if status := r.URL.Query().Get("status"); status != "" {
 		query = query.Where("status = ?", strings.ToLower(status))
 	}
@@ -266,11 +270,12 @@ func (h *ProjectPhase1Handler) ListBOQItems(w http.ResponseWriter, r *http.Reque
 }
 
 func (h *ProjectPhase1Handler) CreateMBEntry(w http.ResponseWriter, r *http.Request) {
-	project, claims, err := h.requireProjectScope(r)
+	db, cleanup, project, claims, err := h.requireProjectScope(r)
 	if err != nil {
 		h.writeErr(w, err)
 		return
 	}
+	defer cleanup()
 
 	var req struct {
 		BOQItemID       uuid.UUID  `json:"boq_item_id"`
@@ -292,7 +297,7 @@ func (h *ProjectPhase1Handler) CreateMBEntry(w http.ResponseWriter, r *http.Requ
 	}
 
 	var boq models.BOQItem
-	if err := h.db.First(&boq, "id = ? AND project_id = ?", req.BOQItemID, project.ID).Error; err != nil {
+	if err := db.First(&boq, "id = ? AND project_id = ?", req.BOQItemID, project.ID).Error; err != nil {
 		http.Error(w, "BOQ item not found", http.StatusBadRequest)
 		return
 	}
@@ -324,7 +329,7 @@ func (h *ProjectPhase1Handler) CreateMBEntry(w http.ResponseWriter, r *http.Requ
 		RecordedBy:      claims.UserID,
 	}
 
-	tx := h.db.Begin()
+	tx := db.Begin()
 	if err := tx.Create(&entry).Error; err != nil {
 		tx.Rollback()
 		http.Error(w, "failed to create MB entry", http.StatusInternalServerError)
@@ -351,13 +356,14 @@ func (h *ProjectPhase1Handler) CreateMBEntry(w http.ResponseWriter, r *http.Requ
 }
 
 func (h *ProjectPhase1Handler) ListMBEntries(w http.ResponseWriter, r *http.Request) {
-	project, _, err := h.requireProjectScope(r)
+	db, cleanup, project, _, err := h.requireProjectScope(r)
 	if err != nil {
 		h.writeErr(w, err)
 		return
 	}
+	defer cleanup()
 
-	query := h.db.Where("project_id = ?", project.ID).Order("measurement_date DESC")
+	query := db.Where("project_id = ?", project.ID).Order("measurement_date DESC")
 	if boqItemID := r.URL.Query().Get("boq_item_id"); boqItemID != "" {
 		query = query.Where("boq_item_id = ?", boqItemID)
 	}
@@ -372,11 +378,12 @@ func (h *ProjectPhase1Handler) ListMBEntries(w http.ResponseWriter, r *http.Requ
 }
 
 func (h *ProjectPhase1Handler) CreateRABill(w http.ResponseWriter, r *http.Request) {
-	project, claims, err := h.requireProjectScope(r)
+	db, cleanup, project, claims, err := h.requireProjectScope(r)
 	if err != nil {
 		h.writeErr(w, err)
 		return
 	}
+	defer cleanup()
 
 	var req struct {
 		BillNumber       string     `json:"bill_number"`
@@ -420,7 +427,7 @@ func (h *ProjectPhase1Handler) CreateRABill(w http.ResponseWriter, r *http.Reque
 		CreatedBy:        claims.UserID,
 	}
 
-	if err := h.db.Create(&bill).Error; err != nil {
+	if err := db.Create(&bill).Error; err != nil {
 		http.Error(w, "failed to create RA bill", http.StatusInternalServerError)
 		return
 	}
@@ -429,13 +436,14 @@ func (h *ProjectPhase1Handler) CreateRABill(w http.ResponseWriter, r *http.Reque
 }
 
 func (h *ProjectPhase1Handler) ListRABills(w http.ResponseWriter, r *http.Request) {
-	project, _, err := h.requireProjectScope(r)
+	db, cleanup, project, _, err := h.requireProjectScope(r)
 	if err != nil {
 		h.writeErr(w, err)
 		return
 	}
+	defer cleanup()
 
-	query := h.db.Where("project_id = ?", project.ID).Order("created_at DESC")
+	query := db.Where("project_id = ?", project.ID).Order("created_at DESC")
 	if status := r.URL.Query().Get("status"); status != "" {
 		query = query.Where("status = ?", strings.ToLower(status))
 	}
@@ -450,11 +458,12 @@ func (h *ProjectPhase1Handler) ListRABills(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *ProjectPhase1Handler) GetRABill(w http.ResponseWriter, r *http.Request) {
-	project, _, err := h.requireProjectScope(r)
+	db, cleanup, project, _, err := h.requireProjectScope(r)
 	if err != nil {
 		h.writeErr(w, err)
 		return
 	}
+	defer cleanup()
 
 	billID, err := uuid.Parse(mux.Vars(r)["billId"])
 	if err != nil {
@@ -463,7 +472,7 @@ func (h *ProjectPhase1Handler) GetRABill(w http.ResponseWriter, r *http.Request)
 	}
 
 	var bill models.RABill
-	if err := h.db.Preload("Lines").First(&bill, "id = ? AND project_id = ?", billID, project.ID).Error; err != nil {
+	if err := db.Preload("Lines").First(&bill, "id = ? AND project_id = ?", billID, project.ID).Error; err != nil {
 		http.Error(w, "RA bill not found", http.StatusNotFound)
 		return
 	}
@@ -472,11 +481,12 @@ func (h *ProjectPhase1Handler) GetRABill(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *ProjectPhase1Handler) AddRABillLine(w http.ResponseWriter, r *http.Request) {
-	project, claims, err := h.requireProjectScope(r)
+	db, cleanup, project, claims, err := h.requireProjectScope(r)
 	if err != nil {
 		h.writeErr(w, err)
 		return
 	}
+	defer cleanup()
 
 	vars := mux.Vars(r)
 	billID, err := uuid.Parse(vars["billId"])
@@ -503,7 +513,7 @@ func (h *ProjectPhase1Handler) AddRABillLine(w http.ResponseWriter, r *http.Requ
 	}
 
 	var bill models.RABill
-	if err := h.db.First(&bill, "id = ? AND project_id = ?", billID, project.ID).Error; err != nil {
+	if err := db.First(&bill, "id = ? AND project_id = ?", billID, project.ID).Error; err != nil {
 		http.Error(w, "RA bill not found", http.StatusNotFound)
 		return
 	}
@@ -513,7 +523,7 @@ func (h *ProjectPhase1Handler) AddRABillLine(w http.ResponseWriter, r *http.Requ
 	}
 
 	var boq models.BOQItem
-	if err := h.db.First(&boq, "id = ? AND project_id = ?", req.BOQItemID, project.ID).Error; err != nil {
+	if err := db.First(&boq, "id = ? AND project_id = ?", req.BOQItemID, project.ID).Error; err != nil {
 		http.Error(w, "BOQ item not found", http.StatusBadRequest)
 		return
 	}
@@ -537,7 +547,7 @@ func (h *ProjectPhase1Handler) AddRABillLine(w http.ResponseWriter, r *http.Requ
 		LineRemark: req.Remark,
 	}
 
-	tx := h.db.Begin()
+	tx := db.Begin()
 	if err := tx.Create(&line).Error; err != nil {
 		tx.Rollback()
 		http.Error(w, "failed to add RA bill line", http.StatusInternalServerError)
@@ -598,11 +608,12 @@ func (h *ProjectPhase1Handler) MarkRABillPaid(w http.ResponseWriter, r *http.Req
 }
 
 func (h *ProjectPhase1Handler) transitionRABillStatus(w http.ResponseWriter, r *http.Request, nextStatus string) {
-	project, claims, err := h.requireProjectScope(r)
+	db, cleanup, project, claims, err := h.requireProjectScope(r)
 	if err != nil {
 		h.writeErr(w, err)
 		return
 	}
+	defer cleanup()
 
 	billID, err := uuid.Parse(mux.Vars(r)["billId"])
 	if err != nil {
@@ -611,7 +622,7 @@ func (h *ProjectPhase1Handler) transitionRABillStatus(w http.ResponseWriter, r *
 	}
 
 	var bill models.RABill
-	if err := h.db.First(&bill, "id = ? AND project_id = ?", billID, project.ID).Error; err != nil {
+	if err := db.First(&bill, "id = ? AND project_id = ?", billID, project.ID).Error; err != nil {
 		http.Error(w, "RA bill not found", http.StatusNotFound)
 		return
 	}
@@ -638,12 +649,12 @@ func (h *ProjectPhase1Handler) transitionRABillStatus(w http.ResponseWriter, r *
 		updates["payment_reference"] = strings.TrimSpace(r.URL.Query().Get("payment_reference"))
 	}
 
-	if err := h.db.Model(&bill).Updates(updates).Error; err != nil {
+	if err := db.Model(&bill).Updates(updates).Error; err != nil {
 		http.Error(w, "failed to update RA bill status", http.StatusInternalServerError)
 		return
 	}
 
-	if err := h.db.First(&bill, "id = ?", bill.ID).Error; err != nil {
+	if err := db.First(&bill, "id = ?", bill.ID).Error; err != nil {
 		http.Error(w, "failed to load RA bill", http.StatusInternalServerError)
 		return
 	}
@@ -665,18 +676,23 @@ func isValidBillTransition(current, next string) bool {
 	return nextMap[next]
 }
 
-func (h *ProjectPhase1Handler) requireProjectScope(r *http.Request) (*models.Project, *middleware.Claims, error) {
+func (h *ProjectPhase1Handler) requireProjectScope(r *http.Request) (*gorm.DB, func() error, *models.Project, *middleware.Claims, error) {
 	projectID, err := uuid.Parse(mux.Vars(r)["id"])
 	if err != nil {
-		return nil, nil, apiError{status: http.StatusBadRequest, message: "invalid project id"}
+		return nil, nil, nil, nil, apiError{status: http.StatusBadRequest, message: "invalid project id"}
 	}
 
 	claims := middleware.GetClaims(r)
 	if claims == nil {
-		return nil, nil, apiError{status: http.StatusUnauthorized, message: "unauthorized"}
+		return nil, nil, nil, nil, apiError{status: http.StatusUnauthorized, message: "unauthorized"}
 	}
 
-	query := h.db.Model(&models.Project{}).Where("id = ?", projectID)
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		return nil, nil, nil, nil, apiError{status: http.StatusInternalServerError, message: "database unavailable"}
+	}
+
+	query := db.Model(&models.Project{}).Where("id = ?", projectID)
 	if businessContext := middleware.GetUserBusinessContext(r); businessContext != nil {
 		if businessID, ok := businessContext["business_id"].(uuid.UUID); ok && businessID != uuid.Nil {
 			query = query.Where("business_vertical_id = ?", businessID)
@@ -685,13 +701,14 @@ func (h *ProjectPhase1Handler) requireProjectScope(r *http.Request) (*models.Pro
 
 	var project models.Project
 	if err := query.First(&project).Error; err != nil {
+		cleanup()
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, nil, apiError{status: http.StatusNotFound, message: "project not found"}
+			return nil, nil, nil, nil, apiError{status: http.StatusNotFound, message: "project not found"}
 		}
-		return nil, nil, apiError{status: http.StatusInternalServerError, message: "failed to load project"}
+		return nil, nil, nil, nil, apiError{status: http.StatusInternalServerError, message: "failed to load project"}
 	}
 
-	return &project, claims, nil
+	return db, cleanup, &project, claims, nil
 }
 
 type apiError struct {

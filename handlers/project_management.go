@@ -15,7 +15,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
-	"gorm.io/gorm"
 )
 
 func sanitizeText(input string, maxLen int, fallback string) string {
@@ -33,14 +32,12 @@ func sanitizeText(input string, maxLen int, fallback string) string {
 
 // ProjectHandler handles project management operations
 type ProjectHandler struct {
-	db        *gorm.DB
 	kmzParser *KMZParser
 }
 
 // NewProjectHandler creates a new project handler
 func NewProjectHandler() *ProjectHandler {
 	return &ProjectHandler{
-		db:        config.DB,
 		kmzParser: NewKMZParser(),
 	}
 }
@@ -70,6 +67,13 @@ type UpdateProjectRequest struct {
 
 // CreateProject creates a new project
 func (h *ProjectHandler) CreateProject(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var req CreateProjectRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
@@ -105,7 +109,7 @@ func (h *ProjectHandler) CreateProject(w http.ResponseWriter, r *http.Request) {
 		project.Currency = "INR"
 	}
 
-	if err := h.db.Create(&project).Error; err != nil {
+	if err := db.Create(&project).Error; err != nil {
 		log.Printf("❌ Failed to create project: %v", err)
 		http.Error(w, "Failed to create project", http.StatusInternalServerError)
 		return
@@ -121,12 +125,19 @@ func (h *ProjectHandler) CreateProject(w http.ResponseWriter, r *http.Request) {
 
 // UploadKMZ handles KMZ file upload and processing
 func (h *ProjectHandler) UploadKMZ(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	projectID := vars["id"]
 
 	// Get project
 	var project models.Project
-	if err := h.db.First(&project, "id = ?", projectID).Error; err != nil {
+	if err := db.First(&project, "id = ?", projectID).Error; err != nil {
 		http.Error(w, "Project not found", http.StatusNotFound)
 		return
 	}
@@ -161,7 +172,7 @@ func (h *ProjectHandler) UploadKMZ(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Start transaction
-	tx := h.db.Begin()
+	tx := db.Begin()
 	defer func() {
 		if r := recover(); r != nil {
 			tx.Rollback()
@@ -305,11 +316,18 @@ func (h *ProjectHandler) UploadKMZ(w http.ResponseWriter, r *http.Request) {
 
 // GetProject retrieves a project by ID
 func (h *ProjectHandler) GetProject(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	projectID := vars["id"]
 
 	var project models.Project
-	if err := h.db.
+	if err := db.
 		Preload("BusinessVertical").
 		Preload("Zones").
 		Preload("Tasks").
@@ -324,9 +342,16 @@ func (h *ProjectHandler) GetProject(w http.ResponseWriter, r *http.Request) {
 
 // ListProjects lists all projects with filters
 func (h *ProjectHandler) ListProjects(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var projects []models.Project
 
-	query := h.db.Preload("BusinessVertical")
+	query := db.Preload("BusinessVertical")
 
 	// Apply filters
 	if status := r.URL.Query().Get("status"); status != "" {
@@ -350,6 +375,13 @@ func (h *ProjectHandler) ListProjects(w http.ResponseWriter, r *http.Request) {
 
 // UpdateProject updates a project
 func (h *ProjectHandler) UpdateProject(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	projectID := vars["id"]
 
@@ -360,7 +392,7 @@ func (h *ProjectHandler) UpdateProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var project models.Project
-	if err := h.db.First(&project, "id = ?", projectID).Error; err != nil {
+	if err := db.First(&project, "id = ?", projectID).Error; err != nil {
 		http.Error(w, "Project not found", http.StatusNotFound)
 		return
 	}
@@ -394,7 +426,7 @@ func (h *ProjectHandler) UpdateProject(w http.ResponseWriter, r *http.Request) {
 
 	project.UpdatedBy = userID
 
-	if err := h.db.Save(&project).Error; err != nil {
+	if err := db.Save(&project).Error; err != nil {
 		http.Error(w, "Failed to update project", http.StatusInternalServerError)
 		return
 	}
@@ -409,16 +441,23 @@ func (h *ProjectHandler) UpdateProject(w http.ResponseWriter, r *http.Request) {
 
 // DeleteProject soft deletes a project
 func (h *ProjectHandler) DeleteProject(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	projectID := vars["id"]
 
 	var project models.Project
-	if err := h.db.First(&project, "id = ?", projectID).Error; err != nil {
+	if err := db.First(&project, "id = ?", projectID).Error; err != nil {
 		http.Error(w, "Project not found", http.StatusNotFound)
 		return
 	}
 
-	if err := h.db.Delete(&project).Error; err != nil {
+	if err := db.Delete(&project).Error; err != nil {
 		http.Error(w, "Failed to delete project", http.StatusInternalServerError)
 		return
 	}
@@ -432,11 +471,18 @@ func (h *ProjectHandler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 
 // GetProjectZones retrieves all zones for a project
 func (h *ProjectHandler) GetProjectZones(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	projectID := vars["id"]
 
 	var zones []models.Zone
-	if err := h.db.Where("project_id = ?", projectID).Find(&zones).Error; err != nil {
+	if err := db.Where("project_id = ?", projectID).Find(&zones).Error; err != nil {
 		http.Error(w, "Failed to fetch zones", http.StatusInternalServerError)
 		return
 	}
@@ -450,11 +496,18 @@ func (h *ProjectHandler) GetProjectZones(w http.ResponseWriter, r *http.Request)
 
 // GetProjectNodes retrieves all nodes for a project
 func (h *ProjectHandler) GetProjectNodes(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	projectID := vars["id"]
 
 	var nodes []models.Node
-	query := h.db.Where("project_id = ?", projectID)
+	query := db.Where("project_id = ?", projectID)
 
 	// Filter by node type
 	if nodeType := r.URL.Query().Get("node_type"); nodeType != "" {
@@ -480,11 +533,18 @@ func (h *ProjectHandler) GetProjectNodes(w http.ResponseWriter, r *http.Request)
 
 // GetProjectGeoJSON retrieves the GeoJSON data for a project
 func (h *ProjectHandler) GetProjectGeoJSON(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	projectID := vars["id"]
 
 	var project models.Project
-	if err := h.db.First(&project, "id = ?", projectID).Error; err != nil {
+	if err := db.First(&project, "id = ?", projectID).Error; err != nil {
 		http.Error(w, "Project not found", http.StatusNotFound)
 		return
 	}
@@ -507,28 +567,35 @@ func (h *ProjectHandler) GetProjectGeoJSON(w http.ResponseWriter, r *http.Reques
 
 // GetProjectStats retrieves statistics for a project
 func (h *ProjectHandler) GetProjectStats(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	projectID := vars["id"]
 
 	var project models.Project
-	if err := h.db.First(&project, "id = ?", projectID).Error; err != nil {
+	if err := db.First(&project, "id = ?", projectID).Error; err != nil {
 		http.Error(w, "Project not found", http.StatusNotFound)
 		return
 	}
 
 	// Count zones
 	var zoneCount int64
-	h.db.Model(&models.Zone{}).Where("project_id = ?", projectID).Count(&zoneCount)
+	db.Model(&models.Zone{}).Where("project_id = ?", projectID).Count(&zoneCount)
 
 	// Count nodes by type
 	var totalNodes int64
-	h.db.Model(&models.Node{}).Where("project_id = ?", projectID).Count(&totalNodes)
+	db.Model(&models.Node{}).Where("project_id = ?", projectID).Count(&totalNodes)
 
 	var nodeStats []struct {
 		NodeType string
 		Count    int64
 	}
-	h.db.Model(&models.Node{}).
+	db.Model(&models.Node{}).
 		Select("node_type, count(*) as count").
 		Where("project_id = ?", projectID).
 		Group("node_type").
@@ -536,13 +603,13 @@ func (h *ProjectHandler) GetProjectStats(w http.ResponseWriter, r *http.Request)
 
 	// Count tasks by status
 	var totalTasks int64
-	h.db.Model(&models.Tasks{}).Where("project_id = ?", projectID).Count(&totalTasks)
+	db.Model(&models.Tasks{}).Where("project_id = ?", projectID).Count(&totalTasks)
 
 	var taskStats []struct {
 		Status string
 		Count  int64
 	}
-	h.db.Model(&models.Tasks{}).
+	db.Model(&models.Tasks{}).
 		Select("status, count(*) as count").
 		Where("project_id = ?", projectID).
 		Group("status").
@@ -566,7 +633,7 @@ func (h *ProjectHandler) GetProjectStats(w http.ResponseWriter, r *http.Request)
 		TotalAllocated float64
 		TotalSpent     float64
 	}
-	h.db.Model(&models.BudgetAllocation{}).
+	db.Model(&models.BudgetAllocation{}).
 		Select("COALESCE(SUM(planned_amount), 0) as total_allocated, COALESCE(SUM(actual_amount), 0) as total_spent").
 		Where("project_id = ?", projectID).
 		Scan(&budgetStats)
