@@ -30,10 +30,10 @@ type FieldDef struct {
 }
 
 const (
-	defaultDashboardsCacheTTL      = 20 * time.Second
+	defaultDashboardsCacheTTL       = 20 * time.Second
 	defaultDashboardExecuteCacheTTL = 15 * time.Second
-	defaultDashboardExecuteTimeout = 20 * time.Second
-	defaultDashboardExecWorkers    = 4
+	defaultDashboardExecuteTimeout  = 20 * time.Second
+	defaultDashboardExecWorkers     = 4
 )
 
 type dashboardCacheEntry struct {
@@ -560,13 +560,20 @@ func GetReportDefinitions(w http.ResponseWriter, r *http.Request) {
 	category := r.URL.Query().Get("category")
 	reportType := r.URL.Query().Get("report_type")
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	// Phase 1: load only ACL-relevant columns so large JSONB fields (data_sources,
 	// fields, filters, groupings) are not transferred for every row during the filter pass.
 	aclCols := "id, code, name, description, report_type, chart_type, category, " +
 		"business_vertical_id, is_public, allowed_roles, created_by, is_active, " +
 		"is_favorite, deleted_at, created_at, updated_at"
 
-	query := config.DB.Select(aclCols).Where("deleted_at IS NULL")
+	query := db.Select(aclCols).Where("deleted_at IS NULL")
 
 	if businessVerticalID != "" {
 		query = query.Where("business_vertical_id = ?", businessVerticalID)
@@ -606,8 +613,15 @@ func GetReportDefinition(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	reportID := vars["id"]
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var report models.ReportDefinition
-	if err := config.DB.Where("id = ? AND deleted_at IS NULL", reportID).First(&report).Error; err != nil {
+	if err := db.Where("id = ? AND deleted_at IS NULL", reportID).First(&report).Error; err != nil {
 		http.Error(w, "Report not found", http.StatusNotFound)
 		return
 	}
@@ -627,8 +641,15 @@ func UpdateReportDefinition(w http.ResponseWriter, r *http.Request) {
 	reportID := vars["id"]
 	claims := middleware.GetClaims(r)
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var report models.ReportDefinition
-	if err := config.DB.Where("id = ? AND deleted_at IS NULL", reportID).First(&report).Error; err != nil {
+	if err := db.Where("id = ? AND deleted_at IS NULL", reportID).First(&report).Error; err != nil {
 		http.Error(w, "Report not found", http.StatusNotFound)
 		return
 	}
@@ -648,7 +669,7 @@ func UpdateReportDefinition(w http.ResponseWriter, r *http.Request) {
 	req["updated_by"] = claims.UserID
 	req["updated_at"] = time.Now()
 
-	tx := config.DB.Begin()
+	tx := db.Begin()
 	if tx.Error != nil {
 		http.Error(w, "Failed to update report", http.StatusInternalServerError)
 		return
@@ -689,8 +710,15 @@ func DeleteReportDefinition(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	reportID := vars["id"]
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var report models.ReportDefinition
-	if err := config.DB.Where("id = ?", reportID).First(&report).Error; err != nil {
+	if err := db.Where("id = ?", reportID).First(&report).Error; err != nil {
 		http.Error(w, "Report not found", http.StatusNotFound)
 		return
 	}
@@ -701,7 +729,7 @@ func DeleteReportDefinition(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := time.Now()
-	if err := config.DB.Model(&report).Update("deleted_at", now).Error; err != nil {
+	if err := db.Model(&report).Update("deleted_at", now).Error; err != nil {
 		http.Error(w, "Failed to delete report", http.StatusInternalServerError)
 		return
 	}
@@ -716,8 +744,15 @@ func ExecuteReport(w http.ResponseWriter, r *http.Request) {
 	reportID := vars["id"]
 	claims := middleware.GetClaims(r)
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var report models.ReportDefinition
-	if err := config.DB.Where("id = ? AND deleted_at IS NULL", reportID).First(&report).Error; err != nil {
+	if err := db.Where("id = ? AND deleted_at IS NULL", reportID).First(&report).Error; err != nil {
 		http.Error(w, "Report not found", http.StatusNotFound)
 		return
 	}
@@ -733,7 +768,7 @@ func ExecuteReport(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&req)
 
-	if err := ensureReportViewsForDataSources(config.DB, report.DataSources); err != nil {
+	if err := ensureReportViewsForDataSources(db, report.DataSources); err != nil {
 		http.Error(w, fmt.Sprintf("failed to sync report views: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -766,9 +801,16 @@ func GetSubmissionWorkflowHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	// Fetch full transition history ordered chronologically.
 	var transitions []models.WorkflowTransition
-	if err := config.DB.
+	if err := db.
 		Where("submission_id = ?", submissionID).
 		Order("transitioned_at ASC").
 		Find(&transitions).Error; err != nil {
@@ -778,7 +820,7 @@ func GetSubmissionWorkflowHistory(w http.ResponseWriter, r *http.Request) {
 
 	// Also fetch the current submission state for the header.
 	var submission models.FormSubmission
-	submissionFound := config.DB.
+	submissionFound := db.
 		Select("id", "form_code", "current_state", "submitted_by", "submitted_at").
 		First(&submission, "id = ? AND deleted_at IS NULL", submissionID).Error == nil
 
@@ -1383,7 +1425,7 @@ func CloneReport(w http.ResponseWriter, r *http.Request) {
 		CreatedBy:          claims.UserID,
 	}
 
-	if err := config.DB.Create(&newReport).Error; err != nil {
+	if err := db.Create(&newReport).Error; err != nil {
 		http.Error(w, "Failed to clone report", http.StatusInternalServerError)
 		return
 	}
@@ -1660,40 +1702,40 @@ func ExecuteDashboard(w http.ResponseWriter, r *http.Request) {
 			defer wg.Done()
 			defer func() { <-semaphore }()
 
-		wr := widgetResult{
-			WidgetID: wgt.ID.String(),
-			Title:    wgt.Title,
-			Position: wgt.Position,
-		}
+			wr := widgetResult{
+				WidgetID: wgt.ID.String(),
+				Title:    wgt.Title,
+				Position: wgt.Position,
+			}
 
-		if wgt.Report == nil {
-			wr.Error = "report definition not found"
+			if wgt.Report == nil {
+				wr.Error = "report definition not found"
+				results[i] = wr
+				return
+			}
+
+			if !canViewReport(r, wgt.Report) {
+				wr.Error = "access denied"
+				results[i] = wr
+				return
+			}
+
+			if err := ensureReportViewsForDataSources(db.WithContext(execCtx), wgt.Report.DataSources); err != nil {
+				wr.Error = fmt.Sprintf("failed to sync report views: %v", err)
+				results[i] = wr
+				return
+			}
+
+			filters := req.WidgetFilters[wgt.ID.String()]
+			engine := NewReportEngine()
+			result, err := engine.ExecuteReport(wgt.Report, filters, claims.UserID)
+			if err != nil {
+				wr.Error = err.Error()
+			} else {
+				wr.Report = wgt.Report
+				wr.Result = result
+			}
 			results[i] = wr
-			return
-		}
-
-		if !canViewReport(r, wgt.Report) {
-			wr.Error = "access denied"
-			results[i] = wr
-			return
-		}
-
-		if err := ensureReportViewsForDataSources(db.WithContext(execCtx), wgt.Report.DataSources); err != nil {
-			wr.Error = fmt.Sprintf("failed to sync report views: %v", err)
-			results[i] = wr
-			return
-		}
-
-		filters := req.WidgetFilters[wgt.ID.String()]
-		engine := NewReportEngine()
-		result, err := engine.ExecuteReport(wgt.Report, filters, claims.UserID)
-		if err != nil {
-			wr.Error = err.Error()
-		} else {
-			wr.Report = wgt.Report
-			wr.Result = result
-		}
-		results[i] = wr
 		}(idx, widget)
 	}
 	wg.Wait()
