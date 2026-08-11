@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/models"
 	"p9e.in/ugcl/utils"
 
@@ -26,10 +25,10 @@ type WorkflowEngineDedicated struct {
 var lookupIdentifierPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // NewWorkflowEngineDedicated creates a new workflow engine instance that uses dedicated tables
-func NewWorkflowEngineDedicated() *WorkflowEngineDedicated {
+func NewWorkflowEngineDedicated(db *gorm.DB) *WorkflowEngineDedicated {
 	return &WorkflowEngineDedicated{
-		db:           config.DB,
-		tableManager: NewFormTableManager(),
+		db:           db,
+		tableManager: NewFormTableManager(db),
 	}
 }
 
@@ -497,7 +496,7 @@ func (we *WorkflowEngineDedicated) TransitionStateDedicated(
 
 	// Process notifications (if configured)
 	// Note: You may need to adapt notification processing for dedicated tables
-	notifService := NewNotificationService()
+	notifService := NewNotificationService(we.db)
 	// Create a temporary FormSubmission-like structure for notification processing
 	tempSubmission := &models.FormSubmission{
 		ID:                 recordID,

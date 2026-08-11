@@ -203,7 +203,7 @@ func CreateModule(w http.ResponseWriter, r *http.Request) {
 	log.Println("Module to create:", module)
 
 	// Generate schema name from module code
-	schemaManager := handlers.NewSchemaManager()
+	schemaManager := handlers.NewSchemaManager(db)
 	schemaName := schemaManager.GenerateSchemaName(module.Code)
 	module.SchemaName = schemaName
 

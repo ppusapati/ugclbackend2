@@ -9,7 +9,6 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
-	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/models"
 )
 
@@ -19,11 +18,11 @@ type FormTableManager struct {
 	schemaManager *SchemaManager
 }
 
-// NewFormTableManager creates a new form table manager
-func NewFormTableManager() *FormTableManager {
+// NewFormTableManager creates a new form table manager bound to a tenant-scoped db
+func NewFormTableManager(db *gorm.DB) *FormTableManager {
 	return &FormTableManager{
-		db:            config.DB,
-		schemaManager: NewSchemaManager(),
+		db:            db,
+		schemaManager: NewSchemaManager(db),
 	}
 }
 

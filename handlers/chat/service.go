@@ -1224,7 +1224,7 @@ func (s *ChatService) SendChatNotifications(message *models.ChatMessage, senderN
 
 	// Create notifications for each participant
 	now := time.Now()
-	notificationService := handlers.NewNotificationService()
+	notificationService := handlers.NewNotificationService(s.db)
 	for _, participant := range participants {
 		// Check if user has muted this conversation
 		if participant.IsMuted {

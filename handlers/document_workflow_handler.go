@@ -629,7 +629,7 @@ func TransitionDocumentWorkflowHandler(w http.ResponseWriter, r *http.Request) {
 			Workflow: workflowDef,
 		}
 
-		notificationService := NewNotificationService()
+		notificationService := NewNotificationService(db)
 		if err := notificationService.ProcessTransitionNotifications(
 			&notificationSubmission,
 			&transitionEvent,

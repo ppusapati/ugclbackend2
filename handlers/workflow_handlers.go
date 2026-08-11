@@ -13,12 +13,12 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"golang.org/x/sync/singleflight"
+	"gorm.io/gorm"
 	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/middleware"
 	"p9e.in/ugcl/models"
 )
 
-var workflowEngine *WorkflowEngine
 
 const workflowsCacheTTL = 10 * time.Minute
 
@@ -62,12 +62,9 @@ func invalidateWorkflowsCache() {
 	workflowsCache.mu.Unlock()
 }
 
-// getWorkflowEngine returns the workflow engine instance, initializing it if needed
-func getWorkflowEngine() *WorkflowEngine {
-	if workflowEngine == nil {
-		workflowEngine = NewWorkflowEngine()
-	}
-	return workflowEngine
+// getWorkflowEngine returns a workflow engine instance bound to the given tenant-scoped db
+func getWorkflowEngine(db *gorm.DB) *WorkflowEngine {
+	return NewWorkflowEngine(db)
 }
 
 // SubmitFormRequest represents the request body for form submission
@@ -176,6 +173,13 @@ func CreateFormSubmission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	formCode := vars["formCode"]
 	businessCode := vars["businessCode"]
@@ -208,7 +212,7 @@ func CreateFormSubmission(w http.ResponseWriter, r *http.Request) {
 	log.Printf("📝 Creating form submission: %s for business: %s, user: %s", formCode, businessCode, claims.UserID)
 
 	// Create submission
-	submission, err := getWorkflowEngine().CreateSubmission(
+	submission, err := getWorkflowEngine(db).CreateSubmission(
 		formCode,
 		businessID,
 		req.SiteID,
@@ -242,6 +246,13 @@ func GetFormSubmissions(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
 
 	vars := mux.Vars(r)
 	formCode := vars["formCode"]
@@ -300,11 +311,10 @@ func GetFormSubmissions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var submissions []models.FormSubmission
-	var err error
 	if usePagination {
-		submissions, err = getWorkflowEngine().GetSubmissionsByFormPage(formCode, businessID, filters, pageSize+1, cursor)
+		submissions, err = getWorkflowEngine(db).GetSubmissionsByFormPage(formCode, businessID, filters, pageSize+1, cursor)
 	} else {
-		submissions, err = getWorkflowEngine().GetSubmissionsByForm(formCode, businessID, filters)
+		submissions, err = getWorkflowEngine(db).GetSubmissionsByForm(formCode, businessID, filters)
 	}
 	if err != nil {
 		log.Printf("❌ Error fetching submissions: %v", err)
@@ -331,7 +341,7 @@ func GetFormSubmissions(w http.ResponseWriter, r *http.Request) {
 		dtos[i] = sub.ToDTO(sub.Workflow)
 		if includeResolved {
 			fieldIndex := buildFieldSchemaIndex(&sub)
-			resolvedFields, resolvedFormData := resolveSubmissionFormData(&sub, fieldIndex)
+			resolvedFields, resolvedFormData := resolveSubmissionFormData(db, &sub, fieldIndex)
 			resolvedItems = append(resolvedItems, map[string]interface{}{
 				"submission":         dtos[i],
 				"resolved_fields":    resolvedFields,
@@ -366,6 +376,13 @@ func GetFormSubmission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	submissionIDStr := vars["submissionId"]
 
@@ -375,7 +392,7 @@ func GetFormSubmission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	submission, err := getWorkflowEngine().GetSubmission(submissionID)
+	submission, err := getWorkflowEngine(db).GetSubmission(submissionID)
 	if err != nil {
 		log.Printf("❌ Error fetching submission: %v", err)
 		http.Error(w, "submission not found", http.StatusNotFound)
@@ -441,6 +458,13 @@ func GetResolvedFormSubmission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	submissionIDStr := vars["submissionId"]
 
@@ -450,7 +474,7 @@ func GetResolvedFormSubmission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	submission, err := getWorkflowEngine().GetSubmission(submissionID)
+	submission, err := getWorkflowEngine(db).GetSubmission(submissionID)
 	if err != nil {
 		log.Printf("Error fetching submission: %v", err)
 		http.Error(w, "submission not found", http.StatusNotFound)
@@ -470,7 +494,7 @@ func GetResolvedFormSubmission(w http.ResponseWriter, r *http.Request) {
 	}
 
 	fieldIndex := buildFieldSchemaIndex(submission)
-	resolvedFields, resolvedFormData := resolveSubmissionFormData(submission, fieldIndex)
+	resolvedFields, resolvedFormData := resolveSubmissionFormData(db, submission, fieldIndex)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -504,7 +528,7 @@ func buildFieldSchemaIndex(submission *models.FormSubmission) map[string]formFie
 	return index
 }
 
-func resolveSubmissionFormData(submission *models.FormSubmission, fieldIndex map[string]formFieldSchema) ([]resolvedFieldValue, map[string]interface{}) {
+func resolveSubmissionFormData(db *gorm.DB, submission *models.FormSubmission, fieldIndex map[string]formFieldSchema) ([]resolvedFieldValue, map[string]interface{}) {
 	resolved := make([]resolvedFieldValue, 0)
 	resolvedMap := make(map[string]interface{})
 
@@ -535,7 +559,7 @@ func resolveSubmissionFormData(submission *models.FormSubmission, fieldIndex map
 			if optionLabel, ok := resolveFromStaticOptions(schema.Options, rawValue); ok {
 				displayValue = optionLabel
 				isResolved = true
-			} else if siteName, ok := resolveFromSiteReference(schema, rawValue); ok {
+			} else if siteName, ok := resolveFromSiteReference(db, schema, rawValue); ok {
 				displayValue = siteName
 				isResolved = true
 			}
@@ -564,7 +588,7 @@ func resolveFromStaticOptions(options []formFieldOption, rawValue interface{}) (
 	return "", false
 }
 
-func resolveFromSiteReference(schema formFieldSchema, rawValue interface{}) (string, bool) {
+func resolveFromSiteReference(db *gorm.DB, schema formFieldSchema, rawValue interface{}) (string, bool) {
 	if schema.DataSource != "api" || schema.APIEndpoint == "" {
 		return "", false
 	}
@@ -584,7 +608,7 @@ func resolveFromSiteReference(schema formFieldSchema, rawValue interface{}) (str
 	}
 
 	var site models.Site
-	if err := config.DB.Select("id", "name").First(&site, "id = ?", siteID).Error; err != nil {
+	if err := db.Select("id", "name").First(&site, "id = ?", siteID).Error; err != nil {
 		return "", false
 	}
 
@@ -599,6 +623,13 @@ func UpdateFormSubmission(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
 
 	vars := mux.Vars(r)
 	submissionIDStr := vars["submissionId"]
@@ -621,7 +652,7 @@ func UpdateFormSubmission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	submission, err := getWorkflowEngine().UpdateSubmissionData(submissionID, normalizedFormData, latitude, longitude, claims.UserID)
+	submission, err := getWorkflowEngine(db).UpdateSubmissionData(submissionID, normalizedFormData, latitude, longitude, claims.UserID)
 	if err != nil {
 		log.Printf("❌ Error updating submission: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -647,6 +678,13 @@ func TransitionFormSubmission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	submissionIDStr := vars["submissionId"]
 
@@ -666,7 +704,7 @@ func TransitionFormSubmission(w http.ResponseWriter, r *http.Request) {
 	userPermissions := middleware.GetEffectivePermissions(r)
 
 	// Validate transition
-	if err := getWorkflowEngine().ValidateTransition(submissionID, req.Action, userPermissions); err != nil {
+	if err := getWorkflowEngine(db).ValidateTransition(submissionID, req.Action, userPermissions); err != nil {
 		log.Printf("❌ Transition validation failed: %v", err)
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
@@ -686,7 +724,7 @@ func TransitionFormSubmission(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Perform transition
-	submission, err := getWorkflowEngine().TransitionState(
+	submission, err := getWorkflowEngine(db).TransitionState(
 		submissionID,
 		req.Action,
 		claims.UserID,
@@ -720,6 +758,13 @@ func GetWorkflowHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	submissionIDStr := vars["submissionId"]
 
@@ -729,7 +774,7 @@ func GetWorkflowHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	history, err := getWorkflowEngine().GetWorkflowHistory(submissionID)
+	history, err := getWorkflowEngine(db).GetWorkflowHistory(submissionID)
 	if err != nil {
 		log.Printf("❌ Error fetching history: %v", err)
 		http.Error(w, "failed to fetch history", http.StatusInternalServerError)
@@ -752,6 +797,13 @@ func GetWorkflowStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	formCode := vars["formCode"]
 
@@ -767,7 +819,7 @@ func GetWorkflowStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	stats, err := getWorkflowEngine().GetWorkflowStats(formCode, businessID)
+	stats, err := getWorkflowEngine(db).GetWorkflowStats(formCode, businessID)
 	if err != nil {
 		log.Printf("❌ Error fetching stats: %v", err)
 		http.Error(w, "failed to fetch stats", http.StatusInternalServerError)
@@ -794,6 +846,13 @@ func CreateWorkflowDefinition(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var workflow models.WorkflowDefinition
 	if err := json.NewDecoder(r.Body).Decode(&workflow); err != nil {
 		log.Printf("❌ Error decoding workflow request: %v", err)
@@ -814,7 +873,7 @@ func CreateWorkflowDefinition(w http.ResponseWriter, r *http.Request) {
 	log.Printf("📝 Creating workflow: code=%s, name=%s, states=%d bytes, transitions=%d bytes",
 		workflow.Code, workflow.Name, len(workflow.States), len(workflow.Transitions))
 
-	if err := getWorkflowEngine().db.Create(&workflow).Error; err != nil {
+	if err := db.Create(&workflow).Error; err != nil {
 		log.Printf("❌ Error creating workflow in DB: %v", err)
 		http.Error(w, "failed to create workflow: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -840,7 +899,14 @@ func GetAllWorkflows(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	const cacheKey = "all"
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
+	cacheKey := config.TenantSchemaFromContext(r.Context()) + ":all"
 	if payload, ok := workflowsCache.get(cacheKey); ok {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(payload)
@@ -853,7 +919,7 @@ func GetAllWorkflows(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var workflows []models.WorkflowDefinition
-		if err := getWorkflowEngine().db.Find(&workflows).Error; err != nil {
+		if err := db.Find(&workflows).Error; err != nil {
 			return nil, err
 		}
 
@@ -884,11 +950,19 @@ func UpdateWorkflowDefinition(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	workflowIdStr := vars["workflowId"]
 	// Fetch the existing workflow definition
 	var workflow models.WorkflowDefinition
-	if err := getWorkflowEngine().db.First(&workflow, "id = ?", workflowIdStr).Error; err != nil {
+	if err := db.First(&workflow, "id = ?", workflowIdStr).Error; err != nil {
 		http.Error(w, "failed to fetch workflow", http.StatusInternalServerError)
 		return
 	}
@@ -899,7 +973,7 @@ func UpdateWorkflowDefinition(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := getWorkflowEngine().db.Save(&workflow).Error; err != nil {
+	if err := db.Save(&workflow).Error; err != nil {
 		http.Error(w, "failed to update workflow", http.StatusInternalServerError)
 		return
 	}
@@ -919,11 +993,18 @@ func DeleteWorkflowDefinition(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	workflowIdStr := vars["workflowId"]
 
 	// Delete the workflow definition
-	if err := getWorkflowEngine().db.Delete(&models.WorkflowDefinition{}, "id = ?", workflowIdStr).Error; err != nil {
+	if err := db.Delete(&models.WorkflowDefinition{}, "id = ?", workflowIdStr).Error; err != nil {
 		http.Error(w, "failed to delete workflow", http.StatusInternalServerError)
 		return
 	}

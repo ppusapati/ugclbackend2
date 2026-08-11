@@ -7,7 +7,6 @@ import (
 	"log"
 	"time"
 
-	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/models"
 	"p9e.in/ugcl/utils"
 
@@ -20,10 +19,10 @@ type WorkflowEngine struct {
 	db *gorm.DB
 }
 
-// NewWorkflowEngine creates a new workflow engine instance
-func NewWorkflowEngine() *WorkflowEngine {
+// NewWorkflowEngine creates a new workflow engine instance bound to a tenant-scoped db
+func NewWorkflowEngine(db *gorm.DB) *WorkflowEngine {
 	return &WorkflowEngine{
-		db: config.DB,
+		db: db,
 	}
 }
 
@@ -68,7 +67,7 @@ func (we *WorkflowEngine) CreateSubmission(
 	if len(formData) > 0 && string(formData) != "null" {
 		var formDataMap map[string]interface{}
 		if err := json.Unmarshal(formData, &formDataMap); err == nil {
-			resolvedMap := NewWorkflowEngineDedicated().ResolveFormFieldValues(&form, formDataMap)
+			resolvedMap := NewWorkflowEngineDedicated(we.db).ResolveFormFieldValues(&form, formDataMap)
 			if resolvedJSON, marshalErr := json.Marshal(resolvedMap); marshalErr == nil {
 				enhancedFormData = resolvedJSON
 			}
@@ -200,7 +199,7 @@ func (we *WorkflowEngine) TransitionState(
 	// Reload submission with relationships for notification context
 	we.db.Preload("Form").Preload("Workflow").Preload("BusinessVertical").First(&submission, submissionID)
 
-	notifService := NewNotificationService()
+	notifService := NewNotificationService(we.db)
 	if err := notifService.ProcessTransitionNotifications(&submission, &transition, submission.Workflow, targetTransition, actorName); err != nil {
 		log.Printf("⚠️  Failed to process notifications: %v", err)
 		// Don't fail the transition if notifications fail
@@ -234,7 +233,7 @@ func (we *WorkflowEngine) UpdateSubmissionData(
 		if err := we.db.Where("id = ?", submission.FormID).First(&form).Error; err == nil {
 			var formDataMap map[string]interface{}
 			if err := json.Unmarshal(formData, &formDataMap); err == nil {
-				resolvedMap := NewWorkflowEngineDedicated().ResolveFormFieldValues(&form, formDataMap)
+				resolvedMap := NewWorkflowEngineDedicated(we.db).ResolveFormFieldValues(&form, formDataMap)
 				if resolvedJSON, marshalErr := json.Marshal(resolvedMap); marshalErr == nil {
 					enhancedFormData = resolvedJSON
 				}

@@ -10,7 +10,6 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
-	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/models"
 )
 
@@ -19,10 +18,10 @@ type NotificationService struct {
 	db *gorm.DB
 }
 
-// NewNotificationService creates a new notification service instance
-func NewNotificationService() *NotificationService {
+// NewNotificationService creates a new notification service instance bound to a tenant-scoped db
+func NewNotificationService(db *gorm.DB) *NotificationService {
 	return &NotificationService{
-		db: config.DB,
+		db: db,
 	}
 }
 

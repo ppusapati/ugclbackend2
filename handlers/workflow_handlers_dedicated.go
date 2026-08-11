@@ -8,18 +8,15 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
+	"gorm.io/gorm"
+	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/middleware"
 	"p9e.in/ugcl/models"
 )
 
-var workflowEngineDedicated *WorkflowEngineDedicated
-
-// getWorkflowEngineDedicated returns the dedicated workflow engine instance
-func getWorkflowEngineDedicated() *WorkflowEngineDedicated {
-	if workflowEngineDedicated == nil {
-		workflowEngineDedicated = NewWorkflowEngineDedicated()
-	}
-	return workflowEngineDedicated
+// getWorkflowEngineDedicated returns a dedicated workflow engine instance bound to the given tenant-scoped db
+func getWorkflowEngineDedicated(db *gorm.DB) *WorkflowEngineDedicated {
+	return NewWorkflowEngineDedicated(db)
 }
 
 // CreateFormSubmissionDedicated creates a new form submission in dedicated table
@@ -30,6 +27,13 @@ func CreateFormSubmissionDedicated(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
 
 	vars := mux.Vars(r)
 	formCode := vars["formCode"]
@@ -62,7 +66,7 @@ func CreateFormSubmissionDedicated(w http.ResponseWriter, r *http.Request) {
 	log.Printf("📝 Creating form submission in dedicated table: %s for business: %s, user: %s", formCode, businessCode, claims.UserID)
 
 	// Create submission in dedicated table
-	record, err := getWorkflowEngineDedicated().CreateSubmissionDedicated(
+	record, err := getWorkflowEngineDedicated(db).CreateSubmissionDedicated(
 		formCode,
 		businessID,
 		req.SiteID,
@@ -94,6 +98,13 @@ func GetFormSubmissionsDedicated(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
 
 	vars := mux.Vars(r)
 	formCode := vars["formCode"]
@@ -152,11 +163,10 @@ func GetFormSubmissionsDedicated(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var records []*FormSubmissionRecord
-	var err error
 	if usePagination {
-		records, err = getWorkflowEngineDedicated().GetSubmissionsByFormDedicatedPage(formCode, businessID, filters, pageSize+1, cursor)
+		records, err = getWorkflowEngineDedicated(db).GetSubmissionsByFormDedicatedPage(formCode, businessID, filters, pageSize+1, cursor)
 	} else {
-		records, err = getWorkflowEngineDedicated().GetSubmissionsByFormDedicated(formCode, businessID, filters)
+		records, err = getWorkflowEngineDedicated(db).GetSubmissionsByFormDedicated(formCode, businessID, filters)
 	}
 	if err != nil {
 		log.Printf("❌ Error fetching submissions: %v", err)
@@ -197,6 +207,13 @@ func GetFormSubmissionDedicated(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	formCode := vars["formCode"]
 	submissionIDStr := vars["submissionId"]
@@ -221,7 +238,7 @@ func GetFormSubmissionDedicated(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get form to find table name
-	record, err := getWorkflowEngineDedicated().GetSubmissionDedicated(formCode, submissionID)
+	record, err := getWorkflowEngineDedicated(db).GetSubmissionDedicated(formCode, submissionID)
 	if err != nil {
 		log.Printf("❌ Error fetching submission: %v", err)
 		http.Error(w, "submission not found", http.StatusNotFound)
@@ -235,7 +252,7 @@ func GetFormSubmissionDedicated(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get workflow history
-	history, _ := getWorkflowEngineDedicated().GetWorkflowHistoryDedicated(submissionID)
+	history, _ := getWorkflowEngineDedicated(db).GetWorkflowHistoryDedicated(submissionID)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -252,6 +269,13 @@ func UpdateFormSubmissionDedicated(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
 
 	vars := mux.Vars(r)
 	formCode := vars["formCode"]
@@ -272,7 +296,7 @@ func UpdateFormSubmissionDedicated(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	record, err := getWorkflowEngineDedicated().UpdateSubmissionDataDedicated(formCode, submissionID, req.FormData, claims.UserID)
+	record, err := getWorkflowEngineDedicated(db).UpdateSubmissionDataDedicated(formCode, submissionID, req.FormData, claims.UserID)
 	if err != nil {
 		log.Printf("❌ Error updating submission: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -298,6 +322,13 @@ func TransitionFormSubmissionDedicated(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	formCode := vars["formCode"]
 	submissionIDStr := vars["submissionId"]
@@ -318,7 +349,7 @@ func TransitionFormSubmissionDedicated(w http.ResponseWriter, r *http.Request) {
 	userPermissions := middleware.GetEffectivePermissions(r)
 
 	// Validate transition
-	if err := getWorkflowEngineDedicated().ValidateTransitionDedicated(formCode, submissionID, req.Action, userPermissions); err != nil {
+	if err := getWorkflowEngineDedicated(db).ValidateTransitionDedicated(formCode, submissionID, req.Action, userPermissions); err != nil {
 		log.Printf("❌ Transition validation failed: %v", err)
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
@@ -338,7 +369,7 @@ func TransitionFormSubmissionDedicated(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Perform transition
-	record, err := getWorkflowEngineDedicated().TransitionStateDedicated(
+	record, err := getWorkflowEngineDedicated(db).TransitionStateDedicated(
 		formCode,
 		submissionID,
 		req.Action,
@@ -373,6 +404,13 @@ func DeleteFormSubmissionDedicated(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	formCode := vars["formCode"]
 	submissionIDStr := vars["submissionId"]
@@ -383,7 +421,7 @@ func DeleteFormSubmissionDedicated(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := getWorkflowEngineDedicated().DeleteSubmissionDedicated(formCode, submissionID, claims.UserID); err != nil {
+	if err := getWorkflowEngineDedicated(db).DeleteSubmissionDedicated(formCode, submissionID, claims.UserID); err != nil {
 		log.Printf("❌ Error deleting submission: %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

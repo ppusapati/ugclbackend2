@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/middleware"
 	"p9e.in/ugcl/models"
 )
@@ -107,7 +108,14 @@ func (h *NotificationHandler) GetWebPushPublicKey(w http.ResponseWriter, r *http
 		return
 	}
 
-	publicKey := getNotificationService().GetWebPushPublicKey()
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
+	publicKey := getNotificationService(db).GetWebPushPublicKey()
 	if publicKey == "" {
 		http.Error(w, "web push not configured", http.StatusNotImplemented)
 		return
@@ -125,6 +133,13 @@ func (h *NotificationHandler) SaveWebPushSubscription(w http.ResponseWriter, r *
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
 
 	var req savePushSubscriptionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -144,7 +159,7 @@ func (h *NotificationHandler) SaveWebPushSubscription(w http.ResponseWriter, r *
 		userAgent = &ua
 	}
 
-	if err := getNotificationService().UpsertWebPushSubscription(
+	if err := getNotificationService(db).UpsertWebPushSubscription(
 		claims.UserID,
 		strings.TrimSpace(req.Endpoint),
 		strings.TrimSpace(req.Keys.P256DH),
@@ -169,6 +184,13 @@ func (h *NotificationHandler) DeleteWebPushSubscription(w http.ResponseWriter, r
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	endpoint := strings.TrimSpace(r.URL.Query().Get("endpoint"))
 	if endpoint == "" {
 		var req deletePushSubscriptionRequest
@@ -177,7 +199,7 @@ func (h *NotificationHandler) DeleteWebPushSubscription(w http.ResponseWriter, r
 		}
 	}
 
-	if err := getNotificationService().DeleteWebPushSubscription(claims.UserID, endpoint); err != nil {
+	if err := getNotificationService(db).DeleteWebPushSubscription(claims.UserID, endpoint); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -195,13 +217,20 @@ func (h *NotificationHandler) SaveMobilePushToken(w http.ResponseWriter, r *http
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var req saveMobilePushTokenRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	if err := getNotificationService().UpsertMobilePushToken(
+	if err := getNotificationService(db).UpsertMobilePushToken(
 		claims.UserID,
 		strings.TrimSpace(req.Token),
 		strings.TrimSpace(req.Platform),
@@ -225,6 +254,13 @@ func (h *NotificationHandler) DeleteMobilePushToken(w http.ResponseWriter, r *ht
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
 
 	token := strings.TrimSpace(r.URL.Query().Get("token"))
 	deviceID := strings.TrimSpace(r.URL.Query().Get("device_id"))
@@ -250,7 +286,7 @@ func (h *NotificationHandler) DeleteMobilePushToken(w http.ResponseWriter, r *ht
 		deviceIDPtr = &deviceID
 	}
 
-	if err := getNotificationService().DeleteMobilePushToken(claims.UserID, tokenPtr, deviceIDPtr); err != nil {
+	if err := getNotificationService(db).DeleteMobilePushToken(claims.UserID, tokenPtr, deviceIDPtr); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -268,8 +304,15 @@ func (h *NotificationHandler) GetMobilePushTokens(w http.ResponseWriter, r *http
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	includeInactive := parseBoolQuery(r.URL.Query().Get("include_inactive"))
-	tokens, err := getNotificationService().ListMobilePushTokens(claims.UserID, includeInactive)
+	tokens, err := getNotificationService(db).ListMobilePushTokens(claims.UserID, includeInactive)
 	if err != nil {
 		http.Error(w, "failed to load mobile push tokens", http.StatusInternalServerError)
 		return
@@ -292,8 +335,15 @@ func (h *NotificationHandler) GetMobilePushTokensForAdmin(w http.ResponseWriter,
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	includeInactive := parseBoolQuery(r.URL.Query().Get("include_inactive"))
-	tokens, err := getNotificationService().ListMobilePushTokens(userID, includeInactive)
+	tokens, err := getNotificationService(db).ListMobilePushTokens(userID, includeInactive)
 	if err != nil {
 		http.Error(w, "failed to load mobile push tokens", http.StatusInternalServerError)
 		return
@@ -317,6 +367,13 @@ func (h *NotificationHandler) SendTestWebPush(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var req testPushNotificationRequest
 	_ = json.NewDecoder(r.Body).Decode(&req)
 
@@ -335,7 +392,7 @@ func (h *NotificationHandler) SendTestWebPush(w http.ResponseWriter, r *http.Req
 		url = "/chat"
 	}
 
-	configured, reason := getNotificationService().GetWebPushConfigurationStatus()
+	configured, reason := getNotificationService(db).GetWebPushConfigurationStatus()
 	if !configured {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]interface{}{
 			"message":    "web push is not configured",
@@ -345,7 +402,7 @@ func (h *NotificationHandler) SendTestWebPush(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	subscriptionCount, err := getNotificationService().CountWebPushSubscriptions(claims.UserID)
+	subscriptionCount, err := getNotificationService(db).CountWebPushSubscriptions(claims.UserID)
 	if err != nil {
 		http.Error(w, "failed to load web push subscriptions", http.StatusInternalServerError)
 		return
@@ -359,7 +416,7 @@ func (h *NotificationHandler) SendTestWebPush(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	getNotificationService().SendWebPushToUser(
+	getNotificationService(db).SendWebPushToUser(
 		claims.UserID,
 		title,
 		body,
@@ -383,6 +440,13 @@ func (h *NotificationHandler) SendTestMobilePush(w http.ResponseWriter, r *http.
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var req testPushNotificationRequest
 	_ = json.NewDecoder(r.Body).Decode(&req)
 
@@ -401,7 +465,7 @@ func (h *NotificationHandler) SendTestMobilePush(w http.ResponseWriter, r *http.
 		url = "/chat"
 	}
 
-	dispatched, err := getNotificationService().SendTestMobilePushToUser(claims.UserID, title, body, url)
+	dispatched, err := getNotificationService(db).SendTestMobilePushToUser(claims.UserID, title, body, url)
 	if err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]interface{}{
 			"message":    "mobile push is not configured",
@@ -411,7 +475,7 @@ func (h *NotificationHandler) SendTestMobilePush(w http.ResponseWriter, r *http.
 		return
 	}
 	if dispatched == 0 {
-		configured, reason := getNotificationService().GetMobilePushConfigurationStatus()
+		configured, reason := getNotificationService(db).GetMobilePushConfigurationStatus()
 		writeJSON(w, http.StatusNotFound, map[string]interface{}{
 			"message":             "no active mobile push tokens registered for current user",
 			"configured":          configured,

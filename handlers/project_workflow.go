@@ -16,17 +16,11 @@ import (
 )
 
 // ProjectWorkflowHandler handles workflow integration for projects and tasks
-type ProjectWorkflowHandler struct {
-	db             *gorm.DB
-	workflowEngine *WorkflowEngine
-}
+type ProjectWorkflowHandler struct{}
 
 // NewProjectWorkflowHandler creates a new project workflow handler
 func NewProjectWorkflowHandler() *ProjectWorkflowHandler {
-	return &ProjectWorkflowHandler{
-		db:             config.DB,
-		workflowEngine: NewWorkflowEngine(),
-	}
+	return &ProjectWorkflowHandler{}
 }
 
 type taskDocumentRule struct {
@@ -71,9 +65,9 @@ func parseTaskDocumentRule(raw map[string]interface{}) taskDocumentRule {
 	return rule
 }
 
-func (h *ProjectWorkflowHandler) getTaskDocumentCounts(taskID uuid.UUID) (int64, int64, error) {
+func (h *ProjectWorkflowHandler) getTaskDocumentCounts(db *gorm.DB, taskID uuid.UUID) (int64, int64, error) {
 	var total int64
-	if err := h.db.Model(&models.Document{}).
+	if err := db.Model(&models.Document{}).
 		Where("deleted_at IS NULL").
 		Where("task_id = ? OR (metadata ->> 'task_id' = ?)", taskID, taskID.String()).
 		Count(&total).Error; err != nil {
@@ -81,7 +75,7 @@ func (h *ProjectWorkflowHandler) getTaskDocumentCounts(taskID uuid.UUID) (int64,
 	}
 
 	var approved int64
-	if err := h.db.Model(&models.Document{}).
+	if err := db.Model(&models.Document{}).
 		Where("deleted_at IS NULL").
 		Where("status = ?", models.DocumentStatusApproved).
 		Where("task_id = ? OR (metadata ->> 'task_id' = ?)", taskID, taskID.String()).
@@ -92,12 +86,12 @@ func (h *ProjectWorkflowHandler) getTaskDocumentCounts(taskID uuid.UUID) (int64,
 	return total, approved, nil
 }
 
-func (h *ProjectWorkflowHandler) resolveTaskDocumentPolicy(task models.Tasks) map[string]taskDocumentRule {
+func (h *ProjectWorkflowHandler) resolveTaskDocumentPolicy(db *gorm.DB, task models.Tasks) map[string]taskDocumentRule {
 	policy := defaultTaskDocumentPolicy()
 
 	if task.WorkflowID != nil {
 		var workflow models.WorkflowDefinition
-		if err := h.db.First(&workflow, "id = ?", *task.WorkflowID).Error; err == nil {
+		if err := db.First(&workflow, "id = ?", *task.WorkflowID).Error; err == nil {
 			var transitions []models.WorkflowTransitionDef
 			if err := json.Unmarshal(workflow.Transitions, &transitions); err == nil {
 				for _, transition := range transitions {
@@ -144,8 +138,8 @@ func (h *ProjectWorkflowHandler) resolveTaskDocumentPolicy(task models.Tasks) ma
 	return policy
 }
 
-func (h *ProjectWorkflowHandler) evaluateTaskDocumentCompliance(task models.Tasks, action string) (*taskDocumentComplianceResult, error) {
-	policy := h.resolveTaskDocumentPolicy(task)
+func (h *ProjectWorkflowHandler) evaluateTaskDocumentCompliance(db *gorm.DB, task models.Tasks, action string) (*taskDocumentComplianceResult, error) {
+	policy := h.resolveTaskDocumentPolicy(db, task)
 	rule, hasRule := policy[action]
 	if !hasRule {
 		return &taskDocumentComplianceResult{
@@ -154,7 +148,7 @@ func (h *ProjectWorkflowHandler) evaluateTaskDocumentCompliance(task models.Task
 		}, nil
 	}
 
-	total, approved, err := h.getTaskDocumentCounts(task.ID)
+	total, approved, err := h.getTaskDocumentCounts(db, task.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -193,6 +187,14 @@ func writeTaskDocumentComplianceError(w http.ResponseWriter, compliance *taskDoc
 
 // SubmitTaskForApproval submits a task for approval workflow
 func (h *ProjectWorkflowHandler) SubmitTaskForApproval(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+	workflowEngine := NewWorkflowEngine(db)
+
 	vars := mux.Vars(r)
 	taskID := vars["id"]
 
@@ -203,7 +205,7 @@ func (h *ProjectWorkflowHandler) SubmitTaskForApproval(w http.ResponseWriter, r 
 
 	// Get task
 	var task models.Tasks
-	if err := h.db.Preload("Project").First(&task, "id = ?", taskID).Error; err != nil {
+	if err := db.Preload("Project").First(&task, "id = ?", taskID).Error; err != nil {
 		http.Error(w, "Task not found", http.StatusNotFound)
 		return
 	}
@@ -218,7 +220,7 @@ func (h *ProjectWorkflowHandler) SubmitTaskForApproval(w http.ResponseWriter, r 
 		return
 	}
 
-	compliance, err := h.evaluateTaskDocumentCompliance(task, "submit")
+	compliance, err := h.evaluateTaskDocumentCompliance(db, task, "submit")
 	if err != nil {
 		http.Error(w, "Failed to validate task documents", http.StatusInternalServerError)
 		return
@@ -245,7 +247,7 @@ func (h *ProjectWorkflowHandler) SubmitTaskForApproval(w http.ResponseWriter, r 
 		formDataJSON, _ := json.Marshal(taskData)
 
 		// Create form submission
-		submission, err := h.workflowEngine.CreateSubmission(
+		submission, err := workflowEngine.CreateSubmission(
 			"task_approval", // form code (needs to be created)
 			task.Project.BusinessVerticalID,
 			nil, // no specific site
@@ -264,11 +266,11 @@ func (h *ProjectWorkflowHandler) SubmitTaskForApproval(w http.ResponseWriter, r 
 		// Link submission to task
 		task.FormSubmissionID = &submission.ID
 		task.CurrentState = submission.CurrentState
-		h.db.Save(&task)
+		db.Save(&task)
 	}
 
 	// Transition to submitted state
-	submission, err := h.workflowEngine.TransitionState(
+	submission, err := workflowEngine.TransitionState(
 		*task.FormSubmissionID,
 		"submit",
 		claims.UserID,
@@ -288,7 +290,7 @@ func (h *ProjectWorkflowHandler) SubmitTaskForApproval(w http.ResponseWriter, r 
 
 	// Update task state
 	task.CurrentState = submission.CurrentState
-	h.db.Save(&task)
+	db.Save(&task)
 
 	log.Printf("✅ Task submitted for approval: %s", taskID)
 	w.Header().Set("Content-Type", "application/json")
@@ -301,6 +303,14 @@ func (h *ProjectWorkflowHandler) SubmitTaskForApproval(w http.ResponseWriter, r 
 
 // ApproveTask approves a task
 func (h *ProjectWorkflowHandler) ApproveTask(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+	workflowEngine := NewWorkflowEngine(db)
+
 	vars := mux.Vars(r)
 	taskID := vars["id"]
 
@@ -314,7 +324,7 @@ func (h *ProjectWorkflowHandler) ApproveTask(w http.ResponseWriter, r *http.Requ
 
 	// Get task
 	var task models.Tasks
-	if err := h.db.First(&task, "id = ?", taskID).Error; err != nil {
+	if err := db.First(&task, "id = ?", taskID).Error; err != nil {
 		http.Error(w, "Task not found", http.StatusNotFound)
 		return
 	}
@@ -324,7 +334,7 @@ func (h *ProjectWorkflowHandler) ApproveTask(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	compliance, err := h.evaluateTaskDocumentCompliance(task, "approve")
+	compliance, err := h.evaluateTaskDocumentCompliance(db, task, "approve")
 	if err != nil {
 		http.Error(w, "Failed to validate task documents", http.StatusInternalServerError)
 		return
@@ -339,7 +349,7 @@ func (h *ProjectWorkflowHandler) ApproveTask(w http.ResponseWriter, r *http.Requ
 	user := middleware.GetUser(r)
 
 	// Transition to approved state
-	submission, err := h.workflowEngine.TransitionState(
+	submission, err := workflowEngine.TransitionState(
 		*task.FormSubmissionID,
 		"approve",
 		claims.UserID,
@@ -362,7 +372,7 @@ func (h *ProjectWorkflowHandler) ApproveTask(w http.ResponseWriter, r *http.Requ
 	if task.Status == "pending" || task.Status == "assigned" {
 		task.Status = "in-progress"
 	}
-	h.db.Save(&task)
+	db.Save(&task)
 
 	log.Printf("✅ Task approved: %s by %s", taskID, user.Name)
 	w.Header().Set("Content-Type", "application/json")
@@ -375,6 +385,14 @@ func (h *ProjectWorkflowHandler) ApproveTask(w http.ResponseWriter, r *http.Requ
 
 // RejectTask rejects a task
 func (h *ProjectWorkflowHandler) RejectTask(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+	workflowEngine := NewWorkflowEngine(db)
+
 	vars := mux.Vars(r)
 	taskID := vars["id"]
 
@@ -388,7 +406,7 @@ func (h *ProjectWorkflowHandler) RejectTask(w http.ResponseWriter, r *http.Reque
 
 	// Get task
 	var task models.Tasks
-	if err := h.db.First(&task, "id = ?", taskID).Error; err != nil {
+	if err := db.First(&task, "id = ?", taskID).Error; err != nil {
 		http.Error(w, "Task not found", http.StatusNotFound)
 		return
 	}
@@ -403,7 +421,7 @@ func (h *ProjectWorkflowHandler) RejectTask(w http.ResponseWriter, r *http.Reque
 	user := middleware.GetUser(r)
 
 	// Transition to rejected state
-	submission, err := h.workflowEngine.TransitionState(
+	submission, err := workflowEngine.TransitionState(
 		*task.FormSubmissionID,
 		"reject",
 		claims.UserID,
@@ -423,7 +441,7 @@ func (h *ProjectWorkflowHandler) RejectTask(w http.ResponseWriter, r *http.Reque
 
 	// Update task state
 	task.CurrentState = submission.CurrentState
-	h.db.Save(&task)
+	db.Save(&task)
 
 	log.Printf("⚠️  Task rejected: %s by %s", taskID, user.Name)
 	w.Header().Set("Content-Type", "application/json")
@@ -436,6 +454,14 @@ func (h *ProjectWorkflowHandler) RejectTask(w http.ResponseWriter, r *http.Reque
 
 // CompleteTask marks a task as completed and submits for final approval
 func (h *ProjectWorkflowHandler) CompleteTask(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+	workflowEngine := NewWorkflowEngine(db)
+
 	vars := mux.Vars(r)
 	taskID := vars["id"]
 
@@ -448,7 +474,7 @@ func (h *ProjectWorkflowHandler) CompleteTask(w http.ResponseWriter, r *http.Req
 
 	// Get task
 	var task models.Tasks
-	if err := h.db.First(&task, "id = ?", taskID).Error; err != nil {
+	if err := db.First(&task, "id = ?", taskID).Error; err != nil {
 		http.Error(w, "Task not found", http.StatusNotFound)
 		return
 	}
@@ -459,7 +485,7 @@ func (h *ProjectWorkflowHandler) CompleteTask(w http.ResponseWriter, r *http.Req
 
 	// If task has workflow, transition to completed state
 	if task.FormSubmissionID != nil {
-		compliance, err := h.evaluateTaskDocumentCompliance(task, "complete")
+		compliance, err := h.evaluateTaskDocumentCompliance(db, task, "complete")
 		if err != nil {
 			http.Error(w, "Failed to validate task documents", http.StatusInternalServerError)
 			return
@@ -469,7 +495,7 @@ func (h *ProjectWorkflowHandler) CompleteTask(w http.ResponseWriter, r *http.Req
 			return
 		}
 
-		submission, err := h.workflowEngine.TransitionState(
+		submission, err := workflowEngine.TransitionState(
 			*task.FormSubmissionID,
 			"complete",
 			claims.UserID,
@@ -491,7 +517,7 @@ func (h *ProjectWorkflowHandler) CompleteTask(w http.ResponseWriter, r *http.Req
 	// Update task status
 	task.Progress = 100
 	task.UpdatedBy = claims.UserID
-	h.db.Save(&task)
+	db.Save(&task)
 
 	log.Printf("✅ Task marked as completed: %s", taskID)
 	w.Header().Set("Content-Type", "application/json")
@@ -503,12 +529,20 @@ func (h *ProjectWorkflowHandler) CompleteTask(w http.ResponseWriter, r *http.Req
 
 // GetTaskWorkflowHistory retrieves workflow history for a task
 func (h *ProjectWorkflowHandler) GetTaskWorkflowHistory(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+	workflowEngine := NewWorkflowEngine(db)
+
 	vars := mux.Vars(r)
 	taskID := vars["id"]
 
 	// Get task
 	var task models.Tasks
-	if err := h.db.First(&task, "id = ?", taskID).Error; err != nil {
+	if err := db.First(&task, "id = ?", taskID).Error; err != nil {
 		http.Error(w, "Task not found", http.StatusNotFound)
 		return
 	}
@@ -523,7 +557,7 @@ func (h *ProjectWorkflowHandler) GetTaskWorkflowHistory(w http.ResponseWriter, r
 	}
 
 	// Get workflow transitions
-	transitions, err := h.workflowEngine.GetWorkflowHistory(*task.FormSubmissionID)
+	transitions, err := workflowEngine.GetWorkflowHistory(*task.FormSubmissionID)
 	if err != nil {
 		http.Error(w, "Failed to fetch workflow history", http.StatusInternalServerError)
 		return
@@ -538,12 +572,20 @@ func (h *ProjectWorkflowHandler) GetTaskWorkflowHistory(w http.ResponseWriter, r
 
 // GetAvailableTaskActions retrieves available workflow actions for a task
 func (h *ProjectWorkflowHandler) GetAvailableTaskActions(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+	workflowEngine := NewWorkflowEngine(db)
+
 	vars := mux.Vars(r)
 	taskID := vars["id"]
 
 	// Get task
 	var task models.Tasks
-	if err := h.db.Preload("Workflow").First(&task, "id = ?", taskID).Error; err != nil {
+	if err := db.Preload("Workflow").First(&task, "id = ?", taskID).Error; err != nil {
 		http.Error(w, "Task not found", http.StatusNotFound)
 		return
 	}
@@ -558,7 +600,7 @@ func (h *ProjectWorkflowHandler) GetAvailableTaskActions(w http.ResponseWriter, 
 	}
 
 	// Get submission
-	submission, err := h.workflowEngine.GetSubmission(*task.FormSubmissionID)
+	submission, err := workflowEngine.GetSubmission(*task.FormSubmissionID)
 	if err != nil {
 		http.Error(w, "Failed to fetch workflow submission", http.StatusInternalServerError)
 		return
@@ -573,7 +615,7 @@ func (h *ProjectWorkflowHandler) GetAvailableTaskActions(w http.ResponseWriter, 
 
 	actionsWithCompliance := make([]map[string]interface{}, 0, len(actions))
 	for _, action := range actions {
-		compliance, err := h.evaluateTaskDocumentCompliance(task, action.Action)
+		compliance, err := h.evaluateTaskDocumentCompliance(db, task, action.Action)
 		if err != nil {
 			http.Error(w, "Failed to evaluate action compliance", http.StatusInternalServerError)
 			return
@@ -604,6 +646,13 @@ func (h *ProjectWorkflowHandler) GetAvailableTaskActions(w http.ResponseWriter, 
 
 // CreateTaskApprovalWorkflow creates the default task approval workflow
 func (h *ProjectWorkflowHandler) CreateTaskApprovalWorkflow(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	// Define states
 	states := []models.WorkflowState{
 		{Code: "draft", Name: "Draft", Description: "Task is being drafted", Color: "#gray", Icon: "edit"},
@@ -642,7 +691,7 @@ func (h *ProjectWorkflowHandler) CreateTaskApprovalWorkflow(w http.ResponseWrite
 		IsActive:     true,
 	}
 
-	if err := h.db.Create(&workflow).Error; err != nil {
+	if err := db.Create(&workflow).Error; err != nil {
 		http.Error(w, "Failed to create workflow", http.StatusInternalServerError)
 		return
 	}
@@ -658,6 +707,13 @@ func (h *ProjectWorkflowHandler) CreateTaskApprovalWorkflow(w http.ResponseWrite
 
 // AssignWorkflowToTask assigns a workflow to a task
 func (h *ProjectWorkflowHandler) AssignWorkflowToTask(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	taskID := vars["id"]
 
@@ -671,14 +727,14 @@ func (h *ProjectWorkflowHandler) AssignWorkflowToTask(w http.ResponseWriter, r *
 
 	// Verify workflow exists
 	var workflow models.WorkflowDefinition
-	if err := h.db.First(&workflow, "id = ? AND is_active = ?", req.WorkflowID, true).Error; err != nil {
+	if err := db.First(&workflow, "id = ? AND is_active = ?", req.WorkflowID, true).Error; err != nil {
 		http.Error(w, "Workflow not found or inactive", http.StatusBadRequest)
 		return
 	}
 
 	// Get task
 	var task models.Tasks
-	if err := h.db.First(&task, "id = ?", taskID).Error; err != nil {
+	if err := db.First(&task, "id = ?", taskID).Error; err != nil {
 		http.Error(w, "Task not found", http.StatusNotFound)
 		return
 	}
@@ -687,7 +743,7 @@ func (h *ProjectWorkflowHandler) AssignWorkflowToTask(w http.ResponseWriter, r *
 	task.WorkflowID = &req.WorkflowID
 	task.CurrentState = workflow.InitialState
 
-	if err := h.db.Save(&task).Error; err != nil {
+	if err := db.Save(&task).Error; err != nil {
 		http.Error(w, "Failed to assign workflow", http.StatusInternalServerError)
 		return
 	}

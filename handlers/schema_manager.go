@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"gorm.io/gorm"
-	"p9e.in/ugcl/config"
 )
 
 // SchemaManager handles PostgreSQL schema operations
@@ -15,10 +14,10 @@ type SchemaManager struct {
 	db *gorm.DB
 }
 
-// NewSchemaManager creates a new schema manager
-func NewSchemaManager() *SchemaManager {
+// NewSchemaManager creates a new schema manager bound to a tenant-scoped db
+func NewSchemaManager(db *gorm.DB) *SchemaManager {
 	return &SchemaManager{
-		db: config.DB,
+		db: db,
 	}
 }
 

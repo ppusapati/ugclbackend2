@@ -817,7 +817,7 @@ func GetFormLookupOptions(w http.ResponseWriter, r *http.Request) {
 		filters["current_state"] = state
 	}
 
-	records, err := getWorkflowEngineDedicated().GetSubmissionsByFormDedicated(formCode, businessID, filters)
+	records, err := getWorkflowEngineDedicated(db).GetSubmissionsByFormDedicated(formCode, businessID, filters)
 	if err != nil {
 		log.Printf("❌ Error fetching lookup options for form %s: %v", formCode, err)
 		http.Error(w, "failed to fetch lookup options", http.StatusInternalServerError)
@@ -1002,7 +1002,7 @@ func CreateForm(w http.ResponseWriter, r *http.Request) {
 	var schemaName string
 	var tableCreated bool
 	if module.SchemaName != "" {
-		formTableManager := NewFormTableManager()
+		formTableManager := NewFormTableManager(db)
 		if err := formTableManager.CreateFormTableInSchema(&form, module.SchemaName); err != nil {
 			log.Printf("⚠️  Warning: Failed to create dedicated table for form %s in schema %s: %v", form.Code, module.SchemaName, err)
 			// Don't fail the request - the form is created, table creation is optional

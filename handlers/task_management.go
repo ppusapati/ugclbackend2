@@ -15,21 +15,14 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
-	"gorm.io/gorm"
 )
 
 // TaskHandler handles task management operations
-type TaskHandler struct {
-	db             *gorm.DB
-	workflowEngine *WorkflowEngine
-}
+type TaskHandler struct{}
 
 // NewTaskHandler creates a new task handler
 func NewTaskHandler() *TaskHandler {
-	return &TaskHandler{
-		db:             config.DB,
-		workflowEngine: NewWorkflowEngine(),
-	}
+	return &TaskHandler{}
 }
 
 // CreateTaskRequest represents the request to create a task
@@ -93,6 +86,13 @@ type UpdateTaskStatusRequest struct {
 
 // CreateTask creates a new task
 func (h *TaskHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var req CreateTaskRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
@@ -107,11 +107,11 @@ func (h *TaskHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
 
 	// Validate nodes exist and belong to project
 	var startNode, stopNode models.Node
-	if err := h.db.First(&startNode, "id = ? AND project_id = ?", req.StartNodeID, req.ProjectID).Error; err != nil {
+	if err := db.First(&startNode, "id = ? AND project_id = ?", req.StartNodeID, req.ProjectID).Error; err != nil {
 		http.Error(w, "Invalid start node", http.StatusBadRequest)
 		return
 	}
-	if err := h.db.First(&stopNode, "id = ? AND project_id = ?", req.StopNodeID, req.ProjectID).Error; err != nil {
+	if err := db.First(&stopNode, "id = ? AND project_id = ?", req.StopNodeID, req.ProjectID).Error; err != nil {
 		http.Error(w, "Invalid stop node", http.StatusBadRequest)
 		return
 	}
@@ -214,7 +214,7 @@ func (h *TaskHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Start transaction
-	tx := h.db.Begin()
+	tx := db.Begin()
 	defer func() {
 		if r := recover(); r != nil {
 			tx.Rollback()
@@ -257,6 +257,13 @@ func (h *TaskHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
 
 // AssignTask assigns users to a task
 func (h *TaskHandler) AssignTask(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	taskID := vars["id"]
 
@@ -273,7 +280,7 @@ func (h *TaskHandler) AssignTask(w http.ResponseWriter, r *http.Request) {
 
 	// Get task
 	var task models.Tasks
-	if err := h.db.First(&task, "id = ?", taskID).Error; err != nil {
+	if err := db.First(&task, "id = ?", taskID).Error; err != nil {
 		http.Error(w, "Task not found", http.StatusNotFound)
 		return
 	}
@@ -283,7 +290,7 @@ func (h *TaskHandler) AssignTask(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUser(r)
 
 	// Start transaction
-	tx := h.db.Begin()
+	tx := db.Begin()
 	defer func() {
 		if r := recover(); r != nil {
 			tx.Rollback()
@@ -364,6 +371,13 @@ func (h *TaskHandler) AssignTask(w http.ResponseWriter, r *http.Request) {
 
 // UpdateTaskStatus updates the task status
 func (h *TaskHandler) UpdateTaskStatus(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	taskID := vars["id"]
 
@@ -380,7 +394,7 @@ func (h *TaskHandler) UpdateTaskStatus(w http.ResponseWriter, r *http.Request) {
 
 	// Get task
 	var task models.Tasks
-	if err := h.db.First(&task, "id = ?", taskID).Error; err != nil {
+	if err := db.First(&task, "id = ?", taskID).Error; err != nil {
 		http.Error(w, "Task not found", http.StatusNotFound)
 		return
 	}
@@ -392,7 +406,7 @@ func (h *TaskHandler) UpdateTaskStatus(w http.ResponseWriter, r *http.Request) {
 	oldStatus := task.Status
 
 	// Start transaction
-	tx := h.db.Begin()
+	tx := db.Begin()
 	defer func() {
 		if r := recover(); r != nil {
 			tx.Rollback()
@@ -460,11 +474,18 @@ func (h *TaskHandler) UpdateTaskStatus(w http.ResponseWriter, r *http.Request) {
 
 // GetTask retrieves a task by ID
 func (h *TaskHandler) GetTask(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	taskID := vars["id"]
 
 	var task models.Tasks
-	if err := h.db.
+	if err := db.
 		Preload("Project").
 		Preload("Zone").
 		Preload("StartNode").
@@ -483,11 +504,18 @@ func (h *TaskHandler) GetTask(w http.ResponseWriter, r *http.Request) {
 
 // ListTasks lists all tasks with filters
 func (h *TaskHandler) ListTasks(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var tasks []models.Tasks
 
 	projectID := r.URL.Query().Get("project_id")
 
-	query := h.db.Model(&models.Tasks{})
+	query := db.Model(&models.Tasks{})
 
 	// Apply filters
 	if projectID != "" {
@@ -523,6 +551,13 @@ func (h *TaskHandler) ListTasks(w http.ResponseWriter, r *http.Request) {
 
 // UpdateTask updates a task
 func (h *TaskHandler) UpdateTask(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	taskID := vars["id"]
 
@@ -533,7 +568,7 @@ func (h *TaskHandler) UpdateTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var task models.Tasks
-	if err := h.db.First(&task, "id = ?", taskID).Error; err != nil {
+	if err := db.First(&task, "id = ?", taskID).Error; err != nil {
 		http.Error(w, "Task not found", http.StatusNotFound)
 		return
 	}
@@ -591,7 +626,7 @@ func (h *TaskHandler) UpdateTask(w http.ResponseWriter, r *http.Request) {
 	task.UpdatedBy = claims.UserID
 
 	// Start transaction
-	tx := h.db.Begin()
+	tx := db.Begin()
 	defer func() {
 		if r := recover(); r != nil {
 			tx.Rollback()
@@ -624,11 +659,18 @@ func (h *TaskHandler) UpdateTask(w http.ResponseWriter, r *http.Request) {
 
 // GetTaskAuditLog retrieves the audit log for a task
 func (h *TaskHandler) GetTaskAuditLog(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	taskID := vars["id"]
 
 	var auditLogs []models.TaskAuditLog
-	if err := h.db.Where("task_id = ?", taskID).Order("performed_at DESC").Find(&auditLogs).Error; err != nil {
+	if err := db.Where("task_id = ?", taskID).Order("performed_at DESC").Find(&auditLogs).Error; err != nil {
 		http.Error(w, "Failed to fetch audit logs", http.StatusInternalServerError)
 		return
 	}
@@ -642,6 +684,13 @@ func (h *TaskHandler) GetTaskAuditLog(w http.ResponseWriter, r *http.Request) {
 
 // AddTaskComment adds a comment to a task
 func (h *TaskHandler) AddTaskComment(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	taskID := vars["id"]
 
@@ -662,7 +711,7 @@ func (h *TaskHandler) AddTaskComment(w http.ResponseWriter, r *http.Request) {
 
 	// Verify task exists
 	var task models.Task
-	if err := h.db.First(&task, "id = ?", taskID).Error; err != nil {
+	if err := db.First(&task, "id = ?", taskID).Error; err != nil {
 		http.Error(w, "Task not found", http.StatusNotFound)
 		return
 	}
@@ -684,7 +733,7 @@ func (h *TaskHandler) AddTaskComment(w http.ResponseWriter, r *http.Request) {
 		comment.CommentType = "general"
 	}
 
-	if err := h.db.Create(&comment).Error; err != nil {
+	if err := db.Create(&comment).Error; err != nil {
 		http.Error(w, "Failed to add comment", http.StatusInternalServerError)
 		return
 	}
@@ -700,11 +749,18 @@ func (h *TaskHandler) AddTaskComment(w http.ResponseWriter, r *http.Request) {
 
 // GetTaskComments retrieves comments for a task
 func (h *TaskHandler) GetTaskComments(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	taskID := vars["id"]
 
 	var comments []models.TaskComment
-	if err := h.db.Where("task_id = ?", taskID).Order("created_at DESC").Find(&comments).Error; err != nil {
+	if err := db.Where("task_id = ?", taskID).Order("created_at DESC").Find(&comments).Error; err != nil {
 		http.Error(w, "Failed to fetch comments", http.StatusInternalServerError)
 		return
 	}
@@ -718,6 +774,13 @@ func (h *TaskHandler) GetTaskComments(w http.ResponseWriter, r *http.Request) {
 
 // AddTaskAttachment uploads and links an attachment to a task
 func (h *TaskHandler) AddTaskAttachment(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	taskIDStr := vars["id"]
 
@@ -728,7 +791,7 @@ func (h *TaskHandler) AddTaskAttachment(w http.ResponseWriter, r *http.Request) 
 	}
 
 	var task models.Tasks
-	if err := h.db.First(&task, "id = ?", taskID).Error; err != nil {
+	if err := db.First(&task, "id = ?", taskID).Error; err != nil {
 		http.Error(w, "Task not found", http.StatusNotFound)
 		return
 	}
@@ -763,7 +826,7 @@ func (h *TaskHandler) AddTaskAttachment(w http.ResponseWriter, r *http.Request) 
 		UploadedByName: user.Name,
 	}
 
-	if err := h.db.Create(&attachment).Error; err != nil {
+	if err := db.Create(&attachment).Error; err != nil {
 		http.Error(w, "Failed to save attachment metadata", http.StatusInternalServerError)
 		return
 	}
@@ -778,6 +841,13 @@ func (h *TaskHandler) AddTaskAttachment(w http.ResponseWriter, r *http.Request) 
 
 // GetTaskAttachments retrieves attachments for a task
 func (h *TaskHandler) GetTaskAttachments(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	taskIDStr := vars["id"]
 
@@ -788,7 +858,7 @@ func (h *TaskHandler) GetTaskAttachments(w http.ResponseWriter, r *http.Request)
 	}
 
 	var attachments []models.TaskAttachment
-	if err := h.db.
+	if err := db.
 		Where("task_id = ? AND deleted_at IS NULL", taskID).
 		Order("created_at DESC").
 		Find(&attachments).Error; err != nil {

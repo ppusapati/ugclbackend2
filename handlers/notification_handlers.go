@@ -9,6 +9,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
+	"gorm.io/gorm"
+	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/middleware"
 	"p9e.in/ugcl/models"
 )
@@ -16,13 +18,8 @@ import (
 // NotificationHandler handles notification operations
 type NotificationHandler struct{}
 
-var notificationService = NewNotificationService()
-
-func getNotificationService() *NotificationService {
-	if notificationService == nil || notificationService.db == nil {
-		notificationService = NewNotificationService()
-	}
-	return notificationService
+func getNotificationService(db *gorm.DB) *NotificationService {
+	return NewNotificationService(db)
 }
 
 // GetNotifications retrieves notifications for the current user
@@ -33,6 +30,13 @@ func (h *NotificationHandler) GetNotifications(w http.ResponseWriter, r *http.Re
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
 
 	// Parse query parameters
 	filters := make(map[string]interface{})
@@ -64,7 +68,7 @@ func (h *NotificationHandler) GetNotifications(w http.ResponseWriter, r *http.Re
 	}
 
 	// Get notifications
-	notifications, err := getNotificationService().GetNotificationsForUser(claims.UserID, filters)
+	notifications, err := getNotificationService(db).GetNotificationsForUser(claims.UserID, filters)
 	if err != nil {
 		log.Printf("❌ Error fetching notifications: %v", err)
 		http.Error(w, "failed to fetch notifications", http.StatusInternalServerError)
@@ -72,7 +76,7 @@ func (h *NotificationHandler) GetNotifications(w http.ResponseWriter, r *http.Re
 	}
 
 	// Get unread count
-	unreadCount, _ := getNotificationService().GetUnreadCount(claims.UserID)
+	unreadCount, _ := getNotificationService(db).GetUnreadCount(claims.UserID)
 
 	requestedLimit := 50
 	if l, ok := filters["limit"].(int); ok && l > 0 {
@@ -103,6 +107,13 @@ func (h *NotificationHandler) GetNotification(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	notificationID := vars["id"]
 
@@ -113,7 +124,7 @@ func (h *NotificationHandler) GetNotification(w http.ResponseWriter, r *http.Req
 	}
 
 	var notification models.Notification
-	if err := getNotificationService().db.First(&notification, id).Error; err != nil {
+	if err := db.First(&notification, id).Error; err != nil {
 		http.Error(w, "notification not found", http.StatusNotFound)
 		return
 	}
@@ -139,6 +150,13 @@ func (h *NotificationHandler) MarkNotificationAsRead(w http.ResponseWriter, r *h
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	notificationID := vars["id"]
 
@@ -149,7 +167,7 @@ func (h *NotificationHandler) MarkNotificationAsRead(w http.ResponseWriter, r *h
 	}
 
 	var notification models.Notification
-	if err := getNotificationService().db.First(&notification, id).Error; err != nil {
+	if err := db.First(&notification, id).Error; err != nil {
 		http.Error(w, "notification not found", http.StatusNotFound)
 		return
 	}
@@ -162,7 +180,7 @@ func (h *NotificationHandler) MarkNotificationAsRead(w http.ResponseWriter, r *h
 
 	// Mark as read
 	notification.MarkAsRead()
-	if err := getNotificationService().db.Save(&notification).Error; err != nil {
+	if err := db.Save(&notification).Error; err != nil {
 		log.Printf("❌ Error marking notification as read: %v", err)
 		http.Error(w, "failed to mark as read", http.StatusInternalServerError)
 		return
@@ -184,7 +202,14 @@ func (h *NotificationHandler) MarkAllNotificationsAsRead(w http.ResponseWriter, 
 		return
 	}
 
-	result := getNotificationService().db.Model(&models.Notification{}).
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
+	result := db.Model(&models.Notification{}).
 		Where("user_id = ? AND read_at IS NULL", claims.UserID).
 		Update("read_at", "NOW()")
 
@@ -210,6 +235,13 @@ func (h *NotificationHandler) DeleteNotification(w http.ResponseWriter, r *http.
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	notificationID := vars["id"]
 
@@ -220,7 +252,7 @@ func (h *NotificationHandler) DeleteNotification(w http.ResponseWriter, r *http.
 	}
 
 	var notification models.Notification
-	if err := getNotificationService().db.First(&notification, id).Error; err != nil {
+	if err := db.First(&notification, id).Error; err != nil {
 		http.Error(w, "notification not found", http.StatusNotFound)
 		return
 	}
@@ -231,7 +263,7 @@ func (h *NotificationHandler) DeleteNotification(w http.ResponseWriter, r *http.
 		return
 	}
 
-	if err := getNotificationService().db.Delete(&notification).Error; err != nil {
+	if err := db.Delete(&notification).Error; err != nil {
 		log.Printf("❌ Error deleting notification: %v", err)
 		http.Error(w, "failed to delete notification", http.StatusInternalServerError)
 		return
@@ -249,7 +281,14 @@ func (h *NotificationHandler) GetUnreadCount(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	count, err := getNotificationService().GetUnreadCount(claims.UserID)
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
+	count, err := getNotificationService(db).GetUnreadCount(claims.UserID)
 	if err != nil {
 		log.Printf("❌ Error getting unread count: %v", err)
 		http.Error(w, "failed to get unread count", http.StatusInternalServerError)
@@ -271,8 +310,15 @@ func (h *NotificationHandler) GetNotificationPreferences(w http.ResponseWriter, 
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var prefs models.NotificationPreference
-	if err := getNotificationService().db.Where("user_id = ?", claims.UserID).First(&prefs).Error; err != nil {
+	if err := db.Where("user_id = ?", claims.UserID).First(&prefs).Error; err != nil {
 		// Create default preferences if not found
 		prefs = models.NotificationPreference{
 			UserID:           claims.UserID,
@@ -283,7 +329,7 @@ func (h *NotificationHandler) GetNotificationPreferences(w http.ResponseWriter, 
 			EnableMobilePush: true,
 			DisabledTypes:    []string{},
 		}
-		getNotificationService().db.Create(&prefs)
+		db.Create(&prefs)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -300,6 +346,13 @@ func (h *NotificationHandler) UpdateNotificationPreferences(w http.ResponseWrite
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
 
 	var req struct {
 		EnableInApp       *bool    `json:"enable_in_app"`
@@ -322,7 +375,7 @@ func (h *NotificationHandler) UpdateNotificationPreferences(w http.ResponseWrite
 
 	// Get or create preferences
 	var prefs models.NotificationPreference
-	if err := getNotificationService().db.Where("user_id = ?", claims.UserID).First(&prefs).Error; err != nil {
+	if err := db.Where("user_id = ?", claims.UserID).First(&prefs).Error; err != nil {
 		prefs = models.NotificationPreference{UserID: claims.UserID}
 	}
 
@@ -362,7 +415,7 @@ func (h *NotificationHandler) UpdateNotificationPreferences(w http.ResponseWrite
 	}
 
 	// Save
-	if err := getNotificationService().db.Save(&prefs).Error; err != nil {
+	if err := db.Save(&prefs).Error; err != nil {
 		log.Printf("❌ Error saving preferences: %v", err)
 		http.Error(w, "failed to save preferences", http.StatusInternalServerError)
 		return

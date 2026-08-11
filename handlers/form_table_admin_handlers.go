@@ -47,7 +47,7 @@ func CreateFormTableHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create table manager
-	tableManager := NewFormTableManager()
+	tableManager := NewFormTableManager(db)
 
 	// Check if table already exists
 	exists, err := tableManager.TableExists(form.DBTableName)
@@ -111,7 +111,7 @@ func CheckFormTableStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tableManager := NewFormTableManager()
+	tableManager := NewFormTableManager(db)
 
 	var exists bool
 	if form.DBTableName != "" {
@@ -172,7 +172,7 @@ func DropFormTableHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Drop the table
-	tableManager := NewFormTableManager()
+	tableManager := NewFormTableManager(db)
 	if err := tableManager.DropFormTable(form.DBTableName); err != nil {
 		log.Printf("❌ Error dropping table: %v", err)
 		http.Error(w, "failed to drop table", http.StatusInternalServerError)
@@ -215,7 +215,7 @@ func BulkCreateFormTablesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tableManager := NewFormTableManager()
+	tableManager := NewFormTableManager(db)
 	results := make([]map[string]interface{}, 0)
 
 	for _, form := range forms {
