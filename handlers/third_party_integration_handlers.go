@@ -234,6 +234,13 @@ func normalizeAndValidateScopes(values []string) ([]string, error) {
 
 // ListIntegrations  GET /api/v1/admin/integrations
 func ListIntegrations(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	claims := middleware.GetClaims(r)
 	if claims == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -241,7 +248,7 @@ func ListIntegrations(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var items []models.ThirdPartyIntegration
-	if err := config.DB.Order("created_at DESC").Find(&items).Error; err != nil {
+	if err := db.Order("created_at DESC").Find(&items).Error; err != nil {
 		http.Error(w, "failed to list integrations", http.StatusInternalServerError)
 		return
 	}
@@ -260,6 +267,13 @@ func ListIntegrations(w http.ResponseWriter, r *http.Request) {
 
 // GetIntegration  GET /api/v1/admin/integrations/{id}
 func GetIntegration(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	claims := middleware.GetClaims(r)
 	if claims == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -273,7 +287,7 @@ func GetIntegration(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var item models.ThirdPartyIntegration
-	if err := config.DB.First(&item, "id = ?", id).Error; err != nil {
+	if err := db.First(&item, "id = ?", id).Error; err != nil {
 		http.Error(w, "integration not found", http.StatusNotFound)
 		return
 	}
@@ -284,6 +298,13 @@ func GetIntegration(w http.ResponseWriter, r *http.Request) {
 
 // CreateIntegration  POST /api/v1/admin/integrations
 func CreateIntegration(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	claims := middleware.GetClaims(r)
 	if claims == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -382,7 +403,7 @@ func CreateIntegration(w http.ResponseWriter, r *http.Request) {
 		CreatedBy:    creatorID,
 	}
 
-	if err := config.DB.Create(&item).Error; err != nil {
+	if err := db.Create(&item).Error; err != nil {
 		http.Error(w, "failed to create integration", http.StatusInternalServerError)
 		return
 	}
@@ -394,6 +415,13 @@ func CreateIntegration(w http.ResponseWriter, r *http.Request) {
 
 // UpdateIntegration  PATCH /api/v1/admin/integrations/{id}
 func UpdateIntegration(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	claims := middleware.GetClaims(r)
 	if claims == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -407,7 +435,7 @@ func UpdateIntegration(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var item models.ThirdPartyIntegration
-	if err := config.DB.First(&item, "id = ?", id).Error; err != nil {
+	if err := db.First(&item, "id = ?", id).Error; err != nil {
 		http.Error(w, "integration not found", http.StatusNotFound)
 		return
 	}
@@ -507,7 +535,7 @@ func UpdateIntegration(w http.ResponseWriter, r *http.Request) {
 		item.DataScopes = datatypes.JSONSlice[string](dataScopes)
 	}
 
-	if err := config.DB.Save(&item).Error; err != nil {
+	if err := db.Save(&item).Error; err != nil {
 		http.Error(w, "failed to update integration", http.StatusInternalServerError)
 		return
 	}
@@ -518,6 +546,13 @@ func UpdateIntegration(w http.ResponseWriter, r *http.Request) {
 
 // DeleteIntegration  DELETE /api/v1/admin/integrations/{id}
 func DeleteIntegration(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	claims := middleware.GetClaims(r)
 	if claims == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -530,7 +565,7 @@ func DeleteIntegration(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := config.DB.Delete(&models.ThirdPartyIntegration{}, "id = ?", id).Error; err != nil {
+	if err := db.Delete(&models.ThirdPartyIntegration{}, "id = ?", id).Error; err != nil {
 		http.Error(w, "failed to delete integration", http.StatusInternalServerError)
 		return
 	}
@@ -540,6 +575,13 @@ func DeleteIntegration(w http.ResponseWriter, r *http.Request) {
 
 // RegenerateIntegrationKey  POST /api/v1/admin/integrations/{id}/regenerate-key
 func RegenerateIntegrationKey(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	claims := middleware.GetClaims(r)
 	if claims == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -553,7 +595,7 @@ func RegenerateIntegrationKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var item models.ThirdPartyIntegration
-	if err := config.DB.First(&item, "id = ?", id).Error; err != nil {
+	if err := db.First(&item, "id = ?", id).Error; err != nil {
 		http.Error(w, "integration not found", http.StatusNotFound)
 		return
 	}
@@ -569,7 +611,7 @@ func RegenerateIntegrationKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := config.DB.Model(&item).Updates(map[string]interface{}{
+	if err := db.Model(&item).Updates(map[string]interface{}{
 		"api_key_hash":   keyHash,
 		"api_key_prefix": plainKey[:12],
 	}).Error; err != nil {
@@ -589,6 +631,13 @@ func RegenerateIntegrationKey(w http.ResponseWriter, r *http.Request) {
 // The caller must be a valid JWT user — the stored secret is never exposed to
 // the browser.
 func ProxyIntegrationDropdown(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	claims := middleware.GetClaims(r)
 	if claims == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -602,7 +651,7 @@ func ProxyIntegrationDropdown(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var item models.ThirdPartyIntegration
-	if err := config.DB.First(&item, "id = ? AND status = ?", id, models.IntegrationStatusActive).Error; err != nil {
+	if err := db.First(&item, "id = ? AND status = ?", id, models.IntegrationStatusActive).Error; err != nil {
 		http.Error(w, "integration not found or inactive", http.StatusNotFound)
 		return
 	}
