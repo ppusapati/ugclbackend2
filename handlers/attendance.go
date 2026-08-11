@@ -58,6 +58,13 @@ type attendanceHeadcountRow struct {
 }
 
 func CheckInAttendance(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	user := middleware.GetUser(r)
 	businessID, err := getBusinessIDFromContext(r)
 	if err != nil {
@@ -76,12 +83,12 @@ func CheckInAttendance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if hasActiveSession(user.ID) {
+	if hasActiveSession(db, user.ID) {
 		http.Error(w, "user already has an active attendance session", http.StatusConflict)
 		return
 	}
 
-	site, err := loadAccessibleSite(r, user, businessID, req.SiteID)
+	site, err := loadAccessibleSite(db, r, user, businessID, req.SiteID)
 	if err != nil {
 		handleAttendanceError(w, err)
 		return
@@ -131,7 +138,7 @@ func CheckInAttendance(w http.ResponseWriter, r *http.Request) {
 
 	event := buildAttendanceEvent(session.ID, user.ID, site.ID, businessID, models.AttendanceEventTypeCheckIn, req, capturedAt, validation, anomalyFlags, metadata)
 
-	if err := config.DB.Transaction(func(tx *gorm.DB) error {
+	if err := db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&session).Error; err != nil {
 			return err
 		}
@@ -146,6 +153,13 @@ func CheckInAttendance(w http.ResponseWriter, r *http.Request) {
 }
 
 func HeartbeatAttendance(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	user := middleware.GetUser(r)
 	businessID, err := getBusinessIDFromContext(r)
 	if err != nil {
@@ -159,7 +173,7 @@ func HeartbeatAttendance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, err := loadActiveSession(user.ID, req.SessionID)
+	session, err := loadActiveSession(db, user.ID, req.SessionID)
 	if err != nil {
 		handleAttendanceError(w, err)
 		return
@@ -231,7 +245,7 @@ func HeartbeatAttendance(w http.ResponseWriter, r *http.Request) {
 	session.ValidationReason = stringPtr(validation.ValidationReason)
 	session.AnomalyFlags = anomalyFlags
 
-	if err := config.DB.Transaction(func(tx *gorm.DB) error {
+	if err := db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&ping).Error; err != nil {
 			return err
 		}
@@ -250,6 +264,13 @@ func HeartbeatAttendance(w http.ResponseWriter, r *http.Request) {
 }
 
 func CheckOutAttendance(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	user := middleware.GetUser(r)
 	businessID, err := getBusinessIDFromContext(r)
 	if err != nil {
@@ -263,7 +284,7 @@ func CheckOutAttendance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, err := loadActiveSession(user.ID, req.SessionID)
+	session, err := loadActiveSession(db, user.ID, req.SessionID)
 	if err != nil {
 		handleAttendanceError(w, err)
 		return
@@ -318,7 +339,7 @@ func CheckOutAttendance(w http.ResponseWriter, r *http.Request) {
 	session.ValidationReason = stringPtr(validation.ValidationReason)
 	session.AnomalyFlags = anomalyFlags
 
-	if err := config.DB.Transaction(func(tx *gorm.DB) error {
+	if err := db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&event).Error; err != nil {
 			return err
 		}
@@ -332,6 +353,13 @@ func CheckOutAttendance(w http.ResponseWriter, r *http.Request) {
 }
 
 func GetActiveAttendanceSessions(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	businessID, err := getBusinessIDFromContext(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -339,7 +367,7 @@ func GetActiveAttendanceSessions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	page, limit := parsePagination(r)
-	query := config.DB.Model(&models.AttendanceSession{}).
+	query := db.Model(&models.AttendanceSession{}).
 		Preload("User").
 		Preload("Site").
 		Where("business_vertical_id = ? AND status = ?", businessID, models.AttendanceSessionStatusActive)
@@ -372,6 +400,13 @@ func GetActiveAttendanceSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 func GetAttendanceLogs(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	businessID, err := getBusinessIDFromContext(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -379,7 +414,7 @@ func GetAttendanceLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	page, limit := parsePagination(r)
-	query := config.DB.Model(&models.AttendanceSession{}).
+	query := db.Model(&models.AttendanceSession{}).
 		Preload("User").
 		Preload("Site").
 		Where("business_vertical_id = ?", businessID)
@@ -424,13 +459,20 @@ func GetAttendanceLogs(w http.ResponseWriter, r *http.Request) {
 }
 
 func GetAttendanceHeadcount(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	businessID, err := getBusinessIDFromContext(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	query := config.DB.Table("attendance_sessions").
+	query := db.Table("attendance_sessions").
 		Select("attendance_sessions.site_id, sites.name as site_name, COUNT(attendance_sessions.id) as active_count, MAX(attendance_sessions.last_seen_at) as last_seen_at").
 		Joins("JOIN sites ON sites.id = attendance_sessions.site_id").
 		Where("attendance_sessions.business_vertical_id = ? AND attendance_sessions.status = ? AND attendance_sessions.deleted_at IS NULL", businessID, models.AttendanceSessionStatusActive).
@@ -459,6 +501,13 @@ func GetAttendanceHeadcount(w http.ResponseWriter, r *http.Request) {
 }
 
 func GetEmployeeAttendanceTimeline(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	businessID, err := getBusinessIDFromContext(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -471,7 +520,7 @@ func GetEmployeeAttendanceTimeline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	query := config.DB.Model(&models.AttendanceSession{}).
+	query := db.Model(&models.AttendanceSession{}).
 		Preload("Site").
 		Preload("Events", func(tx *gorm.DB) *gorm.DB {
 			return tx.Order("event_time ASC")
@@ -514,9 +563,9 @@ func getBusinessIDFromContext(r *http.Request) (uuid.UUID, error) {
 	return businessID, nil
 }
 
-func loadAccessibleSite(r *http.Request, user models.User, businessID uuid.UUID, siteID uuid.UUID) (models.Site, error) {
+func loadAccessibleSite(db *gorm.DB, r *http.Request, user models.User, businessID uuid.UUID, siteID uuid.UUID) (models.Site, error) {
 	var site models.Site
-	if err := config.DB.Where("id = ? AND business_vertical_id = ? AND is_active = ?", siteID, businessID, true).First(&site).Error; err != nil {
+	if err := db.Where("id = ? AND business_vertical_id = ? AND is_active = ?", siteID, businessID, true).First(&site).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return site, errors.New("site not found")
 		}
@@ -539,7 +588,7 @@ func loadAccessibleSite(r *http.Request, user models.User, businessID uuid.UUID,
 	}
 
 	var count int64
-	if err := config.DB.Model(&models.UserSiteAccess{}).
+	if err := db.Model(&models.UserSiteAccess{}).
 		Where("user_id = ? AND site_id = ? AND can_read = ?", user.ID, siteID, true).
 		Count(&count).Error; err != nil {
 		return site, err
@@ -551,17 +600,17 @@ func loadAccessibleSite(r *http.Request, user models.User, businessID uuid.UUID,
 	return site, nil
 }
 
-func hasActiveSession(userID uuid.UUID) bool {
+func hasActiveSession(db *gorm.DB, userID uuid.UUID) bool {
 	var count int64
-	config.DB.Model(&models.AttendanceSession{}).
+	db.Model(&models.AttendanceSession{}).
 		Where("user_id = ? AND status = ?", userID, models.AttendanceSessionStatusActive).
 		Count(&count)
 	return count > 0
 }
 
-func loadActiveSession(userID uuid.UUID, sessionID *uuid.UUID) (models.AttendanceSession, error) {
+func loadActiveSession(db *gorm.DB, userID uuid.UUID, sessionID *uuid.UUID) (models.AttendanceSession, error) {
 	var session models.AttendanceSession
-	query := config.DB.Preload("Site").Where("user_id = ? AND status = ?", userID, models.AttendanceSessionStatusActive)
+	query := db.Preload("Site").Where("user_id = ? AND status = ?", userID, models.AttendanceSessionStatusActive)
 	if sessionID != nil && *sessionID != uuid.Nil {
 		query = query.Where("id = ?", *sessionID)
 	}
