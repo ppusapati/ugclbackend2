@@ -13,6 +13,13 @@ import (
 
 // GetBusinessSiteReports returns site reports filtered by business vertical
 func GetBusinessSiteReports(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	businessID := middleware.GetCurrentBusinessID(r)
 	if businessID == uuid.Nil {
 		http.Error(w, "business ID required", http.StatusBadRequest)
@@ -32,7 +39,7 @@ func GetBusinessSiteReports(w http.ResponseWriter, r *http.Request) {
 
 	params.Filters["businessVerticalId"] = businessID.String()
 
-	service := models.NewReportService(config.DB, models.DprSite{})
+	service := models.NewReportService(db, models.DprSite{})
 	response, err := service.GetReport(params)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -45,6 +52,13 @@ func GetBusinessSiteReports(w http.ResponseWriter, r *http.Request) {
 
 // CreateBusinessSiteReport creates a site report within business context
 func CreateBusinessSiteReport(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	businessID := middleware.GetCurrentBusinessID(r)
 	if businessID == uuid.Nil {
 		http.Error(w, "business ID required", http.StatusBadRequest)
@@ -66,7 +80,7 @@ func CreateBusinessSiteReport(w http.ResponseWriter, r *http.Request) {
 		report.PhoneNumberOfInformationEnteredPerson = user.Phone
 	}
 
-	if err := config.DB.Create(&report).Error; err != nil {
+	if err := db.Create(&report).Error; err != nil {
 		http.Error(w, "failed to create site report", http.StatusInternalServerError)
 		return
 	}
@@ -78,6 +92,13 @@ func CreateBusinessSiteReport(w http.ResponseWriter, r *http.Request) {
 
 // GetBusinessMaterials returns materials filtered by business vertical
 func GetBusinessMaterials(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	businessID := middleware.GetCurrentBusinessID(r)
 	if businessID == uuid.Nil {
 		http.Error(w, "business ID required", http.StatusBadRequest)
@@ -97,7 +118,7 @@ func GetBusinessMaterials(w http.ResponseWriter, r *http.Request) {
 
 	params.Filters["businessVerticalId"] = businessID.String()
 
-	service := models.NewReportService(config.DB, models.Material{})
+	service := models.NewReportService(db, models.Material{})
 	response, err := service.GetReport(params)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -110,6 +131,13 @@ func GetBusinessMaterials(w http.ResponseWriter, r *http.Request) {
 
 // CreateBusinessMaterial creates a material within business context
 func CreateBusinessMaterial(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	businessID := middleware.GetCurrentBusinessID(r)
 	if businessID == uuid.Nil {
 		http.Error(w, "business ID required", http.StatusBadRequest)
@@ -131,7 +159,7 @@ func CreateBusinessMaterial(w http.ResponseWriter, r *http.Request) {
 		item.PhoneNumber = user.Phone
 	}
 
-	if err := config.DB.Create(&item).Error; err != nil {
+	if err := db.Create(&item).Error; err != nil {
 		http.Error(w, "failed to create material report", http.StatusInternalServerError)
 		return
 	}
@@ -143,6 +171,13 @@ func CreateBusinessMaterial(w http.ResponseWriter, r *http.Request) {
 
 // GetBusinessAnalytics returns analytics for a specific business vertical
 func GetBusinessAnalytics(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	businessID := middleware.GetCurrentBusinessID(r)
 	if businessID == uuid.Nil {
 		http.Error(w, "business ID required", http.StatusBadRequest)
@@ -164,27 +199,27 @@ func GetBusinessAnalytics(w http.ResponseWriter, r *http.Request) {
 	var currentMonthMaterials int64
 	var previousMonthMaterials int64
 
-	config.DB.Model(&models.DprSite{}).Where("business_vertical_id = ?", businessID).Count(&totalSiteReports)
-	config.DB.Model(&models.Material{}).Where("business_vertical_id = ?", businessID).Count(&totalMaterials)
-	config.DB.Model(&models.Site{}).Where("business_vertical_id = ? AND is_active = ?", businessID, true).Count(&activeSites)
+	db.Model(&models.DprSite{}).Where("business_vertical_id = ?", businessID).Count(&totalSiteReports)
+	db.Model(&models.Material{}).Where("business_vertical_id = ?", businessID).Count(&totalMaterials)
+	db.Model(&models.Site{}).Where("business_vertical_id = ? AND is_active = ?", businessID, true).Count(&activeSites)
 
-	config.DB.Table("user_business_roles").
+	db.Table("user_business_roles").
 		Joins("JOIN business_roles ON business_roles.id = user_business_roles.business_role_id").
 		Where("business_roles.business_vertical_id = ? AND user_business_roles.is_active = ?", businessID, true).
 		Distinct("user_business_roles.user_id").
 		Count(&activeUsers)
 
-	config.DB.Model(&models.DprSite{}).
+	db.Model(&models.DprSite{}).
 		Where("business_vertical_id = ? AND created_at >= ?", businessID, startCurrentMonth).
 		Count(&currentMonthSiteReports)
-	config.DB.Model(&models.DprSite{}).
+	db.Model(&models.DprSite{}).
 		Where("business_vertical_id = ? AND created_at >= ? AND created_at < ?", businessID, startPreviousMonth, startCurrentMonth).
 		Count(&previousMonthSiteReports)
 
-	config.DB.Model(&models.Material{}).
+	db.Model(&models.Material{}).
 		Where("business_vertical_id = ? AND created_at >= ?", businessID, startCurrentMonth).
 		Count(&currentMonthMaterials)
-	config.DB.Model(&models.Material{}).
+	db.Model(&models.Material{}).
 		Where("business_vertical_id = ? AND created_at >= ? AND created_at < ?", businessID, startPreviousMonth, startCurrentMonth).
 		Count(&previousMonthMaterials)
 
@@ -209,7 +244,7 @@ func GetBusinessAnalytics(w http.ResponseWriter, r *http.Request) {
 			"monthly_growth":     monthlyGrowth,
 		},
 	}
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
@@ -217,24 +252,24 @@ func GetBusinessAnalytics(w http.ResponseWriter, r *http.Request) {
 // Solar Farm specific handlers
 func GetSolarGeneration(w http.ResponseWriter, r *http.Request) {
 	businessID := middleware.GetCurrentBusinessID(r)
-	
+
 	response := map[string]interface{}{
 		"message":     "Solar generation data",
 		"business_id": businessID,
 		"data": map[string]interface{}{
 			"current_generation": "1250 kW",
-			"daily_total":       "28.5 MWh",
-			"efficiency":        "94.2%",
+			"daily_total":        "28.5 MWh",
+			"efficiency":         "94.2%",
 		},
 	}
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
 
 func GetSolarPanels(w http.ResponseWriter, r *http.Request) {
 	businessID := middleware.GetCurrentBusinessID(r)
-	
+
 	response := map[string]interface{}{
 		"message":     "Solar panel information",
 		"business_id": businessID,
@@ -243,14 +278,14 @@ func GetSolarPanels(w http.ResponseWriter, r *http.Request) {
 			{"panel_id": "SP002", "status": "maintenance", "efficiency": "0%"},
 		},
 	}
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
 
 func GetSolarMaintenance(w http.ResponseWriter, r *http.Request) {
 	businessID := middleware.GetCurrentBusinessID(r)
-	
+
 	response := map[string]interface{}{
 		"message":     "Solar maintenance records",
 		"business_id": businessID,
@@ -259,7 +294,7 @@ func GetSolarMaintenance(w http.ResponseWriter, r *http.Request) {
 			{"task": "Inverter check", "status": "completed", "date": "2025-10-14"},
 		},
 	}
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
@@ -267,24 +302,24 @@ func GetSolarMaintenance(w http.ResponseWriter, r *http.Request) {
 // Water Works specific handlers
 func GetWaterConsumption(w http.ResponseWriter, r *http.Request) {
 	businessID := middleware.GetCurrentBusinessID(r)
-	
+
 	response := map[string]interface{}{
 		"message":     "Water consumption data",
 		"business_id": businessID,
 		"data": map[string]interface{}{
-			"daily_consumption":   "2.5M liters",
-			"peak_hour_usage":    "150K liters/hour",
-			"efficiency_rating":   "87.3%",
+			"daily_consumption": "2.5M liters",
+			"peak_hour_usage":   "150K liters/hour",
+			"efficiency_rating": "87.3%",
 		},
 	}
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
 
 func GetWaterSupply(w http.ResponseWriter, r *http.Request) {
 	businessID := middleware.GetCurrentBusinessID(r)
-	
+
 	response := map[string]interface{}{
 		"message":     "Water supply information",
 		"business_id": businessID,
@@ -294,14 +329,14 @@ func GetWaterSupply(w http.ResponseWriter, r *http.Request) {
 			"pressure":        "4.2 bar",
 		},
 	}
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
 
 func GetWaterQuality(w http.ResponseWriter, r *http.Request) {
 	businessID := middleware.GetCurrentBusinessID(r)
-	
+
 	response := map[string]interface{}{
 		"message":     "Water quality reports",
 		"business_id": businessID,
@@ -311,7 +346,7 @@ func GetWaterQuality(w http.ResponseWriter, r *http.Request) {
 			{"parameter": "Turbidity", "value": "0.3 NTU", "status": "excellent"},
 		},
 	}
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
