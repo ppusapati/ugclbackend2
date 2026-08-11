@@ -100,10 +100,6 @@ func Connect() {
 	if err := Migrations(DB); err != nil {
 		log.Fatal("Failed to run migrations:", err)
 	}
-	if err := ValidateRBACCutoverReady(DB); err != nil {
-		log.Fatal(err)
-	}
-	log.Println("RBAC cutover validation passed")
 
 }
 
