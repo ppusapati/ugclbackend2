@@ -12,6 +12,13 @@ import (
 )
 
 func GetAllVehicleLogs(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	params, err := models.ParseReportParams(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -23,7 +30,7 @@ func GetAllVehicleLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	service := models.NewReportService(config.DB, models.VehicleLog{})
+	service := models.NewReportService(db, models.VehicleLog{})
 	response, err := service.GetReport(params)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -35,6 +42,13 @@ func GetAllVehicleLogs(w http.ResponseWriter, r *http.Request) {
 }
 
 func CreateVehicleLog(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var item models.VehicleLog
 	if err := json.NewDecoder(r.Body).Decode(&item); err != nil {
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -44,15 +58,22 @@ func CreateVehicleLog(w http.ResponseWriter, r *http.Request) {
 	// If you want to save user info, uncomment and set fields as needed
 	item.SiteEngineerName = user.Name
 	item.SiteEngineerPhone = user.Phone
-	config.DB.Create(&item)
+	db.Create(&item)
 	json.NewEncoder(w).Encode(item)
 }
 
 func GetVehicleLog(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	params := mux.Vars(r)
 	id := params["id"]
 	var item models.VehicleLog
-	if err := config.DB.First(&item, "id = ?", id).Error; err != nil {
+	if err := db.First(&item, "id = ?", id).Error; err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
@@ -60,10 +81,17 @@ func GetVehicleLog(w http.ResponseWriter, r *http.Request) {
 }
 
 func UpdateVehicleLog(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	params := mux.Vars(r)
 	id := params["id"]
 	var item models.VehicleLog
-	if err := config.DB.First(&item, "id = ?", id).Error; err != nil {
+	if err := db.First(&item, "id = ?", id).Error; err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
@@ -71,14 +99,21 @@ func UpdateVehicleLog(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	config.DB.Save(&item)
+	db.Save(&item)
 	json.NewEncoder(w).Encode(item)
 }
 
 func DeleteVehicleLog(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	params := mux.Vars(r)
 	id := params["id"]
-	if err := config.DB.Delete(&models.VehicleLog{}, "id = ?", id).Error; err != nil {
+	if err := db.Delete(&models.VehicleLog{}, "id = ?", id).Error; err != nil {
 		http.Error(w, "db error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -87,6 +122,13 @@ func DeleteVehicleLog(w http.ResponseWriter, r *http.Request) {
 
 // BatchVehicleLogs handles POST /api/v1/vehicle-log/batch
 func BatchVehicleLogs(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var batch []models.VehicleLog
 	if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -98,7 +140,7 @@ func BatchVehicleLogs(w http.ResponseWriter, r *http.Request) {
 		batch[i].SiteEngineerName = user.Name
 		batch[i].SiteEngineerPhone = user.Phone
 	}
-	if err := config.DB.
+	if err := db.
 		Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "id"}},
 			DoNothing: true,
