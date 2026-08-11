@@ -38,6 +38,7 @@ func RegisterRoutes() http.Handler {
 	api := r.PathPrefix("/api/v1").Subrouter()
 	api.Use(middleware.SecurityMiddleware)
 	api.Use(middleware.JWTMiddleware)
+	api.Use(middleware.TenantResolutionMiddleware)
 
 	// User profile endpoint
 	api.HandleFunc("/profile", handleProfile).Methods("GET")

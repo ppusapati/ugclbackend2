@@ -37,3 +37,9 @@ func GinSecurityMiddleware() gin.HandlerFunc {
 func GinJWTMiddleware() gin.HandlerFunc {
 	return AdaptHTTPMiddleware(JWTMiddleware)
 }
+
+// GinTenantResolutionMiddleware applies TenantResolutionMiddleware to Gin
+// routes. Must be registered after GinJWTMiddleware.
+func GinTenantResolutionMiddleware() gin.HandlerFunc {
+	return AdaptHTTPMiddleware(TenantResolutionMiddleware)
+}

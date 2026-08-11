@@ -16,6 +16,7 @@ func RegisterReportRoutes(r *mux.Router) {
 	// Report Builder API v1 - Protected routes
 	api := r.PathPrefix("/api/v1").Subrouter()
 	api.Use(middleware.JWTMiddleware)
+	api.Use(middleware.TenantResolutionMiddleware)
 
 	// Report read/write subrouters with permission guards
 	reportRead := api.PathPrefix("").Subrouter()

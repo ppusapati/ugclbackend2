@@ -20,6 +20,7 @@ func RegisterBusinessRoutes(r *mux.Router) {
 	admin := r.PathPrefix("/api/v1/admin").Subrouter()
 	admin.Use(middleware.SecurityMiddleware)
 	admin.Use(middleware.JWTMiddleware)
+	admin.Use(middleware.TenantResolutionMiddleware)
 
 	registerGlobalAdminRoutes(admin)
 
@@ -29,6 +30,7 @@ func RegisterBusinessRoutes(r *mux.Router) {
 	api := r.PathPrefix("/api/v1").Subrouter()
 	api.Use(middleware.SecurityMiddleware)
 	api.Use(middleware.JWTMiddleware)
+	api.Use(middleware.TenantResolutionMiddleware)
 
 	api.HandleFunc("/my-businesses", biz.GetUserBusinessAccess).Methods("GET")
 	api.HandleFunc("/modules", masters.GetModules).Methods("GET")
@@ -46,6 +48,7 @@ func RegisterBusinessRoutes(r *mux.Router) {
 	business := r.PathPrefix("/api/v1/business/{businessCode}").Subrouter()
 	business.Use(middleware.SecurityMiddleware)
 	business.Use(middleware.JWTMiddleware)
+	business.Use(middleware.TenantResolutionMiddleware)
 	business.Use(middleware.RequireBusinessAccess())
 
 	registerBusinessRoleRoutes(business)

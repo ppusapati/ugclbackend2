@@ -45,7 +45,7 @@ func TestGetCurrentUser_WithJWTMiddleware_InvalidToken_Unauthorized(t *testing.T
 }
 
 func TestGetCurrentUser_WithJWTMiddleware_NonUUIDClaim_UserNotFound(t *testing.T) {
-	token, err := middleware.GenerateToken("not-a-uuid", "user", "Test User", "9999999999")
+	token, err := middleware.GenerateToken("not-a-uuid", "user", "Test User", "9999999999", "test_tenant")
 	if err != nil {
 		t.Fatalf("failed to generate token: %v", err)
 	}

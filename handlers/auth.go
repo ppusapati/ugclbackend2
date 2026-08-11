@@ -76,11 +76,33 @@ type loginPayload struct {
 	Password string `json:"password"`
 }
 
+// resolveTenantBySlug looks up an active tenant by slug against the shared
+// control schema (config.DB — legitimate here, since which tenant schema to
+// use is exactly what this call determines; there is no tenant context to
+// resolve it through yet). Returns a user-safe error message alongside the
+// error so callers can respond without leaking whether a slug exists.
+func resolveTenantBySlug(ctx context.Context, slug string) (*models.Tenant, string, error) {
+	slug = strings.TrimSpace(slug)
+	if slug == "" {
+		return nil, "tenant_slug is required", errors.New("empty tenant slug")
+	}
+
+	var tenant models.Tenant
+	if err := config.DB.WithContext(ctx). // config-db-ok: control-schema lookup, runs before any tenant is known
+						Where("slug = ? AND is_active = ? AND status = ?", slug, true, models.TenantStatusActive).
+						First(&tenant).Error; err != nil {
+		return nil, "unknown or inactive tenant", err
+	}
+
+	return &tenant, "", nil
+}
+
 type registerReq struct {
 	Name               string      `json:"name"`
 	Email              string      `json:"email"`
 	Phone              string      `json:"phone"`
 	Password           string      `json:"password"`
+	TenantSlug         string      `json:"tenant_slug"`
 	RoleID             *uuid.UUID  `json:"role_id"`              // Global role ID (or legacy business role ID from UI)
 	BusinessRoleID     *uuid.UUID  `json:"business_role_id"`     // Preferred field for business role assignment
 	BusinessVerticalID *uuid.UUID  `json:"business_vertical_id"` // Optional; inferred from business role when omitted
@@ -88,18 +110,40 @@ type registerReq struct {
 }
 
 func Register(w http.ResponseWriter, r *http.Request) {
-	db, cleanup, err := config.DBFromContext(r.Context())
-	if err != nil {
-		http.Error(w, "database unavailable", http.StatusInternalServerError)
-		return
-	}
-	defer cleanup()
-
 	var req registerReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
+
+	// Authenticated re-registration flows (registerWithRBAC assigning roles to
+	// an existing tenant's user) already carry a resolved tenant in context
+	// via TenantResolutionMiddleware; public self-registration does not, so
+	// resolve it from the request body the same way Login does.
+	var db *gorm.DB
+	var cleanup func() error
+	if claims := middleware.GetClaims(r); claims != nil {
+		var dbErr error
+		db, cleanup, dbErr = config.DBFromContext(r.Context())
+		if dbErr != nil {
+			http.Error(w, "database unavailable", http.StatusInternalServerError)
+			return
+		}
+	} else {
+		tenant, userMsg, tenantErr := resolveTenantBySlug(r.Context(), req.TenantSlug)
+		if tenantErr != nil {
+			http.Error(w, userMsg, http.StatusUnauthorized)
+			return
+		}
+		var sessionErr error
+		db, cleanup, sessionErr = config.TenantScopedSession(tenant.SchemaName)
+		if sessionErr != nil {
+			http.Error(w, "database unavailable", http.StatusInternalServerError)
+			return
+		}
+	}
+	defer cleanup()
+
 	// hash pw
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), userRegistrationBcryptCost)
 	if err != nil {
@@ -108,7 +152,7 @@ func Register(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if middleware.RBACEnabled() {
-		registerWithRBAC(w, r, req, string(hash))
+		registerWithRBAC(w, r, db, req, string(hash))
 		return
 	}
 
@@ -208,14 +252,7 @@ func Register(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 }
 
-func registerWithRBAC(w http.ResponseWriter, r *http.Request, req registerReq, passwordHash string) {
-	db, cleanup, err := config.DBFromContext(r.Context())
-	if err != nil {
-		http.Error(w, "database unavailable", http.StatusInternalServerError)
-		return
-	}
-	defer cleanup()
-
+func registerWithRBAC(w http.ResponseWriter, r *http.Request, db *gorm.DB, req registerReq, passwordHash string) {
 	if req.RoleID != nil || req.BusinessRoleID != nil {
 		writeRBACError(w, http.StatusBadRequest, "use role_ids for scoped RBAC assignments")
 		return
@@ -239,7 +276,7 @@ func registerWithRBAC(w http.ResponseWriter, r *http.Request, req registerReq, p
 		Name: req.Name, Email: req.Email, Phone: req.Phone,
 		PasswordHash: passwordHash, BusinessVerticalID: req.BusinessVerticalID,
 	}
-	err = db.Transaction(func(tx *gorm.DB) error {
+	err := db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&user).Error; err != nil {
 			return err
 		}
@@ -295,8 +332,9 @@ func registerWithRBAC(w http.ResponseWriter, r *http.Request, req registerReq, p
 }
 
 type loginReq struct {
-	Phone    string `json:"phone"`
-	Password string `json:"password"`
+	Phone      string `json:"phone"`
+	Password   string `json:"password"`
+	TenantSlug string `json:"tenant_slug"`
 }
 
 type loginResp struct {
@@ -356,13 +394,6 @@ func shouldLogSlowLogin(totalDuration time.Duration) bool {
 }
 
 func Login(w http.ResponseWriter, r *http.Request) {
-	db, cleanup, dbErr := config.DBFromContext(r.Context())
-	if dbErr != nil {
-		http.Error(w, "database unavailable", http.StatusInternalServerError)
-		return
-	}
-	defer cleanup()
-
 	requestStart := time.Now()
 	var dbLookupDuration time.Duration
 	var passwordCheckDuration time.Duration
@@ -376,6 +407,19 @@ func Login(w http.ResponseWriter, r *http.Request) {
 
 	loginCtx, cancel := context.WithTimeout(r.Context(), loginQueryTimeout())
 	defer cancel()
+
+	tenant, userMsg, err := resolveTenantBySlug(loginCtx, req.TenantSlug)
+	if err != nil {
+		http.Error(w, userMsg, http.StatusUnauthorized)
+		return
+	}
+
+	db, cleanup, dbErr := config.TenantScopedSession(tenant.SchemaName)
+	if dbErr != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
 
 	// Keep login lookup minimal and index-friendly: avoid implicit ORDER BY from First().
 	dbLookupStart := time.Now()
@@ -406,7 +450,7 @@ func Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tokenBuildStart := time.Now()
-	token, err := middleware.GenerateToken(u.ID.String(), roleName, u.Name, u.Phone)
+	token, err := middleware.GenerateToken(u.ID.String(), roleName, u.Name, u.Phone, tenant.SchemaName)
 	if err != nil {
 		http.Error(w, "couldn't create token", http.StatusInternalServerError)
 		return
@@ -423,9 +467,8 @@ func Login(w http.ResponseWriter, r *http.Request) {
 		IPAddress: clientIPFromRequest(r),
 		UserAgent: strings.TrimSpace(r.UserAgent()),
 	}
-	tenantSchema := config.TenantSchemaFromContext(r.Context())
 	go func(event models.UserLoginEvent) {
-		auditCtx, auditCancel := context.WithTimeout(config.WithTenantSchema(context.Background(), tenantSchema), loginAuditInsertTimeout())
+		auditCtx, auditCancel := context.WithTimeout(config.WithTenantSchema(context.Background(), tenant.SchemaName), loginAuditInsertTimeout())
 		defer auditCancel()
 
 		auditDB, auditCleanup, dbErr := config.DBFromContext(auditCtx)

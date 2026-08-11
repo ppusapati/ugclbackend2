@@ -34,10 +34,11 @@ func init() {
 
 // Claims are the custom payload in your JWT
 type Claims struct {
-	UserID string `json:"userId"`
-	Name   string `json:"name"`
-	Phone  string `json:"phone"`
-	Role   string `json:"role"`
+	UserID       string `json:"userId"`
+	Name         string `json:"name"`
+	Phone        string `json:"phone"`
+	Role         string `json:"role"`
+	TenantSchema string `json:"tenantSchema"`
 	jwt.RegisteredClaims
 }
 
@@ -56,13 +57,18 @@ type thirdPartyRequestContext struct {
 	AllowedURLs   map[string]bool
 }
 
-// GenerateToken creates a signed JWT valid for 24 h
-func GenerateToken(userID, role, name, phone string) (string, error) {
+// GenerateToken creates a signed JWT valid for 24 h. schemaName is the
+// tenant's Postgres schema (models.Tenant.SchemaName), resolved once at
+// login time; TenantResolutionMiddleware reads it back out of the token on
+// every subsequent request so config.DBFromContext can open the right
+// tenant-scoped connection without re-resolving the tenant each time.
+func GenerateToken(userID, role, name, phone, schemaName string) (string, error) {
 	claims := Claims{
-		UserID: userID,
-		Name:   name,
-		Phone:  phone,
-		Role:   role,
+		UserID:       userID,
+		Name:         name,
+		Phone:        phone,
+		Role:         role,
+		TenantSchema: schemaName,
 
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
@@ -119,6 +125,36 @@ func JWTMiddleware(next http.Handler) http.Handler {
 
 		// attach the full Claims object to context
 		ctx := context.WithValue(r.Context(), userClaimsKey, claims)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// TenantResolutionMiddleware reads the tenant schema decoded into Claims by
+// JWTMiddleware and stashes it into the request context via
+// config.WithTenantSchema, so every downstream config.DBFromContext call in
+// this request resolves a connection scoped to that tenant's schema instead
+// of falling back to the global DB. Must run after JWTMiddleware in the
+// chain (it reads Claims from context) and before any handler.
+//
+// A missing or empty TenantSchema claim is treated as unauthorized rather
+// than silently falling through to the global DB: every token minted after
+// this middleware shipped carries a schema, so an empty claim means either a
+// pre-Phase-3 token that's still valid but stale, or a token issued by a
+// code path that skipped tenant resolution — both are bugs to surface, not
+// paper over.
+func TenantResolutionMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		claims := GetClaims(r)
+		if claims == nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if strings.TrimSpace(claims.TenantSchema) == "" {
+			http.Error(w, "token missing tenant context; please log in again", http.StatusUnauthorized)
+			return
+		}
+
+		ctx := config.WithTenantSchema(r.Context(), claims.TenantSchema)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

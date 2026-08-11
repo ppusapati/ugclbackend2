@@ -15,7 +15,7 @@ func RegisterWebhookRoutes(router *gin.Engine) {
 
 	// Protected webhook management routes
 	webhookGroup := router.Group("/api/v1/webhooks")
-	webhookGroup.Use(middleware.GinSecurityMiddleware(), middleware.GinJWTMiddleware(), middleware.GinActiveBusinessContextMiddleware())
+	webhookGroup.Use(middleware.GinSecurityMiddleware(), middleware.GinJWTMiddleware(), middleware.GinTenantResolutionMiddleware(), middleware.GinActiveBusinessContextMiddleware())
 
 	// CRUD operations
 	webhookGroup.POST("", handlers.CreateWebhook)
