@@ -17,8 +17,15 @@ type NotificationAdminHandler struct{}
 
 // GetAllNotificationRules retrieves all notification rules
 func (h *NotificationAdminHandler) GetAllNotificationRules(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	// Parse query parameters for filtering
-	query := config.DB.Model(&models.NotificationRule{})
+	query := db.Model(&models.NotificationRule{})
 
 	// Filter by workflow ID
 	if workflowID := r.URL.Query().Get("workflow_id"); workflowID != "" {
@@ -47,6 +54,13 @@ func (h *NotificationAdminHandler) GetAllNotificationRules(w http.ResponseWriter
 
 // GetNotificationRule retrieves a single notification rule by ID
 func (h *NotificationAdminHandler) GetNotificationRule(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	// Get rule ID from URL
 	vars := mux.Vars(r)
 	ruleID, err := uuid.Parse(vars["id"])
@@ -56,7 +70,7 @@ func (h *NotificationAdminHandler) GetNotificationRule(w http.ResponseWriter, r 
 	}
 
 	var rule models.NotificationRule
-	if err := config.DB.
+	if err := db.
 		Preload("Recipients").
 		First(&rule, "id = ?", ruleID).Error; err != nil {
 		http.Error(w, "Notification rule not found", http.StatusNotFound)
@@ -71,6 +85,13 @@ func (h *NotificationAdminHandler) GetNotificationRule(w http.ResponseWriter, r 
 
 // CreateNotificationRule creates a new notification rule
 func (h *NotificationAdminHandler) CreateNotificationRule(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	// Get user ID from JWT claims
 	claims := middleware.GetClaims(r)
 	if claims == nil {
@@ -145,7 +166,7 @@ func (h *NotificationAdminHandler) CreateNotificationRule(w http.ResponseWriter,
 	}
 
 	// Start transaction
-	tx := config.DB.Begin()
+	tx := db.Begin()
 	defer func() {
 		if r := recover(); r != nil {
 			tx.Rollback()
@@ -176,7 +197,7 @@ func (h *NotificationAdminHandler) CreateNotificationRule(w http.ResponseWriter,
 	}
 
 	// Load rule with recipients
-	config.DB.Preload("Recipients").First(&rule, rule.ID)
+	db.Preload("Recipients").First(&rule, rule.ID)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -187,6 +208,13 @@ func (h *NotificationAdminHandler) CreateNotificationRule(w http.ResponseWriter,
 
 // UpdateNotificationRule updates an existing notification rule
 func (h *NotificationAdminHandler) UpdateNotificationRule(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	// Get rule ID from URL
 	vars := mux.Vars(r)
 	ruleID, err := uuid.Parse(vars["id"])
@@ -197,7 +225,7 @@ func (h *NotificationAdminHandler) UpdateNotificationRule(w http.ResponseWriter,
 
 	// Get existing rule
 	var rule models.NotificationRule
-	if err := config.DB.First(&rule, "id = ?", ruleID).Error; err != nil {
+	if err := db.First(&rule, "id = ?", ruleID).Error; err != nil {
 		http.Error(w, "Notification rule not found", http.StatusNotFound)
 		return
 	}
@@ -244,7 +272,7 @@ func (h *NotificationAdminHandler) UpdateNotificationRule(w http.ResponseWriter,
 	}
 
 	// Start transaction
-	tx := config.DB.Begin()
+	tx := db.Begin()
 	defer func() {
 		if r := recover(); r != nil {
 			tx.Rollback()
@@ -283,7 +311,7 @@ func (h *NotificationAdminHandler) UpdateNotificationRule(w http.ResponseWriter,
 	}
 
 	// Load rule with recipients
-	config.DB.Preload("Recipients").First(&rule, rule.ID)
+	db.Preload("Recipients").First(&rule, rule.ID)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -293,6 +321,13 @@ func (h *NotificationAdminHandler) UpdateNotificationRule(w http.ResponseWriter,
 
 // DeleteNotificationRule deletes a notification rule
 func (h *NotificationAdminHandler) DeleteNotificationRule(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	// Get rule ID from URL
 	vars := mux.Vars(r)
 	ruleID, err := uuid.Parse(vars["id"])
@@ -303,13 +338,13 @@ func (h *NotificationAdminHandler) DeleteNotificationRule(w http.ResponseWriter,
 
 	// Check if rule exists
 	var rule models.NotificationRule
-	if err := config.DB.First(&rule, "id = ?", ruleID).Error; err != nil {
+	if err := db.First(&rule, "id = ?", ruleID).Error; err != nil {
 		http.Error(w, "Notification rule not found", http.StatusNotFound)
 		return
 	}
 
 	// Start transaction
-	tx := config.DB.Begin()
+	tx := db.Begin()
 	defer func() {
 		if r := recover(); r != nil {
 			tx.Rollback()
@@ -344,6 +379,13 @@ func (h *NotificationAdminHandler) DeleteNotificationRule(w http.ResponseWriter,
 
 // ToggleNotificationRule toggles a notification rule's active status
 func (h *NotificationAdminHandler) ToggleNotificationRule(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	// Get rule ID from URL
 	vars := mux.Vars(r)
 	ruleID, err := uuid.Parse(vars["id"])
@@ -354,7 +396,7 @@ func (h *NotificationAdminHandler) ToggleNotificationRule(w http.ResponseWriter,
 
 	// Get existing rule
 	var rule models.NotificationRule
-	if err := config.DB.First(&rule, "id = ?", ruleID).Error; err != nil {
+	if err := db.First(&rule, "id = ?", ruleID).Error; err != nil {
 		http.Error(w, "Notification rule not found", http.StatusNotFound)
 		return
 	}
@@ -363,7 +405,7 @@ func (h *NotificationAdminHandler) ToggleNotificationRule(w http.ResponseWriter,
 	rule.IsActive = !rule.IsActive
 	rule.UpdatedAt = time.Now()
 
-	if err := config.DB.Save(&rule).Error; err != nil {
+	if err := db.Save(&rule).Error; err != nil {
 		http.Error(w, "Failed to update notification rule", http.StatusInternalServerError)
 		return
 	}
@@ -374,6 +416,13 @@ func (h *NotificationAdminHandler) ToggleNotificationRule(w http.ResponseWriter,
 
 // GetNotificationStats returns statistics about notifications
 func (h *NotificationAdminHandler) GetNotificationStats(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	type Stats struct {
 		TotalRules         int64 `json:"total_rules"`
 		ActiveRules        int64 `json:"active_rules"`
@@ -387,15 +436,15 @@ func (h *NotificationAdminHandler) GetNotificationStats(w http.ResponseWriter, r
 	var stats Stats
 
 	// Count rules
-	config.DB.Model(&models.NotificationRule{}).Count(&stats.TotalRules)
-	config.DB.Model(&models.NotificationRule{}).Where("is_active = ?", true).Count(&stats.ActiveRules)
+	db.Model(&models.NotificationRule{}).Count(&stats.TotalRules)
+	db.Model(&models.NotificationRule{}).Where("is_active = ?", true).Count(&stats.ActiveRules)
 
 	// Count notifications
-	config.DB.Model(&models.Notification{}).Count(&stats.TotalNotifications)
-	config.DB.Model(&models.Notification{}).Where("status = ?", models.NotificationStatusPending).Count(&stats.PendingCount)
-	config.DB.Model(&models.Notification{}).Where("status = ?", models.NotificationStatusSent).Count(&stats.SentCount)
-	config.DB.Model(&models.Notification{}).Where("read_at IS NOT NULL").Count(&stats.ReadCount)
-	config.DB.Model(&models.Notification{}).Where("status = ?", models.NotificationStatusFailed).Count(&stats.FailedCount)
+	db.Model(&models.Notification{}).Count(&stats.TotalNotifications)
+	db.Model(&models.Notification{}).Where("status = ?", models.NotificationStatusPending).Count(&stats.PendingCount)
+	db.Model(&models.Notification{}).Where("status = ?", models.NotificationStatusSent).Count(&stats.SentCount)
+	db.Model(&models.Notification{}).Where("read_at IS NOT NULL").Count(&stats.ReadCount)
+	db.Model(&models.Notification{}).Where("status = ?", models.NotificationStatusFailed).Count(&stats.FailedCount)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
