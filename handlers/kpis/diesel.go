@@ -13,8 +13,14 @@ import (
 )
 
 func GetDieselKPIs(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var diesels []models.Diesel
-	db := config.DB
 	if err := db.Find(&diesels).Error; err != nil {
 		http.Error(w, err.Error(), 500)
 		return

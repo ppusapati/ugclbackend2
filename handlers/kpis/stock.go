@@ -14,8 +14,14 @@ import (
 )
 
 func GetStockKPIs(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var stocks []models.Stock
-	db := config.DB // however you get your DB
 	if err := db.Find(&stocks).Error; err != nil {
 		http.Error(w, err.Error(), 500)
 		return

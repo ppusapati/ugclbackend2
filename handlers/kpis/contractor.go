@@ -13,8 +13,14 @@ import (
 )
 
 func GetContractorKPIs(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var contractors []models.Contractor
-	db := config.DB // or your db getter
 
 	// Optional: add date filtering via query params if needed
 

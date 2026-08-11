@@ -11,7 +11,13 @@ import (
 )
 
 func GetDairyKPIs(w http.ResponseWriter, r *http.Request) {
-	db := config.DB // however you get your DB
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var sites []models.DairySite
 	if err := db.Find(&sites).Error; err != nil {
 		http.Error(w, err.Error(), 500)
