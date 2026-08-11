@@ -261,9 +261,18 @@ func CalculateTravelSpeedKmh(lat1, lng1 float64, at1 time.Time, lat2, lng2 float
 	return &speed
 }
 
+// containsCriticalAnomaly reports whether flags contains an anomaly serious
+// enough to block check-in/check-out when strict enforcement is on.
+//
+// AttendanceAnomalyOutsideBoundary is deliberately excluded: check-in and
+// check-out are allowed from any location. Distance from the site is still
+// computed and the outside_boundary flag is still recorded (see
+// ValidateAttendanceInput) for audit/reporting purposes, it just never blocks
+// the request. Continuous location capture between check-in and check-out is
+// handled separately via the heartbeat endpoint, which already never rejects
+// on this or any anomaly.
 func containsCriticalAnomaly(flags []string) bool {
 	critical := map[string]bool{
-		AttendanceAnomalyOutsideBoundary: true,
 		AttendanceAnomalyMockLocation:    true,
 		AttendanceAnomalyGpsDisabled:     true,
 		AttendanceAnomalyImpossibleSpeed: true,

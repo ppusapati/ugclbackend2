@@ -137,7 +137,9 @@ func containsFlag(flags []string, expected string) bool {
 	return false
 }
 
-func TestValidateAttendanceInputRejectsOutsideBoundaryWhenStrict(t *testing.T) {
+// Check-in/check-out are allowed from any location: outside_boundary is
+// flagged for audit but never rejects, even under strict enforcement.
+func TestValidateAttendanceInputFlagsOutsideBoundaryEvenWhenStrict(t *testing.T) {
 	location := `{"lat":12.9716,"lng":77.5946,"address":"Site A"}`
 
 	result, err := ValidateAttendanceInput(AttendanceValidationInput{
@@ -155,8 +157,11 @@ func TestValidateAttendanceInputRejectsOutsideBoundaryWhenStrict(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	if result.ValidationStatus != models.AttendanceValidationRejected {
-		t.Fatalf("expected rejected status, got %s", result.ValidationStatus)
+	if result.ValidationStatus != models.AttendanceValidationFlagged {
+		t.Fatalf("expected flagged status, got %s", result.ValidationStatus)
+	}
+	if !containsFlag(result.AnomalyFlags, AttendanceAnomalyOutsideBoundary) {
+		t.Fatalf("expected outside boundary anomaly to still be recorded, got %v", result.AnomalyFlags)
 	}
 }
 
