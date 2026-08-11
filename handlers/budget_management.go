@@ -1,9 +1,9 @@
 package handlers
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
-	"encoding/json"
 	"time"
 
 	"p9e.in/ugcl/config"
@@ -16,15 +16,11 @@ import (
 )
 
 // BudgetHandler handles budget management operations
-type BudgetHandler struct {
-	db *gorm.DB
-}
+type BudgetHandler struct{}
 
 // NewBudgetHandler creates a new budget handler
 func NewBudgetHandler() *BudgetHandler {
-	return &BudgetHandler{
-		db: config.DB,
-	}
+	return &BudgetHandler{}
 }
 
 // CreateBudgetAllocationRequest represents the request to create a budget allocation
@@ -56,6 +52,13 @@ type ApproveBudgetRequest struct {
 
 // CreateBudgetAllocation creates a new budget allocation
 func (h *BudgetHandler) CreateBudgetAllocation(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var req CreateBudgetAllocationRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
@@ -91,14 +94,14 @@ func (h *BudgetHandler) CreateBudgetAllocation(w http.ResponseWriter, r *http.Re
 	// Validate project or task exists
 	if req.ProjectID != nil {
 		var project models.Project
-		if err := h.db.First(&project, "id = ?", req.ProjectID).Error; err != nil {
+		if err := db.First(&project, "id = ?", req.ProjectID).Error; err != nil {
 			http.Error(w, "Project not found", http.StatusBadRequest)
 			return
 		}
 	}
 	if req.TaskID != nil {
 		var task models.Tasks
-		if err := h.db.First(&task, "id = ?", req.TaskID).Error; err != nil {
+		if err := db.First(&task, "id = ?", req.TaskID).Error; err != nil {
 			http.Error(w, "Task not found", http.StatusBadRequest)
 			return
 		}
@@ -137,7 +140,7 @@ func (h *BudgetHandler) CreateBudgetAllocation(w http.ResponseWriter, r *http.Re
 	}
 
 	// Start transaction
-	tx := h.db.Begin()
+	tx := db.Begin()
 	defer func() {
 		if r := recover(); r != nil {
 			tx.Rollback()
@@ -178,11 +181,18 @@ func (h *BudgetHandler) CreateBudgetAllocation(w http.ResponseWriter, r *http.Re
 
 // GetBudgetAllocation retrieves a budget allocation by ID
 func (h *BudgetHandler) GetBudgetAllocation(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	allocationID := vars["id"]
 
 	var allocation models.BudgetAllocation
-	if err := h.db.
+	if err := db.
 		Preload("Project").
 		Preload("Task").
 		First(&allocation, "id = ?", allocationID).Error; err != nil {
@@ -196,9 +206,16 @@ func (h *BudgetHandler) GetBudgetAllocation(w http.ResponseWriter, r *http.Reque
 
 // ListBudgetAllocations lists all budget allocations with filters
 func (h *BudgetHandler) ListBudgetAllocations(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var allocations []models.BudgetAllocation
 
-	query := h.db.Preload("Project").Preload("Task")
+	query := db.Preload("Project").Preload("Task")
 
 	// Apply filters
 	if projectID := r.URL.Query().Get("project_id"); projectID != "" {
@@ -228,6 +245,13 @@ func (h *BudgetHandler) ListBudgetAllocations(w http.ResponseWriter, r *http.Req
 
 // UpdateBudgetAllocation updates a budget allocation
 func (h *BudgetHandler) UpdateBudgetAllocation(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	allocationID := vars["id"]
 
@@ -238,13 +262,13 @@ func (h *BudgetHandler) UpdateBudgetAllocation(w http.ResponseWriter, r *http.Re
 	}
 
 	var allocation models.BudgetAllocation
-	if err := h.db.First(&allocation, "id = ?", allocationID).Error; err != nil {
+	if err := db.First(&allocation, "id = ?", allocationID).Error; err != nil {
 		http.Error(w, "Budget allocation not found", http.StatusNotFound)
 		return
 	}
 
 	// Start transaction
-	tx := h.db.Begin()
+	tx := db.Begin()
 	defer func() {
 		if r := recover(); r != nil {
 			tx.Rollback()
@@ -333,6 +357,13 @@ func (h *BudgetHandler) UpdateBudgetAllocation(w http.ResponseWriter, r *http.Re
 
 // ApproveBudgetAllocation approves a budget allocation
 func (h *BudgetHandler) ApproveBudgetAllocation(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	allocationID := vars["id"]
 
@@ -343,7 +374,7 @@ func (h *BudgetHandler) ApproveBudgetAllocation(w http.ResponseWriter, r *http.R
 	}
 
 	var allocation models.BudgetAllocation
-	if err := h.db.First(&allocation, "id = ?", allocationID).Error; err != nil {
+	if err := db.First(&allocation, "id = ?", allocationID).Error; err != nil {
 		http.Error(w, "Budget allocation not found", http.StatusNotFound)
 		return
 	}
@@ -358,7 +389,7 @@ func (h *BudgetHandler) ApproveBudgetAllocation(w http.ResponseWriter, r *http.R
 		allocation.Notes = allocation.Notes + "\n[Approval] " + req.ApprovalComment
 	}
 
-	if err := h.db.Save(&allocation).Error; err != nil {
+	if err := db.Save(&allocation).Error; err != nil {
 		http.Error(w, "Failed to approve budget allocation", http.StatusInternalServerError)
 		return
 	}
@@ -373,11 +404,18 @@ func (h *BudgetHandler) ApproveBudgetAllocation(w http.ResponseWriter, r *http.R
 
 // GetProjectBudgetSummary retrieves budget summary for a project
 func (h *BudgetHandler) GetProjectBudgetSummary(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	projectID := vars["id"]
 
 	var project models.Project
-	if err := h.db.First(&project, "id = ?", projectID).Error; err != nil {
+	if err := db.First(&project, "id = ?", projectID).Error; err != nil {
 		http.Error(w, "Project not found", http.StatusNotFound)
 		return
 	}
@@ -388,7 +426,7 @@ func (h *BudgetHandler) GetProjectBudgetSummary(w http.ResponseWriter, r *http.R
 		PlannedAmount float64 `json:"planned_amount"`
 		ActualAmount  float64 `json:"actual_amount"`
 	}
-	h.db.Model(&models.BudgetAllocation{}).
+	db.Model(&models.BudgetAllocation{}).
 		Select("category, COALESCE(SUM(planned_amount), 0) as planned_amount, COALESCE(SUM(actual_amount), 0) as actual_amount").
 		Where("project_id = ?", projectID).
 		Group("category").
@@ -401,7 +439,7 @@ func (h *BudgetHandler) GetProjectBudgetSummary(w http.ResponseWriter, r *http.R
 		AllocatedBudget float64   `json:"allocated_budget"`
 		TotalCost       float64   `json:"total_cost"`
 	}
-	h.db.Table("tasks").
+	db.Table("tasks").
 		Select("tasks.id as task_id, tasks.title as task_title, tasks.allocated_budget, tasks.total_cost").
 		Where("tasks.project_id = ?", projectID).
 		Scan(&taskBudgets)
@@ -436,11 +474,18 @@ func (h *BudgetHandler) GetProjectBudgetSummary(w http.ResponseWriter, r *http.R
 
 // GetTaskBudgetSummary retrieves budget summary for a task
 func (h *BudgetHandler) GetTaskBudgetSummary(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	taskID := vars["id"]
 
 	var task models.Tasks
-	if err := h.db.First(&task, "id = ?", taskID).Error; err != nil {
+	if err := db.First(&task, "id = ?", taskID).Error; err != nil {
 		http.Error(w, "Task not found", http.StatusNotFound)
 		return
 	}
@@ -451,7 +496,7 @@ func (h *BudgetHandler) GetTaskBudgetSummary(w http.ResponseWriter, r *http.Requ
 		PlannedAmount float64 `json:"planned_amount"`
 		ActualAmount  float64 `json:"actual_amount"`
 	}
-	h.db.Model(&models.BudgetAllocation{}).
+	db.Model(&models.BudgetAllocation{}).
 		Select("category, COALESCE(SUM(planned_amount), 0) as planned_amount, COALESCE(SUM(actual_amount), 0) as actual_amount").
 		Where("task_id = ?", taskID).
 		Group("category").
@@ -479,17 +524,24 @@ func (h *BudgetHandler) GetTaskBudgetSummary(w http.ResponseWriter, r *http.Requ
 
 // DeleteBudgetAllocation soft deletes a budget allocation
 func (h *BudgetHandler) DeleteBudgetAllocation(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	vars := mux.Vars(r)
 	allocationID := vars["id"]
 
 	var allocation models.BudgetAllocation
-	if err := h.db.First(&allocation, "id = ?", allocationID).Error; err != nil {
+	if err := db.First(&allocation, "id = ?", allocationID).Error; err != nil {
 		http.Error(w, "Budget allocation not found", http.StatusNotFound)
 		return
 	}
 
 	// Start transaction
-	tx := h.db.Begin()
+	tx := db.Begin()
 	defer func() {
 		if r := recover(); r != nil {
 			tx.Rollback()
