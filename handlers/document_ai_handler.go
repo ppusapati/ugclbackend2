@@ -73,8 +73,15 @@ var splitTokenRegex = regexp.MustCompile(`[^a-z0-9]+`)
 
 // ListDocumentAIIntegrationsHandler returns active AI integrations that can be used by document workflows.
 func ListDocumentAIIntegrationsHandler(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	var items []models.ThirdPartyIntegration
-	if err := config.DB.
+	if err := db.
 		Where("status = ?", models.IntegrationStatusActive).
 		Order("name ASC").
 		Find(&items).Error; err != nil {
@@ -110,6 +117,13 @@ func ListDocumentAIIntegrationsHandler(w http.ResponseWriter, r *http.Request) {
 
 // ProcessDocumentAIHandler performs document-only AI operations.
 func ProcessDocumentAIHandler(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	userID, err := getDocumentUserID(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
@@ -159,14 +173,14 @@ func ProcessDocumentAIHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	integration, err := resolveDocumentAIIntegration(req.IntegrationID)
+	integration, err := resolveDocumentAIIntegration(db, req.IntegrationID)
 	if err != nil {
 		http.Error(w, "invalid integration configuration: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	var document models.Document
-	if err := config.DB.First(&document, "id = ?", documentID).Error; err != nil {
+	if err := db.First(&document, "id = ?", documentID).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			http.Error(w, "document not found", http.StatusNotFound)
 		} else {
@@ -214,7 +228,7 @@ func ProcessDocumentAIHandler(w http.ResponseWriter, r *http.Request) {
 		IPAddress: r.RemoteAddr,
 		UserAgent: r.UserAgent(),
 	}
-	config.DB.Create(&auditLog)
+	db.Create(&auditLog)
 
 	resp := documentAIResponse{
 		DocumentID:    document.ID.String(),
@@ -230,14 +244,14 @@ func ProcessDocumentAIHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-func resolveDocumentAIIntegration(integrationID string) (*models.ThirdPartyIntegration, error) {
+func resolveDocumentAIIntegration(db *gorm.DB, integrationID string) (*models.ThirdPartyIntegration, error) {
 	id, err := uuid.Parse(integrationID)
 	if err != nil {
 		return nil, errors.New("integration_id must be a valid UUID")
 	}
 
 	var integration models.ThirdPartyIntegration
-	if err := config.DB.First(&integration, "id = ? AND status = ?", id, models.IntegrationStatusActive).Error; err != nil {
+	if err := db.First(&integration, "id = ? AND status = ?", id, models.IntegrationStatusActive).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, errors.New("integration is not active or does not exist")
 		}

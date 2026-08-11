@@ -14,6 +14,13 @@ import (
 // CreateFormTableHandler creates a dedicated table for a form (admin only)
 // POST /api/v1/admin/forms/{formCode}/create-table
 func CreateFormTableHandler(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	claims := middleware.GetClaims(r)
 	if claims == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -27,7 +34,7 @@ func CreateFormTableHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Get the form
 	var form models.AppForm
-	if err := config.DB.Where("code = ?", formCode).First(&form).Error; err != nil {
+	if err := db.Where("code = ?", formCode).First(&form).Error; err != nil {
 		log.Printf("❌ Form not found: %s", formCode)
 		http.Error(w, "form not found", http.StatusNotFound)
 		return
@@ -81,6 +88,13 @@ func CreateFormTableHandler(w http.ResponseWriter, r *http.Request) {
 // CheckFormTableStatus checks if a form's dedicated table exists
 // GET /api/v1/admin/forms/{formCode}/table-status
 func CheckFormTableStatus(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	claims := middleware.GetClaims(r)
 	if claims == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -92,7 +106,7 @@ func CheckFormTableStatus(w http.ResponseWriter, r *http.Request) {
 
 	// Get the form
 	var form models.AppForm
-	if err := config.DB.Where("code = ?", formCode).First(&form).Error; err != nil {
+	if err := db.Where("code = ?", formCode).First(&form).Error; err != nil {
 		http.Error(w, "form not found", http.StatusNotFound)
 		return
 	}
@@ -100,7 +114,6 @@ func CheckFormTableStatus(w http.ResponseWriter, r *http.Request) {
 	tableManager := NewFormTableManager()
 
 	var exists bool
-	var err error
 	if form.DBTableName != "" {
 		exists, err = tableManager.TableExists(form.DBTableName)
 		if err != nil {
@@ -122,6 +135,13 @@ func CheckFormTableStatus(w http.ResponseWriter, r *http.Request) {
 // DropFormTableHandler drops a form's dedicated table (use with caution!)
 // DELETE /api/v1/admin/forms/{formCode}/table
 func DropFormTableHandler(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	claims := middleware.GetClaims(r)
 	if claims == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -135,7 +155,7 @@ func DropFormTableHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Get the form
 	var form models.AppForm
-	if err := config.DB.Where("code = ?", formCode).First(&form).Error; err != nil {
+	if err := db.Where("code = ?", formCode).First(&form).Error; err != nil {
 		http.Error(w, "form not found", http.StatusNotFound)
 		return
 	}
@@ -173,6 +193,13 @@ func DropFormTableHandler(w http.ResponseWriter, r *http.Request) {
 // BulkCreateFormTablesHandler creates tables for all forms that need them
 // POST /api/v1/admin/forms/create-all-tables
 func BulkCreateFormTablesHandler(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	claims := middleware.GetClaims(r)
 	if claims == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -183,7 +210,7 @@ func BulkCreateFormTablesHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Get all forms with table names
 	var forms []models.AppForm
-	if err := config.DB.Where("table_name IS NOT NULL AND table_name != ''").Find(&forms).Error; err != nil {
+	if err := db.Where("table_name IS NOT NULL AND table_name != ''").Find(&forms).Error; err != nil {
 		http.Error(w, "failed to fetch forms", http.StatusInternalServerError)
 		return
 	}
