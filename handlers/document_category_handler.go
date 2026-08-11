@@ -14,6 +14,13 @@ import (
 
 // CreateDocumentCategoryHandler creates a new document category
 func CreateDocumentCategoryHandler(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	// Get claims and validate
 	claims := middleware.GetClaims(r)
 	if claims == nil {
@@ -74,13 +81,13 @@ func CreateDocumentCategoryHandler(w http.ResponseWriter, r *http.Request) {
 		category.BusinessVerticalID = &bvID
 	}
 
-	if err := config.DB.Create(&category).Error; err != nil {
+	if err := db.Create(&category).Error; err != nil {
 		http.Error(w, "failed to create category: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	// Load relationships
-	config.DB.Preload("Parent").Preload("BusinessVertical").First(&category, category.ID)
+	db.Preload("Parent").Preload("BusinessVertical").First(&category, category.ID)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -92,6 +99,13 @@ func CreateDocumentCategoryHandler(w http.ResponseWriter, r *http.Request) {
 
 // GetDocumentCategoriesHandler returns all document categories
 func GetDocumentCategoriesHandler(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	// Get claims and validate
 	claims := middleware.GetClaims(r)
 	if claims == nil {
@@ -108,7 +122,7 @@ func GetDocumentCategoriesHandler(w http.ResponseWriter, r *http.Request) {
 
 	businessVerticalID := r.URL.Query().Get("business_vertical_id")
 
-	query := config.DB.Model(&models.DocumentCategory{}).
+	query := db.Model(&models.DocumentCategory{}).
 		Preload("Parent").
 		Preload("BusinessVertical").
 		Where("is_active = ?", true)
@@ -129,6 +143,13 @@ func GetDocumentCategoriesHandler(w http.ResponseWriter, r *http.Request) {
 
 // GetDocumentCategoryHandler returns a single category by ID
 func GetDocumentCategoryHandler(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	// Get claims and validate
 	claims := middleware.GetClaims(r)
 	if claims == nil {
@@ -147,7 +168,7 @@ func GetDocumentCategoryHandler(w http.ResponseWriter, r *http.Request) {
 	categoryID := vars["id"]
 
 	var category models.DocumentCategory
-	if err := config.DB.Preload("Parent").Preload("BusinessVertical").
+	if err := db.Preload("Parent").Preload("BusinessVertical").
 		First(&category, "id = ?", categoryID).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			http.Error(w, "category not found", http.StatusNotFound)
@@ -163,6 +184,13 @@ func GetDocumentCategoryHandler(w http.ResponseWriter, r *http.Request) {
 
 // UpdateDocumentCategoryHandler updates a category
 func UpdateDocumentCategoryHandler(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	// Get claims and validate
 	claims := middleware.GetClaims(r)
 	if claims == nil {
@@ -181,7 +209,7 @@ func UpdateDocumentCategoryHandler(w http.ResponseWriter, r *http.Request) {
 	categoryID := vars["id"]
 
 	var category models.DocumentCategory
-	if err := config.DB.First(&category, "id = ?", categoryID).Error; err != nil {
+	if err := db.First(&category, "id = ?", categoryID).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			http.Error(w, "category not found", http.StatusNotFound)
 		} else {
@@ -226,12 +254,12 @@ func UpdateDocumentCategoryHandler(w http.ResponseWriter, r *http.Request) {
 		category.IsActive = *req.IsActive
 	}
 
-	if err := config.DB.Save(&category).Error; err != nil {
+	if err := db.Save(&category).Error; err != nil {
 		http.Error(w, "failed to update category: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	config.DB.Preload("Parent").Preload("BusinessVertical").First(&category, category.ID)
+	db.Preload("Parent").Preload("BusinessVertical").First(&category, category.ID)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -242,6 +270,13 @@ func UpdateDocumentCategoryHandler(w http.ResponseWriter, r *http.Request) {
 
 // DeleteDocumentCategoryHandler soft deletes a category
 func DeleteDocumentCategoryHandler(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	// Get claims and validate
 	claims := middleware.GetClaims(r)
 	if claims == nil {
@@ -260,7 +295,7 @@ func DeleteDocumentCategoryHandler(w http.ResponseWriter, r *http.Request) {
 	categoryID := vars["id"]
 
 	var category models.DocumentCategory
-	if err := config.DB.First(&category, "id = ?", categoryID).Error; err != nil {
+	if err := db.First(&category, "id = ?", categoryID).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			http.Error(w, "category not found", http.StatusNotFound)
 		} else {
@@ -271,13 +306,13 @@ func DeleteDocumentCategoryHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Check if category has documents
 	var docCount int64
-	config.DB.Model(&models.Document{}).Where("category_id = ?", categoryID).Count(&docCount)
+	db.Model(&models.Document{}).Where("category_id = ?", categoryID).Count(&docCount)
 	if docCount > 0 {
 		http.Error(w, "cannot delete category with documents", http.StatusConflict)
 		return
 	}
 
-	if err := config.DB.Delete(&category).Error; err != nil {
+	if err := db.Delete(&category).Error; err != nil {
 		http.Error(w, "failed to delete category: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -290,6 +325,13 @@ func DeleteDocumentCategoryHandler(w http.ResponseWriter, r *http.Request) {
 
 // GetDocumentTagsHandler returns all document tags
 func GetDocumentTagsHandler(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	// Get claims and validate
 	claims := middleware.GetClaims(r)
 	if claims == nil {
@@ -306,7 +348,7 @@ func GetDocumentTagsHandler(w http.ResponseWriter, r *http.Request) {
 
 	businessVerticalID := r.URL.Query().Get("business_vertical_id")
 
-	query := config.DB.Model(&models.DocumentTag{}).Preload("BusinessVertical")
+	query := db.Model(&models.DocumentTag{}).Preload("BusinessVertical")
 
 	if businessVerticalID != "" {
 		query = query.Where("business_vertical_id = ? OR business_vertical_id IS NULL", businessVerticalID)
@@ -324,6 +366,13 @@ func GetDocumentTagsHandler(w http.ResponseWriter, r *http.Request) {
 
 // CreateDocumentTagHandler creates a new tag
 func CreateDocumentTagHandler(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	// Get claims and validate
 	claims := middleware.GetClaims(r)
 	if claims == nil {
@@ -371,7 +420,7 @@ func CreateDocumentTagHandler(w http.ResponseWriter, r *http.Request) {
 		tag.BusinessVerticalID = &bvID
 	}
 
-	if err := config.DB.Create(&tag).Error; err != nil {
+	if err := db.Create(&tag).Error; err != nil {
 		http.Error(w, "failed to create tag: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -385,6 +434,13 @@ func CreateDocumentTagHandler(w http.ResponseWriter, r *http.Request) {
 
 // UpdateDocumentTagHandler updates a tag
 func UpdateDocumentTagHandler(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	// Get claims and validate
 	claims := middleware.GetClaims(r)
 	if claims == nil {
@@ -403,7 +459,7 @@ func UpdateDocumentTagHandler(w http.ResponseWriter, r *http.Request) {
 	tagID := vars["id"]
 
 	var tag models.DocumentTag
-	if err := config.DB.First(&tag, "id = ?", tagID).Error; err != nil {
+	if err := db.First(&tag, "id = ?", tagID).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			http.Error(w, "tag not found", http.StatusNotFound)
 		} else {
@@ -429,7 +485,7 @@ func UpdateDocumentTagHandler(w http.ResponseWriter, r *http.Request) {
 		tag.Color = req.Color
 	}
 
-	if err := config.DB.Save(&tag).Error; err != nil {
+	if err := db.Save(&tag).Error; err != nil {
 		http.Error(w, "failed to update tag: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -443,6 +499,13 @@ func UpdateDocumentTagHandler(w http.ResponseWriter, r *http.Request) {
 
 // DeleteDocumentTagHandler deletes a tag
 func DeleteDocumentTagHandler(w http.ResponseWriter, r *http.Request) {
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	// Get claims and validate
 	claims := middleware.GetClaims(r)
 	if claims == nil {
@@ -461,7 +524,7 @@ func DeleteDocumentTagHandler(w http.ResponseWriter, r *http.Request) {
 	tagID := vars["id"]
 
 	var tag models.DocumentTag
-	if err := config.DB.First(&tag, "id = ?", tagID).Error; err != nil {
+	if err := db.First(&tag, "id = ?", tagID).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			http.Error(w, "tag not found", http.StatusNotFound)
 		} else {
@@ -471,9 +534,9 @@ func DeleteDocumentTagHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Remove tag associations
-	config.DB.Exec("DELETE FROM document_tag_links WHERE document_tag_id = ?", tagID)
+	db.Exec("DELETE FROM document_tag_links WHERE document_tag_id = ?", tagID)
 
-	if err := config.DB.Delete(&tag).Error; err != nil {
+	if err := db.Delete(&tag).Error; err != nil {
 		http.Error(w, "failed to delete tag: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
