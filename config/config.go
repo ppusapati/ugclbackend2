@@ -101,6 +101,9 @@ func Connect() {
 		log.Fatal("Failed to run migrations:", err)
 	}
 
+	if err := EnsureControlSchema(DB); err != nil {
+		log.Fatal("Failed to prepare control schema:", err)
+	}
 }
 
 // getEnvAsInt reads an environment variable as int with a default value
