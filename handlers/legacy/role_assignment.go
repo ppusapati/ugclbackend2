@@ -1,4 +1,21 @@
-package handlers
+// Package legacy holds the pre-unification role/business-role CRUD endpoints.
+//
+// The application's authoritative access-control system is the unified RBAC
+// system (models.RBACRole / models.UserRoleAssignment, see
+// handlers/rbac_management.go and docs/RBAC_CUTOVER_RUNBOOK.md). These
+// handlers operate on the older Role/BusinessRole/UserBusinessRole tables,
+// which are no longer consulted for any authorization decision — writes here
+// only affect the legacy tables and have no effect on what a user can
+// actually do.
+//
+// This package is retained only until the RBAC cutover runbook's Removal
+// Gate conditions are met (production parity observed, rollback no longer
+// required, all deployed web/mobile versions consuming role_assignments).
+// No web or mobile client calls these routes as of the RBAC migration
+// completed in this repository. Once the Removal Gate is satisfied, this
+// package, its routes, and the underlying legacy DB tables can be deleted
+// together.
+package legacy
 
 import (
 	"encoding/json"
@@ -9,6 +26,7 @@ import (
 	"github.com/gorilla/mux"
 	"gorm.io/gorm"
 	"p9e.in/ugcl/config"
+	"p9e.in/ugcl/handlers"
 	"p9e.in/ugcl/middleware"
 	"p9e.in/ugcl/models"
 )
@@ -185,8 +203,8 @@ func AssignBusinessRole(w http.ResponseWriter, r *http.Request) {
 
 		// Evict the affected user from the auth cache.
 		middleware.InvalidateUserCache(userID)
-		InvalidateAdminUsersCache()
-		InvalidateUnifiedRolesCache()
+		handlers.InvalidateAdminUsersCache()
+		handlers.InvalidateUnifiedRolesCache()
 
 		response := map[string]interface{}{
 			"success":            true,
@@ -248,8 +266,8 @@ func AssignBusinessRole(w http.ResponseWriter, r *http.Request) {
 
 	// Evict the newly assigned user from the auth cache.
 	middleware.InvalidateUserCache(userID)
-	InvalidateAdminUsersCache()
-	InvalidateUnifiedRolesCache()
+	handlers.InvalidateAdminUsersCache()
+	handlers.InvalidateUnifiedRolesCache()
 
 	response := map[string]interface{}{
 		"success":            true,
@@ -324,8 +342,8 @@ func RemoveBusinessRole(w http.ResponseWriter, r *http.Request) {
 
 	// Evict the affected user from the auth cache so the next request re-fetches updated permissions.
 	middleware.InvalidateUserCache(userID)
-	InvalidateAdminUsersCache()
-	InvalidateUnifiedRolesCache()
+	handlers.InvalidateAdminUsersCache()
+	handlers.InvalidateUnifiedRolesCache()
 
 	response := map[string]interface{}{
 		"success": true,

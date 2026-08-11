@@ -7,6 +7,7 @@ import (
 	"github.com/gorilla/mux"
 	"p9e.in/ugcl/handlers"
 	biz "p9e.in/ugcl/handlers/business"
+	"p9e.in/ugcl/handlers/legacy"
 	"p9e.in/ugcl/handlers/masters"
 	"p9e.in/ugcl/middleware"
 )
@@ -32,12 +33,12 @@ func RegisterBusinessRoutes(r *mux.Router) {
 	api.HandleFunc("/my-businesses", biz.GetUserBusinessAccess).Methods("GET")
 	api.HandleFunc("/modules", masters.GetModules).Methods("GET")
 
-	// Role assignment routes
-	api.HandleFunc("/users/{id}/roles/assign", handlers.AssignBusinessRole).Methods("POST")
-	api.HandleFunc("/users/{id}/roles/{roleId}", handlers.RemoveBusinessRole).Methods("DELETE")
-	api.HandleFunc("/users/{id}/roles", handlers.GetUserRoles).Methods("GET")
-	api.HandleFunc("/users/{id}/assignable-roles", handlers.GetAssignableRoles).Methods("GET")
-	api.HandleFunc("/business-verticals/{id}/roles", handlers.GetVerticalRoles).Methods("GET")
+	// Legacy role assignment routes — pre-unification system, see handlers/legacy package doc.
+	api.HandleFunc("/users/{id}/roles/assign", legacy.AssignBusinessRole).Methods("POST")
+	api.HandleFunc("/users/{id}/roles/{roleId}", legacy.RemoveBusinessRole).Methods("DELETE")
+	api.HandleFunc("/users/{id}/roles", legacy.GetUserRoles).Methods("GET")
+	api.HandleFunc("/users/{id}/assignable-roles", legacy.GetAssignableRoles).Methods("GET")
+	api.HandleFunc("/business-verticals/{id}/roles", legacy.GetVerticalRoles).Methods("GET")
 
 	// =====================================================
 	// Business-Specific Routes

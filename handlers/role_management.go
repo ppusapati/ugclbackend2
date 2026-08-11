@@ -121,6 +121,13 @@ type PermissionResponse struct {
 	Action      string    `json:"action"`
 }
 
+// LEGACY — pre-unification role system (models.Role). The authoritative
+// system is unified RBAC (models.RBACRole / models.UserRoleAssignment); see
+// GetAllRolesUnified/CreateRole/UpdateRole/DeleteRole below and
+// handlers/rbac_management.go for the canonical /admin/rbac/roles endpoints.
+// This function is not called by any web or mobile client. Candidate for
+// removal per docs/RBAC_CUTOVER_RUNBOOK.md's Removal Gate.
+
 // GetAllRoles returns all roles with their permissions
 func GetAllRoles(w http.ResponseWriter, r *http.Request) {
 	pageStr := r.URL.Query().Get("page")
@@ -251,6 +258,8 @@ func CreatePermission(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(perm)
 }
 
+// LEGACY — pre-unification role system. See the banner above GetAllRoles.
+
 // CreateRole creates a new role with specified permissions
 func CreateRole(w http.ResponseWriter, r *http.Request) {
 	var req createRoleReq
@@ -308,6 +317,8 @@ func CreateRole(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(response)
 }
+
+// LEGACY — pre-unification role system. See the banner above GetAllRoles.
 
 // UpdateRole updates an existing role
 func UpdateRole(w http.ResponseWriter, r *http.Request) {
@@ -391,6 +402,8 @@ func UpdateRole(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
+// LEGACY — pre-unification role system. See the banner above GetAllRoles.
+
 // DeleteRole soft deletes a role
 func DeleteRole(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
@@ -448,6 +461,12 @@ type BusinessVerticalInfo struct {
 	Code string    `json:"code"`
 	Name string    `json:"name"`
 }
+
+// LEGACY — a read-only aggregation over the pre-unification Role/BusinessRole
+// tables, predating the RBAC cutover. Superseded by GET /admin/rbac/roles
+// (handlers/rbac_management.go), which natively supports scope filtering.
+// Not the same concept as "unified RBAC" despite the name. Not called by any
+// web or mobile client.
 
 // GetAllRolesUnified returns both global roles and business roles in a single response
 // Query params:

@@ -468,6 +468,15 @@ func DeleteBusinessVertical(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"message": "Business vertical deleted successfully"})
 }
 
+// LEGACY — pre-unification business role system (models.BusinessRole). The
+// authoritative system is unified RBAC (models.RBACRole with
+// scope_type=business_vertical); see GET /admin/rbac/roles?scope_type=business_vertical
+// in handlers/rbac_management.go. This and the following legacy business-role
+// CRUD functions (CreateBusinessRole, UpdateBusinessRole, DeleteBusinessRole,
+// AssignUserToBusinessRole, createDefaultBusinessRoles) are not called by any
+// web or mobile client. Candidates for removal per
+// docs/RBAC_CUTOVER_RUNBOOK.md's Removal Gate.
+
 // GetBusinessRoles returns all roles for a specific business vertical
 func GetBusinessRoles(w http.ResponseWriter, r *http.Request) {
 	businessID := middleware.GetCurrentBusinessID(r)
@@ -538,6 +547,8 @@ func GetBusinessRoles(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(roleResponses)
 }
+
+// LEGACY — see the banner above GetBusinessRoles.
 
 // CreateBusinessRole creates a new role for a business vertical
 func CreateBusinessRole(w http.ResponseWriter, r *http.Request) {
@@ -620,6 +631,8 @@ func CreateBusinessRole(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(response)
 }
+
+// LEGACY — see the banner above GetBusinessRoles.
 
 // UpdateBusinessRole updates an existing business role with permissions
 func UpdateBusinessRole(w http.ResponseWriter, r *http.Request) {
@@ -736,6 +749,8 @@ func UpdateBusinessRole(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
+// LEGACY — see the banner above GetBusinessRoles.
+
 // DeleteBusinessRole deactivates a business role within the current business context.
 func DeleteBusinessRole(w http.ResponseWriter, r *http.Request) {
 	businessID := middleware.GetCurrentBusinessID(r)
@@ -786,6 +801,8 @@ func DeleteBusinessRole(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"message": "role deleted successfully"})
 }
+
+// LEGACY — see the banner above GetBusinessRoles.
 
 // AssignUserToBusinessRole assigns a user to a role in a business vertical
 func AssignUserToBusinessRole(w http.ResponseWriter, r *http.Request) {
@@ -1016,6 +1033,15 @@ func GetBusinessUsers(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
+
+// LEGACY, still actively called from CreateBusinessVertical below. Seeds
+// default roles into the legacy models.BusinessRole table only — it does not
+// create any equivalent unified RBAC role (models.RBACRole with
+// scope_type=business_vertical), so every new business vertical currently
+// gets legacy-only default roles with no RBAC counterpart. This is a known
+// gap: new verticals need RBAC default roles seeded some other way (e.g.
+// manually via POST /admin/rbac/roles) until this function is either removed
+// or ported to seed RBACRole instead.
 
 // createDefaultBusinessRoles creates default roles for a new business vertical
 func createDefaultBusinessRoles(businessID uuid.UUID) {
