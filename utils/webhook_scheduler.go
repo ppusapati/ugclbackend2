@@ -14,10 +14,12 @@ type WebhookRetryScheduler struct {
 	stopChan       chan struct{}
 }
 
-// NewWebhookRetryScheduler creates a new webhook retry scheduler
+// NewWebhookRetryScheduler creates a new webhook retry scheduler. Not wired
+// into main.go (dead code per check-no-direct-db audit); if activated, it runs
+// as a background ticker at process scope with no per-request tenant context.
 func NewWebhookRetryScheduler(interval time.Duration) *WebhookRetryScheduler {
 	return &WebhookRetryScheduler{
-		webhookService: NewWebhookService(config.DB),
+		webhookService: NewWebhookService(config.DB), // config-db-ok: background scheduler, not request-scoped
 		interval:       interval,
 		stopChan:       make(chan struct{}),
 	}
@@ -58,10 +60,12 @@ type WebhookCleanupScheduler struct {
 	stopChan      chan struct{}
 }
 
-// NewWebhookCleanupScheduler creates a new webhook cleanup scheduler
+// NewWebhookCleanupScheduler creates a new webhook cleanup scheduler. Not wired
+// into main.go (dead code per check-no-direct-db audit); if activated, it runs
+// as a background ticker at process scope with no per-request tenant context.
 func NewWebhookCleanupScheduler(interval time.Duration, retentionDays int) *WebhookCleanupScheduler {
 	return &WebhookCleanupScheduler{
-		db:            config.DB,
+		db:            config.DB, // config-db-ok: background scheduler, not request-scoped
 		interval:      interval,
 		retentionDays: retentionDays,
 		stopChan:      make(chan struct{}),

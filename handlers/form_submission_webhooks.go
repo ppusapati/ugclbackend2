@@ -5,14 +5,14 @@ import (
 	"log"
 
 	"github.com/google/uuid"
-	"p9e.in/ugcl/config"
+	"gorm.io/gorm"
 	"p9e.in/ugcl/models"
 	"p9e.in/ugcl/utils"
 )
 
 const formSubmissionWebhookResourceType = "FormSubmission"
 
-func triggerFormSubmissionWebhook(submission *models.FormSubmission) {
+func triggerFormSubmissionWebhook(db *gorm.DB, submission *models.FormSubmission) {
 	if submission == nil {
 		return
 	}
@@ -26,6 +26,7 @@ func triggerFormSubmissionWebhook(submission *models.FormSubmission) {
 	}
 
 	triggerFormSubmissionWebhookPayload(
+		db,
 		submission.BusinessVerticalID,
 		submission.ID,
 		submission.FormCode,
@@ -33,12 +34,13 @@ func triggerFormSubmissionWebhook(submission *models.FormSubmission) {
 	)
 }
 
-func triggerDedicatedFormSubmissionWebhook(record *FormSubmissionRecord) {
+func triggerDedicatedFormSubmissionWebhook(db *gorm.DB, record *FormSubmissionRecord) {
 	if record == nil {
 		return
 	}
 
 	triggerFormSubmissionWebhookPayload(
+		db,
 		record.BusinessVerticalID,
 		record.ID,
 		record.FormCode,
@@ -47,6 +49,7 @@ func triggerDedicatedFormSubmissionWebhook(record *FormSubmissionRecord) {
 }
 
 func triggerFormSubmissionWebhookPayload(
+	db *gorm.DB,
 	businessID uuid.UUID,
 	submissionID uuid.UUID,
 	formCode string,
@@ -61,7 +64,7 @@ func triggerFormSubmissionWebhookPayload(
 		"form_data": formData,
 	}
 
-	webhookService := utils.NewWebhookService(config.DB)
+	webhookService := utils.NewWebhookService(db)
 	if err := webhookService.TriggerWebhook(
 		models.EventFormSubmitted,
 		formSubmissionWebhookResourceType,

@@ -212,6 +212,13 @@ func handleProfileLogins(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	userID, parseErr := uuid.Parse(claims.UserID)
 	if parseErr != nil {
 		http.Error(w, "invalid user id", http.StatusBadRequest)
@@ -228,7 +235,7 @@ func handleProfileLogins(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var loginEvents []models.UserLoginEvent
-	if err := config.DB.
+	if err := db.
 		Where("user_id = ?", userID).
 		Order("login_at DESC").
 		Limit(limit).
@@ -269,6 +276,13 @@ func handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, cleanup, err := config.DBFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+
 	userID, err := uuid.Parse(claims.UserID)
 	if err != nil {
 		http.Error(w, "invalid user id", http.StatusBadRequest)
@@ -299,7 +313,7 @@ func handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var user models.User
-	if err := config.DB.First(&user, "id = ?", userID).Error; err != nil {
+	if err := db.First(&user, "id = ?", userID).Error; err != nil {
 		http.Error(w, "user not found", http.StatusNotFound)
 		return
 	}
@@ -308,7 +322,7 @@ func handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 	user.Email = req.Email
 	user.Phone = req.Phone
 
-	if err := config.DB.Save(&user).Error; err != nil {
+	if err := db.Save(&user).Error; err != nil {
 		if utils.IsUniqueViolation(err) {
 			http.Error(w, "email or phone already in use", http.StatusConflict)
 			return
