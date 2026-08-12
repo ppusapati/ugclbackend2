@@ -250,13 +250,13 @@ func HasPermissionInVertical(userID uuid.UUID, permission string, verticalID uui
 }
 
 // GetUserAccessibleVerticals returns list of vertical IDs user has access to
-func GetUserAccessibleVerticals(userID uuid.UUID) []uuid.UUID {
+func GetUserAccessibleVerticals(ctx context.Context, userID uuid.UUID) []uuid.UUID {
 	user, err := loadUserWithAuthGraph(userID)
 	if err != nil {
 		return []uuid.UUID{}
 	}
 
-	return authService.GetAccessibleBusinessVerticals(user)
+	return authService.GetAccessibleBusinessVerticals(ctx, user)
 }
 
 func loadUserWithAuthGraph(userID uuid.UUID) (models.User, error) {

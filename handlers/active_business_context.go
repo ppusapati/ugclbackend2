@@ -96,7 +96,7 @@ func GetActiveBusinessContext(w http.ResponseWriter, r *http.Request) {
 		"business_code": business.Code,
 		"business_name": business.Name,
 		"client_key":    clientKey,
-		"source":        inferBusinessSource(userCtx, businessID),
+		"source":        inferBusinessSource(r.Context(), userCtx, businessID),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -138,12 +138,12 @@ func respondWithActiveBusinessContext(w http.ResponseWriter, status int, activeC
 	json.NewEncoder(w).Encode(response)
 }
 
-func inferBusinessSource(userCtx *middleware.UserContext, businessID uuid.UUID) string {
+func inferBusinessSource(ctx context.Context, userCtx *middleware.UserContext, businessID uuid.UUID) string {
 	if userCtx.User.BusinessVerticalID != nil && *userCtx.User.BusinessVerticalID == businessID {
 		return "user_default"
 	}
 
-	accessible := middleware.NewAuthService().GetAccessibleBusinessVerticals(*userCtx.User)
+	accessible := middleware.NewAuthService().GetAccessibleBusinessVerticals(ctx, *userCtx.User)
 	if len(accessible) == 1 && accessible[0] == businessID {
 		return "single_accessible_business"
 	}

@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"strings"
@@ -19,18 +20,24 @@ var superAdminVerticalsLoadGroup singleflight.Group
 
 const superAdminVerticalsCacheTTL = 15 * time.Minute
 
-type superAdminVerticalsCache struct {
-	mu        sync.RWMutex
+type superAdminVerticalsCacheEntry struct {
 	ids       []uuid.UUID
 	expiresAt time.Time
 }
 
-var superAdminAccessibleVerticalsCache superAdminVerticalsCache
+type superAdminVerticalsCache struct {
+	mu      sync.RWMutex
+	entries map[string]superAdminVerticalsCacheEntry
+}
+
+// superAdminAccessibleVerticalsCache is keyed by tenant schema: business_verticals
+// is a per-tenant table, so a super admin's accessible-verticals list from one
+// tenant schema must never be served for a request scoped to a different one.
+var superAdminAccessibleVerticalsCache = superAdminVerticalsCache{entries: make(map[string]superAdminVerticalsCacheEntry)}
 
 func InvalidateAccessibleBusinessVerticalsCache() {
 	superAdminAccessibleVerticalsCache.mu.Lock()
-	superAdminAccessibleVerticalsCache.ids = nil
-	superAdminAccessibleVerticalsCache.expiresAt = time.Time{}
+	clear(superAdminAccessibleVerticalsCache.entries)
 	superAdminAccessibleVerticalsCache.mu.Unlock()
 }
 
@@ -56,25 +63,13 @@ func PrewarmAuthorizationCaches(userLimit int) {
 		log.Printf("[PREWARM] auth cache loaded users: %d", len(users))
 	}
 
-	// Preload active business vertical IDs for super-admin fast path.
-	var verticals []models.BusinessVertical
-	if err := config.DB.Where("is_active = ?", true).Find(&verticals).Error; err != nil { // config-db-ok: startup prewarm, runs before any request exists
-		log.Printf("[PREWARM] super-admin vertical cache load failed: %v", err)
-		return
-	}
-
-	verticalIDs := make([]uuid.UUID, len(verticals))
-	for i, v := range verticals {
-		verticalIDs[i] = v.ID
-	}
-
-	superAdminAccessibleVerticalsCache.mu.Lock()
-	superAdminAccessibleVerticalsCache.ids = make([]uuid.UUID, len(verticalIDs))
-	copy(superAdminAccessibleVerticalsCache.ids, verticalIDs)
-	superAdminAccessibleVerticalsCache.expiresAt = time.Now().Add(superAdminVerticalsCacheTTL)
-	superAdminAccessibleVerticalsCache.mu.Unlock()
-
-	log.Printf("[PREWARM] super-admin vertical cache loaded: %d", len(verticalIDs))
+	// Deliberately not prewarming the super-admin accessible-verticals cache
+	// here: business_verticals is a per-tenant table and the cache below is
+	// now keyed by tenant schema (see GetAccessibleBusinessVerticals) — there
+	// is no single tenant to warm it for at process-startup time, and it
+	// would be wrong to seed a tenant-keyed cache from the base config.DB
+	// connection's schema. It fills in lazily on first per-tenant request
+	// instead.
 }
 
 // AuthService provides centralized authorization logic
@@ -350,33 +345,45 @@ func (s *AuthService) CanAssignRole(userLevel, targetRoleLevel int) bool {
 	return userLevel <= targetRoleLevel
 }
 
-// GetAccessibleBusinessVerticals returns list of business IDs user has access to
-func (s *AuthService) GetAccessibleBusinessVerticals(user models.User) []uuid.UUID {
+// GetAccessibleBusinessVerticals returns list of business IDs user has access to,
+// scoped to the tenant schema carried in ctx. business_verticals is a per-tenant
+// table, so both the super-admin and global-role-fallback paths below must
+// resolve their DB connection (and cache key) from ctx rather than the bare
+// config.DB global — see fk_form_submissions_business_vertical incident.
+func (s *AuthService) GetAccessibleBusinessVerticals(ctx context.Context, user models.User) []uuid.UUID {
+	schemaName := config.TenantSchemaFromContext(ctx)
+
 	if s.IsSuperAdmin(user) {
 		// Fast path: cache hit.
 		superAdminAccessibleVerticalsCache.mu.RLock()
-		if len(superAdminAccessibleVerticalsCache.ids) > 0 && time.Now().Before(superAdminAccessibleVerticalsCache.expiresAt) {
-			idsCopy := make([]uuid.UUID, len(superAdminAccessibleVerticalsCache.ids))
-			copy(idsCopy, superAdminAccessibleVerticalsCache.ids)
+		if entry, ok := superAdminAccessibleVerticalsCache.entries[schemaName]; ok && len(entry.ids) > 0 && time.Now().Before(entry.expiresAt) {
+			idsCopy := make([]uuid.UUID, len(entry.ids))
+			copy(idsCopy, entry.ids)
 			superAdminAccessibleVerticalsCache.mu.RUnlock()
 			return idsCopy
 		}
 		superAdminAccessibleVerticalsCache.mu.RUnlock()
 
 		// Slow path: deduplicate concurrent misses via singleflight.
-		loaded, _, _ := superAdminVerticalsLoadGroup.Do("super_admin_verticals", func() (interface{}, error) {
+		loaded, _, _ := superAdminVerticalsLoadGroup.Do("super_admin_verticals|"+schemaName, func() (interface{}, error) {
 			// Double-check inside the group in case another goroutine already populated it.
 			superAdminAccessibleVerticalsCache.mu.RLock()
-			if len(superAdminAccessibleVerticalsCache.ids) > 0 && time.Now().Before(superAdminAccessibleVerticalsCache.expiresAt) {
-				idsCopy := make([]uuid.UUID, len(superAdminAccessibleVerticalsCache.ids))
-				copy(idsCopy, superAdminAccessibleVerticalsCache.ids)
+			if entry, ok := superAdminAccessibleVerticalsCache.entries[schemaName]; ok && len(entry.ids) > 0 && time.Now().Before(entry.expiresAt) {
+				idsCopy := make([]uuid.UUID, len(entry.ids))
+				copy(idsCopy, entry.ids)
 				superAdminAccessibleVerticalsCache.mu.RUnlock()
 				return idsCopy, nil
 			}
 			superAdminAccessibleVerticalsCache.mu.RUnlock()
 
+			db, cleanup, dbErr := config.DBFromContext(ctx)
+			if dbErr != nil {
+				return []uuid.UUID{}, dbErr
+			}
+			defer cleanup()
+
 			var verticals []models.BusinessVertical
-			config.DB.Where("is_active = ?", true).Find(&verticals) // config-db-ok: result cached process-wide in superAdminAccessibleVerticalsCache, no request threaded into GetAccessibleBusinessVerticals
+			db.Where("is_active = ?", true).Find(&verticals)
 
 			verticalIDs := make([]uuid.UUID, len(verticals))
 			for i, v := range verticals {
@@ -384,9 +391,12 @@ func (s *AuthService) GetAccessibleBusinessVerticals(user models.User) []uuid.UU
 			}
 
 			superAdminAccessibleVerticalsCache.mu.Lock()
-			superAdminAccessibleVerticalsCache.ids = make([]uuid.UUID, len(verticalIDs))
-			copy(superAdminAccessibleVerticalsCache.ids, verticalIDs)
-			superAdminAccessibleVerticalsCache.expiresAt = time.Now().Add(superAdminVerticalsCacheTTL)
+			idsCopy := make([]uuid.UUID, len(verticalIDs))
+			copy(idsCopy, verticalIDs)
+			superAdminAccessibleVerticalsCache.entries[schemaName] = superAdminVerticalsCacheEntry{
+				ids:       idsCopy,
+				expiresAt: time.Now().Add(superAdminVerticalsCacheTTL),
+			}
 			superAdminAccessibleVerticalsCache.mu.Unlock()
 
 			return verticalIDs, nil
@@ -407,8 +417,14 @@ func (s *AuthService) GetAccessibleBusinessVerticals(user models.User) []uuid.UU
 		// Global-role users have no business-scoped assignment; return all active
 		// verticals so routing succeeds — handler-level site checks enforce boundaries.
 		if hasActiveGlobalRBACRole(user) {
+			db, cleanup, dbErr := config.DBFromContext(ctx)
+			if dbErr != nil {
+				return nil
+			}
+			defer cleanup()
+
 			var verticalIDs []uuid.UUID
-			config.DB.Model(&models.BusinessVertical{}).Where("is_active = ?", true).Pluck("id", &verticalIDs) // config-db-ok: no request threaded into GetAccessibleBusinessVerticals
+			db.Model(&models.BusinessVertical{}).Where("is_active = ?", true).Pluck("id", &verticalIDs)
 			return verticalIDs
 		}
 		return nil

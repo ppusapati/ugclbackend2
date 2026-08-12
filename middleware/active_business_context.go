@@ -267,7 +267,7 @@ func ResolveEffectiveBusinessID(r *http.Request, userCtx *UserContext) (uuid.UUI
 		return *userCtx.User.BusinessVerticalID, nil
 	}
 
-	accessible := authService.GetAccessibleBusinessVerticals(*userCtx.User)
+	accessible := authService.GetAccessibleBusinessVerticals(r.Context(), *userCtx.User)
 	if len(accessible) == 1 {
 		return accessible[0], nil
 	}
