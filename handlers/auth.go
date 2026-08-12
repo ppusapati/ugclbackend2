@@ -97,6 +97,40 @@ func resolveTenantBySlug(ctx context.Context, slug string) (*models.Tenant, stri
 	return &tenant, "", nil
 }
 
+type publicTenantOut struct {
+	Name string `json:"name"`
+	Slug string `json:"slug"`
+}
+
+// ListPublicTenants returns the minimal {name, slug} of every active tenant,
+// for populating a login-screen "organization" dropdown. Deliberately
+// public (no auth) — a login screen needs this before anyone has
+// authenticated, and there's nothing sensitive in a tenant's own display
+// name/slug (both already fully visible to that tenant's own users via the
+// login form itself). Excludes schema_name, status, and id — those aren't
+// needed here and have no reason to be public (schema_name in particular
+// is an internal implementation detail, not something a login form needs).
+//
+// GET /api/v1/tenants
+func ListPublicTenants(w http.ResponseWriter, r *http.Request) {
+	var tenants []models.Tenant
+	if err := config.DB. // config-db-ok: control-schema lookup, runs before any tenant is known
+				Where("is_active = ? AND status = ?", true, models.TenantStatusActive).
+				Order("name ASC").
+				Find(&tenants).Error; err != nil {
+		http.Error(w, "failed to list tenants", http.StatusInternalServerError)
+		return
+	}
+
+	out := make([]publicTenantOut, len(tenants))
+	for i, t := range tenants {
+		out[i] = publicTenantOut{Name: t.Name, Slug: t.Slug}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"tenants": out, "count": len(out)})
+}
+
 type registerReq struct {
 	Name               string      `json:"name"`
 	Email              string      `json:"email"`

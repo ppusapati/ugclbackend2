@@ -29,6 +29,7 @@ func RegisterRoutes() http.Handler {
 	r.HandleFunc("/api/v1/register", handlers.Register).Methods("POST")
 	r.Handle("/api/v1/login", middleware.LoginRateLimit(http.HandlerFunc(handlers.Login))).Methods("POST")
 	r.Handle("/api/v1/platform/login", middleware.LoginRateLimit(http.HandlerFunc(handlers.PlatformAdminLogin))).Methods("POST")
+	r.HandleFunc("/api/v1/tenants", handlers.ListPublicTenants).Methods("GET")
 	r.PathPrefix("/uploads/").Handler(
 		http.StripPrefix("/uploads/", http.FileServer(http.Dir("./uploads"))),
 	)
