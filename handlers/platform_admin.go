@@ -67,6 +67,7 @@ func PlatformAdminLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(platformAdminLoginResp{
 		Token: token,
 		Admin: platformAdminOut{ID: admin.ID, Name: admin.Name, Email: admin.Email},
@@ -81,6 +82,7 @@ func PlatformAdminMe(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"id":    claims.AdminID,
 		"name":  claims.Name,
@@ -125,6 +127,7 @@ func ListPlatformTenants(w http.ResponseWriter, r *http.Request) {
 	for i, t := range tenants {
 		out[i] = toTenantOut(t)
 	}
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"tenants": out, "count": len(out)})
 }
 
@@ -170,6 +173,7 @@ func CreatePlatformTenant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]interface{}{"tenant": toTenantOut(tenant)})
 }
@@ -190,6 +194,7 @@ func ProvisionPlatformTenant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"message": "tenant schema provisioned",
 		"tenant":  toTenantOut(*tenant),
@@ -248,6 +253,7 @@ func SeedPlatformTenantAdmin(w http.ResponseWriter, r *http.Request) {
 	}
 	tenant.Status = models.TenantStatusActive
 
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"message": "tenant admin seeded and tenant activated",
 		"tenant":  toTenantOut(*tenant),
