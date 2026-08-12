@@ -25,7 +25,7 @@ func GetBusinessIDFromContext(c *gin.Context) (uuid.UUID, bool) {
 		c.GetHeader("X-Business-Code"),
 		c.GetHeader("X-Business-ID"),
 	} {
-		if businessID := ResolveBusinessIdentifier(raw); businessID != uuid.Nil {
+		if businessID := ResolveBusinessIdentifier(c.Request.Context(), raw); businessID != uuid.Nil {
 			return businessID, true
 		}
 	}

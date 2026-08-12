@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -31,7 +32,7 @@ func SetActiveBusinessContext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	businessID := resolveBusinessSelection(req.BusinessID, req.BusinessCode)
+	businessID := resolveBusinessSelection(r.Context(), req.BusinessID, req.BusinessCode)
 	if businessID == uuid.Nil {
 		http.Error(w, "business_id or business_code is required", http.StatusBadRequest)
 		return
@@ -103,18 +104,18 @@ func GetActiveBusinessContext(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
-func resolveBusinessSelection(rawBusinessID, rawBusinessCode string) uuid.UUID {
+func resolveBusinessSelection(ctx context.Context, rawBusinessID, rawBusinessCode string) uuid.UUID {
 	if id := strings.TrimSpace(rawBusinessID); id != "" {
 		if parsedID, err := uuid.Parse(id); err == nil {
 			return parsedID
 		}
-		if resolved := middleware.ResolveBusinessIdentifier(id); resolved != uuid.Nil {
+		if resolved := middleware.ResolveBusinessIdentifier(ctx, id); resolved != uuid.Nil {
 			return resolved
 		}
 	}
 
 	if code := strings.TrimSpace(rawBusinessCode); code != "" {
-		return middleware.ResolveBusinessIdentifier(code)
+		return middleware.ResolveBusinessIdentifier(ctx, code)
 	}
 
 	return uuid.Nil

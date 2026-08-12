@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"sync"
@@ -28,6 +29,14 @@ type businessIdentifierCacheEntry struct {
 }
 
 var businessIdentifierCache = &businessIdentifierCacheStore{entries: make(map[string]businessIdentifierCacheEntry)}
+
+// businessIdentifierCacheKey scopes the cache (and the singleflight group) by
+// tenant schema as well as the raw identifier: business codes like "WATER"
+// are not globally unique across tenants, so a bare identifier key would let
+// one tenant's cached UUID leak into another tenant's lookups.
+func businessIdentifierCacheKey(schemaName, normalizedIdentifier string) string {
+	return schemaName + "|" + normalizedIdentifier
+}
 
 func (c *businessIdentifierCacheStore) get(identifier string) (uuid.UUID, bool) {
 	c.mu.Lock()
@@ -82,44 +91,51 @@ func splitPath(path string) []string {
 // getBusinessIDFromRequest extracts business ID from URL path, query parameters, or headers
 // Supports both UUID and business codes/names
 func getBusinessIDFromRequest(r *http.Request) uuid.UUID {
+	ctx := r.Context()
+
 	// Try to get from URL path variables first
 	vars := mux.Vars(r)
 	if businessIdentifier, exists := vars["businessCode"]; exists {
-		return resolveBusinessIdentifier(businessIdentifier)
+		return resolveBusinessIdentifier(ctx, businessIdentifier)
 	}
 	if businessIdentifier, exists := vars["businessId"]; exists {
-		return resolveBusinessIdentifier(businessIdentifier)
+		return resolveBusinessIdentifier(ctx, businessIdentifier)
 	}
 
 	// Try to get from query parameter
 	if businessIdentifier := r.URL.Query().Get("business_code"); businessIdentifier != "" {
-		return resolveBusinessIdentifier(businessIdentifier)
+		return resolveBusinessIdentifier(ctx, businessIdentifier)
 	}
 	if businessIdentifier := r.URL.Query().Get("business_id"); businessIdentifier != "" {
-		return resolveBusinessIdentifier(businessIdentifier)
+		return resolveBusinessIdentifier(ctx, businessIdentifier)
 	}
 
 	// Try to get from header
 	if businessIdentifier := r.Header.Get("X-Business-Code"); businessIdentifier != "" {
-		return resolveBusinessIdentifier(businessIdentifier)
+		return resolveBusinessIdentifier(ctx, businessIdentifier)
 	}
 	if businessIdentifier := r.Header.Get("X-Business-ID"); businessIdentifier != "" {
-		return resolveBusinessIdentifier(businessIdentifier)
+		return resolveBusinessIdentifier(ctx, businessIdentifier)
 	}
 
 	// Try to extract from path (e.g., /api/v1/business/{code}/reports)
 	pathParts := strings.Split(r.URL.Path, "/")
 	for i, part := range pathParts {
 		if part == "business" && i+1 < len(pathParts) {
-			return resolveBusinessIdentifier(pathParts[i+1])
+			return resolveBusinessIdentifier(ctx, pathParts[i+1])
 		}
 	}
 
 	return uuid.Nil
 }
 
-// resolveBusinessIdentifier converts business code, name, or UUID to UUID
-func resolveBusinessIdentifier(identifier string) uuid.UUID {
+// resolveBusinessIdentifier converts business code, name, or UUID to UUID.
+// Looks up codes/names against the tenant-scoped connection for the schema
+// carried in ctx (falling back to the legacy global DB when no tenant schema
+// is present, e.g. an unauthenticated route) — business_verticals rows are
+// per-tenant, so resolving against the wrong schema can silently return
+// another tenant's (or a pre-migration public-schema) UUID.
+func resolveBusinessIdentifier(ctx context.Context, identifier string) uuid.UUID {
 	identifier = strings.TrimSpace(identifier)
 	if identifier == "" {
 		return uuid.Nil
@@ -130,24 +146,32 @@ func resolveBusinessIdentifier(identifier string) uuid.UUID {
 		return businessID
 	}
 
+	schemaName := config.TenantSchemaFromContext(ctx)
 	normalizedIdentifier := strings.ToUpper(identifier)
-	if cachedBusinessID, ok := businessIdentifierCache.get(normalizedIdentifier); ok {
+	cacheKey := businessIdentifierCacheKey(schemaName, normalizedIdentifier)
+	if cachedBusinessID, ok := businessIdentifierCache.get(cacheKey); ok {
 		return cachedBusinessID
 	}
 
-	loaded, err, _ := businessIdentifierResolveGroup.Do(normalizedIdentifier, func() (interface{}, error) {
-		if cachedBusinessID, ok := businessIdentifierCache.get(normalizedIdentifier); ok {
+	loaded, err, _ := businessIdentifierResolveGroup.Do(cacheKey, func() (interface{}, error) {
+		if cachedBusinessID, ok := businessIdentifierCache.get(cacheKey); ok {
 			return cachedBusinessID, nil
 		}
 
+		db, cleanup, dbErr := config.DBFromContext(ctx)
+		if dbErr != nil {
+			return uuid.Nil, dbErr
+		}
+		defer cleanup()
+
 		var business models.BusinessVertical
-		if dbErr := config.DB. // config-db-ok: result cached process-wide in businessIdentifierCache, no request threaded into resolveBusinessIdentifier
-					Where("is_active = ? AND (UPPER(code) = ? OR UPPER(name) = ?)", true, normalizedIdentifier, normalizedIdentifier).
-					First(&business).Error; dbErr != nil {
+		if dbErr := db.
+			Where("is_active = ? AND (UPPER(code) = ? OR UPPER(name) = ?)", true, normalizedIdentifier, normalizedIdentifier).
+			First(&business).Error; dbErr != nil {
 			return uuid.Nil, dbErr
 		}
 
-		businessIdentifierCache.set(normalizedIdentifier, business.ID)
+		businessIdentifierCache.set(cacheKey, business.ID)
 		return business.ID, nil
 	})
 	if err != nil {
@@ -157,9 +181,10 @@ func resolveBusinessIdentifier(identifier string) uuid.UUID {
 	return loaded.(uuid.UUID)
 }
 
-// ResolveBusinessIdentifier resolves a business code, name, or UUID to a business UUID.
-func ResolveBusinessIdentifier(identifier string) uuid.UUID {
-	return resolveBusinessIdentifier(identifier)
+// ResolveBusinessIdentifier resolves a business code, name, or UUID to a business UUID,
+// scoped to the tenant schema carried in ctx.
+func ResolveBusinessIdentifier(ctx context.Context, identifier string) uuid.UUID {
+	return resolveBusinessIdentifier(ctx, identifier)
 }
 
 // GetCurrentBusinessID returns the business ID from the current request context
