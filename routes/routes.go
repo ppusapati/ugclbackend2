@@ -55,7 +55,6 @@ func RegisterRoutes() http.Handler {
 	api.HandleFunc("/auth/offline-bootstrap", handlers.GetOfflineBootstrap).Methods("GET")
 
 	// Register resource routes
-	registerOperationalRoutes(api)
 	registerKPIRoutes(api)
 	registerFileRoutes(api)
 	registerTestRoutes(api)
@@ -344,159 +343,6 @@ func handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
-// registerOperationalRoutes registers all operational data routes
-func registerOperationalRoutes(api *mux.Router) {
-	// DPR Site Reports
-	registerCRUDRoutes(api, "/dprsite", "report", crudHandlers{
-		getAll: handlers.GetAllSiteEngineerReports,
-		create: handlers.CreateSiteEngineerReport,
-		getOne: handlers.GetSiteEngineerReport,
-		update: handlers.UpdateSiteEngineerReport,
-		delete: handlers.DeleteSiteEngineerReport,
-		batch:  handlers.BatchDprSites,
-	})
-
-	// Wrapping Reports
-	registerCRUDRoutes(api, "/wrapping", "report", crudHandlers{
-		getAll: handlers.GetAllWrappingReports,
-		create: handlers.CreateWrappingReport,
-		getOne: handlers.GetWrappingReport,
-		update: handlers.UpdateWrappingReport,
-		delete: handlers.DeleteWrappingReport,
-		batch:  handlers.BatchWrappings,
-	})
-
-	// E-way Bills
-	registerCRUDRoutes(api, "/eway", "report", crudHandlers{
-		getAll: handlers.GetAllEways,
-		create: handlers.CreateEway,
-		getOne: handlers.GetEway,
-		update: handlers.UpdateEway,
-		delete: handlers.DeleteEway,
-		batch:  handlers.BatchEwayss,
-	})
-
-	// Water Tanker Reports
-	registerCRUDRoutes(api, "/water", "report", crudHandlers{
-		getAll: handlers.GetAllWaterTankerReports,
-		create: handlers.CreateWaterTankerReport,
-		getOne: handlers.GetWaterTankerReport,
-		update: handlers.UpdateWaterTankerReport,
-		delete: handlers.DeleteWaterTankerReport,
-		batch:  handlers.BatchWaterReports,
-	})
-
-	// Stock Reports
-	registerCRUDRoutes(api, "/stock", "report", crudHandlers{
-		getAll: handlers.GetAllStockReports,
-		create: handlers.CreateStockReport,
-		getOne: handlers.GetStockReport,
-		update: handlers.UpdateStockReport,
-		delete: handlers.DeleteStockReport,
-		batch:  handlers.BatchStocks,
-	})
-
-	// Dairy Site Reports
-	registerCRUDRoutes(api, "/dairysite", "report", crudHandlers{
-		getAll: handlers.GetAllDairySiteReports,
-		create: handlers.CreateDairySiteReport,
-		getOne: handlers.GetDairySiteReport,
-		update: handlers.UpdateDairySiteReport,
-		delete: handlers.DeleteDairySiteReport,
-		batch:  handlers.BatchDairySites,
-	})
-
-	// Payment Reports
-	registerCRUDRoutes(api, "/payment", "payment", crudHandlers{
-		getAll: handlers.GetAllPayments,
-		create: handlers.CreatePayment,
-		getOne: handlers.GetPayment,
-		update: handlers.UpdatePayment,
-		delete: handlers.DeletePayment,
-		batch:  handlers.BatchPayments,
-	})
-
-	// Materials
-	registerCRUDRoutes(api, "/material", "material", crudHandlers{
-		getAll: handlers.GetAllMaterials,
-		create: handlers.CreateMaterial,
-		getOne: handlers.GetMaterial,
-		update: handlers.UpdateMaterial,
-		delete: handlers.DeleteMaterial,
-		batch:  handlers.BatchMaterials,
-	})
-
-	// MNR Reports
-	registerCRUDRoutes(api, "/mnr", "report", crudHandlers{
-		getAll: handlers.GetAllMNRReports,
-		create: handlers.CreateMNRReport,
-		getOne: handlers.GetMNRReport,
-		update: handlers.UpdateMNRReport,
-		delete: handlers.DeleteMNRReport,
-		batch:  handlers.BatchMnrs,
-	})
-
-	// NMR Vehicles
-	registerCRUDRoutes(api, "/nmr_vehicle", "report", crudHandlers{
-		getAll: handlers.GetAllNmrVehicle,
-		create: handlers.CreateNmrVehicle,
-		getOne: handlers.GetNmrVehicle,
-		update: handlers.UpdateNmrVehicle,
-		delete: handlers.DeleteNmrVehicle,
-		batch:  handlers.BatchNmrVehicle,
-	})
-
-	// Contractors
-	registerCRUDRoutes(api, "/contractor", "report", crudHandlers{
-		getAll: handlers.GetAllContractorReports,
-		create: handlers.CreateContractorReport,
-		getOne: handlers.GetContractorReport,
-		update: handlers.UpdateContractorReport,
-		delete: handlers.DeleteContractorReport,
-		batch:  handlers.BatchContractors,
-	})
-
-	// Painting Reports
-	registerCRUDRoutes(api, "/painting", "report", crudHandlers{
-		getAll: handlers.GetAllPaintingReports,
-		create: handlers.CreatePaintingReport,
-		getOne: handlers.GetPaintingReport,
-		update: handlers.UpdatePaintingReport,
-		delete: handlers.DeletePaintingReport,
-		batch:  handlers.BatchPaintings,
-	})
-
-	// Diesel Reports
-	registerCRUDRoutes(api, "/diesel", "report", crudHandlers{
-		getAll: handlers.GetAllDieselReports,
-		create: handlers.CreateDieselReport,
-		getOne: handlers.GetDieselReport,
-		update: handlers.UpdateDieselReport,
-		delete: handlers.DeleteDieselReport,
-		batch:  handlers.BatchDiesels,
-	})
-
-	// Tasks
-	registerCRUDRoutes(api, "/tasks", "report", crudHandlers{
-		getAll: handlers.GetAllTasks,
-		create: handlers.CreateTask,
-		getOne: handlers.GetTask,
-		update: handlers.UpdateTask,
-		delete: handlers.DeleteTask,
-		batch:  handlers.BatchTasks,
-	})
-
-	// Vehicle Logs
-	registerCRUDRoutes(api, "/vehiclelog", "report", crudHandlers{
-		getAll: handlers.GetAllVehicleLogs,
-		create: handlers.CreateVehicleLog,
-		getOne: handlers.GetVehicleLog,
-		update: handlers.UpdateVehicleLog,
-		delete: handlers.DeleteVehicleLog,
-		batch:  handlers.BatchVehicleLogs,
-	})
-}
-
 // crudHandlers holds handlers for a CRUD resource
 type crudHandlers struct {
 	getAll func(http.ResponseWriter, *http.Request)
@@ -639,7 +485,14 @@ func registerAdminRoutes(admin *mux.Router) {
 		http.HandlerFunc(handlers.RemoveRBACRoleAssignment))).Methods("DELETE")
 }
 
-// registerPartnerRoutes registers partner API routes (read-only)
+// registerPartnerRoutes registers partner API routes (read-only).
+//
+// This is the sole remaining caller of the GetAll*/Get* handlers for
+// dprsite/wrapping/eway/water/stock/dairysite/payment/material/mnr/
+// nmr_vehicle/contractor/painting/diesel/tasks/vehiclelog — their CRUD
+// routes on the main API were removed as dead code (neither frontend
+// called them), but these read handlers still serve external partner
+// integrations here, so don't delete them as unused.
 func registerPartnerRoutes(partner *mux.Router) {
 	// Read-only endpoints for partners
 	partnerResources := []struct {
