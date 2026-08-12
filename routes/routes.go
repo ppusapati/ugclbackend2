@@ -28,9 +28,24 @@ func RegisterRoutes() http.Handler {
 	// =====================================================
 	r.HandleFunc("/api/v1/register", handlers.Register).Methods("POST")
 	r.Handle("/api/v1/login", middleware.LoginRateLimit(http.HandlerFunc(handlers.Login))).Methods("POST")
+	r.Handle("/api/v1/platform/login", middleware.LoginRateLimit(http.HandlerFunc(handlers.PlatformAdminLogin))).Methods("POST")
 	r.PathPrefix("/uploads/").Handler(
 		http.StripPrefix("/uploads/", http.FileServer(http.Dir("./uploads"))),
 	)
+
+	// =====================================================
+	// Platform Admin Routes (cross-tenant operators — separate identity
+	// and auth from tenant users; NOT nested under the /api/v1 subrouter
+	// above, since SecurityMiddleware/JWTMiddleware/TenantResolutionMiddleware
+	// all assume a tenant-user token and would reject a platform-admin one)
+	// =====================================================
+	platform := r.PathPrefix("/api/v1/platform").Subrouter()
+	platform.Use(middleware.PlatformAdminMiddleware)
+	platform.HandleFunc("/me", handlers.PlatformAdminMe).Methods("GET")
+	platform.HandleFunc("/tenants", handlers.ListPlatformTenants).Methods("GET")
+	platform.HandleFunc("/tenants", handlers.CreatePlatformTenant).Methods("POST")
+	platform.HandleFunc("/tenants/{id}/provision", handlers.ProvisionPlatformTenant).Methods("POST")
+	platform.HandleFunc("/tenants/{id}/seed-admin", handlers.SeedPlatformTenantAdmin).Methods("POST")
 
 	// =====================================================
 	// Protected API Routes (require JWT authentication)

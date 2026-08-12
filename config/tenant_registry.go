@@ -28,8 +28,8 @@ func EnsureControlSchema(db *gorm.DB) error {
 		return fmt.Errorf("create control schema: %w", err)
 	}
 
-	if err := db.AutoMigrate(&models.Tenant{}); err != nil {
-		return fmt.Errorf("migrate control.tenants: %w", err)
+	if err := db.AutoMigrate(&models.Tenant{}, &models.PlatformAdmin{}); err != nil {
+		return fmt.Errorf("migrate control schema tables: %w", err)
 	}
 
 	return nil
