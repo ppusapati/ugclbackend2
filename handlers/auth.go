@@ -105,11 +105,20 @@ type publicTenantOut struct {
 // ListPublicTenants returns the minimal {name, slug} of every active tenant,
 // for populating a login-screen "organization" dropdown. Deliberately
 // public (no auth) — a login screen needs this before anyone has
-// authenticated, and there's nothing sensitive in a tenant's own display
-// name/slug (both already fully visible to that tenant's own users via the
-// login form itself). Excludes schema_name, status, and id — those aren't
-// needed here and have no reason to be public (schema_name in particular
-// is an internal implementation detail, not something a login form needs).
+// authenticated. Excludes schema_name, status, and id — those aren't needed
+// here and have no reason to be public (schema_name in particular is an
+// internal implementation detail, not something a login form needs).
+//
+// Known, accepted tradeoff: this lets anyone enumerate the full list of
+// active tenant names without authenticating — a form of information
+// disclosure (flagged by an automated security review on the commit that
+// introduced this). Accepted deliberately for now: tenant names aren't
+// deeply secret at this stage (few tenants, low sensitivity), and the
+// alternative (no dropdown, users hand-typing an exact-match slug) was
+// actively causing failed logins. Revisit if the tenant list grows
+// sensitive enough to matter — options include rate limiting this endpoint
+// or moving tenant resolution to a mechanism that doesn't require bulk
+// enumeration (e.g. subdomain-based routing).
 //
 // GET /api/v1/tenants
 func ListPublicTenants(w http.ResponseWriter, r *http.Request) {
