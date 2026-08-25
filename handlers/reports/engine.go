@@ -172,6 +172,20 @@ func NewReportEngine(db *gorm.DB) *ReportEngine {
 	}
 }
 
+// currentSchema returns the first schema on the connection's search_path,
+// i.e. the tenant schema for a tenant-scoped session. Report data sources
+// must resolve against this rather than preferring "public": the per-tenant
+// tables (attendance_sessions, attendance_events, ...) exist in BOTH the
+// tenant schema and, empty, in public, so a public-first lookup silently
+// returns zero rows for every tenant.
+func (re *ReportEngine) currentSchema() string {
+	var schema string
+	if err := re.db.Raw(`SELECT current_schema()`).Scan(&schema).Error; err != nil {
+		return ""
+	}
+	return strings.TrimSpace(schema)
+}
+
 // ReportResult represents the result of a report execution
 type ReportResult struct {
 	Headers  []ReportHeader           `json:"headers"`
@@ -872,7 +886,11 @@ func (re *ReportEngine) resolveDataSourceTable(ds models.DataSource) (string, er
 		return "", fmt.Errorf("invalid table name '%s': %w", cleanTableName, err)
 	}
 
-	cacheKey := strings.ToLower(cleanTableName)
+	tenantSchema := re.currentSchema()
+	// Cache key is scoped by tenant schema: the same table name resolves to a
+	// different schema per tenant, so a bare name would leak one tenant's
+	// resolution to another via this process-wide cache.
+	cacheKey := tenantSchema + "|" + strings.ToLower(cleanTableName)
 	if cachedQualified, ok := getCachedResolvedTable(cacheKey); ok {
 		return cachedQualified, nil
 	}
@@ -892,9 +910,9 @@ func (re *ReportEngine) resolveDataSourceTable(ds models.DataSource) (string, er
 		WHERE lower(table_name) = lower(?)
 		  AND table_type = 'BASE TABLE'
 		  AND table_schema NOT IN ('pg_catalog', 'information_schema')
-		ORDER BY CASE WHEN table_schema = 'public' THEN 0 ELSE 1 END, table_schema
+		ORDER BY CASE WHEN table_schema = ? THEN 0 WHEN table_schema = 'public' THEN 1 ELSE 2 END, table_schema
 		LIMIT 1
-		`, cleanTableName).Scan(&resolved).Error; dbErr != nil {
+		`, cleanTableName, tenantSchema).Scan(&resolved).Error; dbErr != nil {
 			return "", dbErr
 		}
 		if resolved.TableName == "" {
@@ -1070,7 +1088,9 @@ func (re *ReportEngine) GetFormTableSchema(tableName string) ([]map[string]inter
 		return nil, fmt.Errorf("table name is required")
 	}
 
-	cacheKey := strings.ToLower(cleanTableName)
+	tenantSchema := re.currentSchema()
+	// Tenant-scoped cache key — see resolveDataSourceTable for why.
+	cacheKey := tenantSchema + "|" + strings.ToLower(cleanTableName)
 	if cachedSchema, ok := getCachedFormSchema(cacheKey); ok {
 		return cachedSchema, nil
 	}
@@ -1091,11 +1111,11 @@ func (re *ReportEngine) GetFormTableSchema(tableName string) ([]map[string]inter
 		WHERE lower(table_name) = lower(?)
 		  AND table_type = 'BASE TABLE'
 		  AND table_schema NOT IN ('pg_catalog', 'information_schema')
-		ORDER BY CASE WHEN table_schema = 'public' THEN 0 ELSE 1 END, table_schema
+		ORDER BY CASE WHEN table_schema = ? THEN 0 WHEN table_schema = 'public' THEN 1 ELSE 2 END, table_schema
 		LIMIT 1
 	`
 
-		if err := re.db.Raw(resolveQuery, cleanTableName).Scan(&resolved).Error; err != nil {
+		if err := re.db.Raw(resolveQuery, cleanTableName, tenantSchema).Scan(&resolved).Error; err != nil {
 			return nil, err
 		}
 
