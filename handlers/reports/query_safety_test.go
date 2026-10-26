@@ -1,6 +1,7 @@
 package reports
 
 import (
+	"strings"
 	"testing"
 
 	"p9e.in/ugcl/models"
@@ -87,6 +88,71 @@ func TestAggregateExpr(t *testing.T) {
 		if _, err := aggregateExpr(function, `"t"."x"`); err == nil {
 			t.Errorf("aggregateExpr(%q) accepted", function)
 		}
+	}
+}
+
+func TestPruneUnusedDataSources(t *testing.T) {
+	aliases := func(sources []models.DataSource) []string {
+		out := make([]string, 0, len(sources))
+		for _, ds := range sources {
+			out = append(out, ds.Alias)
+		}
+		return out
+	}
+	fieldsOn := func(alias string) []models.ReportField {
+		return []models.ReportField{{FieldName: "x", DataSource: alias}}
+	}
+
+	tests := []struct {
+		name    string
+		sources []models.DataSource
+		fields  []models.ReportField
+		want    []string
+	}{
+		{
+			"leftover base clicked before the real table is dropped",
+			[]models.DataSource{{Alias: "site_visit"}, {Alias: "dairy_report", JoinType: "LEFT"}},
+			fieldsOn("dairy_report"),
+			[]string{"dairy_report"},
+		},
+		{
+			"leftover extra table with no join is dropped",
+			[]models.DataSource{{Alias: "dairy_report"}, {Alias: "site_visit", JoinType: "LEFT"}},
+			fieldsOn("dairy_report"),
+			[]string{"dairy_report"},
+		},
+		{
+			"used source without a join is kept so the error surfaces",
+			[]models.DataSource{{Alias: "projects"}, {Alias: "tasks"}},
+			append(fieldsOn("projects"), fieldsOn("tasks")...),
+			[]string{"projects", "tasks"},
+		},
+		{
+			"base referenced only by a join condition is kept",
+			[]models.DataSource{{Alias: "projects"}, {Alias: "tasks", JoinOn: "projects.id = tasks.project_id"}},
+			fieldsOn("tasks"),
+			[]string{"projects", "tasks"},
+		},
+		{
+			"unreferenced source with a join condition is kept (it can filter rows)",
+			[]models.DataSource{{Alias: "tasks"}, {Alias: "projects", JoinType: "INNER", JoinOn: "projects.id = tasks.project_id"}},
+			fieldsOn("tasks"),
+			[]string{"tasks", "projects"},
+		},
+		{
+			"alias-less sources are never dropped",
+			[]models.DataSource{{Alias: ""}, {Alias: "dairy_report"}},
+			fieldsOn("dairy_report"),
+			[]string{"", "dairy_report"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := aliases(pruneUnusedDataSources(tt.sources, tt.fields, nil, nil, nil, nil))
+			if strings.Join(got, ",") != strings.Join(tt.want, ",") {
+				t.Errorf("kept %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 

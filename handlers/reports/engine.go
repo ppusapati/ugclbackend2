@@ -364,6 +364,8 @@ func (re *ReportEngine) buildQuery(
 	var args []interface{}
 	argIndex := 1
 
+	dataSources = pruneUnusedDataSources(dataSources, fields, filters, groupings, aggregations, sortings)
+
 	resolvedDataSources, err := re.resolveDataSources(dataSources)
 	if err != nil {
 		return "", nil, err

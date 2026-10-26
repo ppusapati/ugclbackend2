@@ -83,8 +83,14 @@ func CheckInAttendance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if hasActiveSession(db, user.ID) {
-		http.Error(w, "user already has an active attendance session", http.StatusConflict)
+	if active, err := loadActiveSession(db, user.ID, nil); err == nil {
+		// Return the open session so a client that lost its local state
+		// (reinstall, another user on the same device) can resume it and
+		// check out instead of being stuck between check-in and check-out.
+		respondJSON(w, http.StatusConflict, map[string]interface{}{
+			"message": "user already has an active attendance session",
+			"session": active,
+		})
 		return
 	}
 
@@ -289,9 +295,18 @@ func CheckOutAttendance(w http.ResponseWriter, r *http.Request) {
 		handleAttendanceError(w, err)
 		return
 	}
+	// The app's selected vertical can change between check-in and check-out
+	// (switch, re-login), so a check-out may arrive through another vertical's
+	// route. Accept it for the caller's own session only if they still hold
+	// attendance:checkout in the session's vertical; the route middleware only
+	// checked the vertical in the URL. The event is recorded against the
+	// session's own vertical.
 	if session.BusinessVerticalID != businessID {
-		http.Error(w, "attendance session does not belong to current business", http.StatusForbidden)
-		return
+		if !middleware.HasBusinessPermissionInVertical(r, session.BusinessVerticalID, "attendance:checkout") {
+			http.Error(w, "attendance session does not belong to current business", http.StatusForbidden)
+			return
+		}
+		businessID = session.BusinessVerticalID
 	}
 
 	if req.SiteID == uuid.Nil {
@@ -598,14 +613,6 @@ func loadAccessibleSite(db *gorm.DB, r *http.Request, user models.User, business
 	}
 
 	return site, nil
-}
-
-func hasActiveSession(db *gorm.DB, userID uuid.UUID) bool {
-	var count int64
-	db.Model(&models.AttendanceSession{}).
-		Where("user_id = ? AND status = ?", userID, models.AttendanceSessionStatusActive).
-		Count(&count)
-	return count > 0
 }
 
 func loadActiveSession(db *gorm.DB, userID uuid.UUID, sessionID *uuid.UUID) (models.AttendanceSession, error) {

@@ -73,7 +73,7 @@ var joinCasts = map[string]bool{
 func renderJoinCondition(joinOn string, inScope map[string]bool) (string, error) {
 	joinOn = trimOuterParens(joinOn)
 	if joinOn == "" {
-		return "", fmt.Errorf("join condition is required")
+		return "", fmt.Errorf("join condition is required: add one in the report builder (e.g. base.id = joined.base_id) or remove this data source")
 	}
 
 	conditions := joinConditionSeparator.Split(joinOn, -1)
@@ -150,6 +150,79 @@ func joinIdentifierSQL(quoted, bare string) (sql string, resolved string) {
 		return `"` + quoted + `"`, quoted
 	}
 	return bare, strings.ToLower(bare)
+}
+
+// joinAliasPattern finds the alias part of each alias.column operand.
+var joinAliasPattern = regexp.MustCompile(joinIdent + `\s*\.`)
+
+// joinConditionAliases returns the aliases a join condition refers to, as
+// Postgres resolves them (bare names folded to lower case).
+func joinConditionAliases(joinOn string) []string {
+	var aliases []string
+	for _, match := range joinAliasPattern.FindAllStringSubmatch(joinOn, -1) {
+		_, resolved := joinIdentifierSQL(match[1], match[2])
+		aliases = append(aliases, resolved)
+	}
+	return aliases
+}
+
+// pruneUnusedDataSources drops data sources that cannot affect the result:
+// nothing in the report reads from them, no join condition refers to them,
+// and (unless they are the base) they have no join condition of their own.
+// The report builder appends every table the user clicks as another source
+// with an empty join, so saved reports often carry such leftovers, and joining
+// them would need a condition nobody wrote. Sources with a join condition are
+// always kept, since an INNER or one-to-many join changes the rows returned.
+func pruneUnusedDataSources(
+	dataSources []models.DataSource,
+	fields []models.ReportField,
+	filters []models.ReportFilter,
+	groupings []models.ReportGrouping,
+	aggregations []models.ReportAggregation,
+	sortings []models.ReportSorting,
+) []models.DataSource {
+	used := make(map[string]bool)
+	markUsed := func(dataSource string) {
+		if dataSource != "" {
+			used[strings.ToLower(dataSource)] = true
+		}
+	}
+	for _, field := range fields {
+		markUsed(field.DataSource)
+	}
+	for _, filter := range filters {
+		markUsed(filter.DataSource)
+	}
+	for _, group := range groupings {
+		markUsed(group.DataSource)
+	}
+	for _, agg := range aggregations {
+		markUsed(agg.DataSource)
+	}
+	for _, sort := range sortings {
+		markUsed(sort.DataSource)
+	}
+	for _, ds := range dataSources {
+		for _, alias := range joinConditionAliases(ds.JoinOn) {
+			markUsed(alias)
+		}
+	}
+
+	kept := make([]models.DataSource, 0, len(dataSources))
+	for i, ds := range dataSources {
+		hasJoin := i > 0 && strings.TrimSpace(ds.JoinOn) != ""
+		// Alias-less sources get positional default aliases (t1, t2, ...) later,
+		// so removing any of them would shift what those names point at.
+		unnamed := strings.TrimSpace(ds.Alias) == ""
+		if unnamed || used[strings.ToLower(ds.Alias)] || hasJoin {
+			kept = append(kept, ds)
+		}
+	}
+	if len(kept) == 0 {
+		// Nothing references any source; keep them so the usual errors surface.
+		return dataSources
+	}
+	return kept
 }
 
 // validateDataSourceRefs ensures every field, filter, grouping, aggregation

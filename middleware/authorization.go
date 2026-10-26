@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/models"
 )
@@ -296,6 +298,26 @@ func HasBusinessPermissionInContext(r *http.Request, permission string) bool {
 		return false
 	}
 	return authService.HasBusinessPermission(userCtx, permission)
+}
+
+// HasBusinessPermissionInVertical checks a permission in a specific business
+// vertical instead of the request's current one, using the same rules as
+// RequireBusinessPermission (super admin, global roles, vertical roles).
+func HasBusinessPermissionInVertical(r *http.Request, businessID uuid.UUID, permission string) bool {
+	userCtx, err := authService.LoadUserContext(r)
+	if err != nil {
+		return false
+	}
+	return hasBusinessPermissionInVertical(userCtx, businessID, permission)
+}
+
+func hasBusinessPermissionInVertical(userCtx *UserContext, businessID uuid.UUID, permission string) bool {
+	if userCtx == nil || userCtx.User == nil {
+		return false
+	}
+	scoped := *userCtx
+	scoped.BusinessContext = authService.LoadBusinessContext(*userCtx.User, businessID)
+	return authService.HasBusinessPermission(&scoped, permission)
 }
 
 // handleAuthError writes appropriate error response
