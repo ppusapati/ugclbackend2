@@ -226,11 +226,9 @@ func MigrateAllActiveTenants() error {
 		return errDBNotConnected
 	}
 
-	var schemaNames []string
-	if err := DB.Table("control.tenants").
-		Where("is_active = ?", true).
-		Pluck("schema_name", &schemaNames).Error; err != nil {
-		return fmt.Errorf("load active tenant schemas: %w", err)
+	schemaNames, err := ActiveTenantSchemas()
+	if err != nil {
+		return err
 	}
 
 	var errs []error

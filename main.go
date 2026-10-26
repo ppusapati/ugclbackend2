@@ -76,6 +76,18 @@ func main() {
 
 	config.Connect()
 
+	// Connect migrated public; every tenant schema needs the same migration
+	// list or it drifts from the code. A failing tenant is logged rather than
+	// fatal so the remaining tenants still come up.
+	if err := config.MigrateAllActiveTenants(); err != nil {
+		slog.Error("tenant schema migrations failed", "error", err)
+	}
+
+	// Backfill/reconcile the control-schema API key → tenant registry.
+	if err := config.SyncIntegrationKeyRegistry(); err != nil {
+		slog.Error("integration key registry sync failed", "error", err)
+	}
+
 	// Auto-generate the integration secret encryption key on first run if not set.
 	handlers.EnsureIntegrationEncryptionKey()
 
@@ -106,14 +118,7 @@ func main() {
 		slog.Info("report view autosync disabled", "env", "REPORT_VIEW_AUTOSYNC_ON_STARTUP")
 	} else {
 		safeGo("report-view-autosync", func() {
-			reportViewAutosyncOnce.Do(func() {
-				synced, err := reports.EnsureAllActiveFormReportViews(config.DB)
-				if err != nil {
-					slog.Error("report view autosync failed", "synced_forms", synced, "error", err)
-					return
-				}
-				slog.Info("report view autosync completed", "synced_forms", synced)
-			})
+			reportViewAutosyncOnce.Do(syncTenantReportViews)
 		})
 	}
 
@@ -144,6 +149,32 @@ func main() {
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		slog.Error("server terminated unexpectedly", "error", err)
 		log.Fatal(err)
+	}
+}
+
+// syncTenantReportViews refreshes the form report views inside each active
+// tenant's schema. There is no request here to take a tenant from, so each
+// tenant gets its own scoped session.
+func syncTenantReportViews() {
+	schemaNames, err := config.ActiveTenantSchemas()
+	if err != nil {
+		slog.Error("report view autosync failed", "error", err)
+		return
+	}
+
+	for _, schemaName := range schemaNames {
+		tenantDB, cleanup, err := config.TenantScopedSession(schemaName)
+		if err != nil {
+			slog.Error("report view autosync failed", "tenant_schema", schemaName, "error", err)
+			continue
+		}
+		synced, err := reports.EnsureAllActiveFormReportViews(tenantDB)
+		cleanup()
+		if err != nil {
+			slog.Error("report view autosync failed", "tenant_schema", schemaName, "synced_forms", synced, "error", err)
+			continue
+		}
+		slog.Info("report view autosync completed", "tenant_schema", schemaName, "synced_forms", synced)
 	}
 }
 

@@ -126,6 +126,20 @@ func (sm *SchemaManager) ListTablesInSchema(schemaName string) ([]string, error)
 	return tables, nil
 }
 
+// CurrentSchema returns the first existing schema on the session's search_path:
+// the tenant schema for a tenant-scoped session, where unqualified names resolve.
+func (sm *SchemaManager) CurrentSchema() (string, error) {
+	var schemaName string
+	if err := sm.db.Raw(`SELECT current_schema()`).Scan(&schemaName).Error; err != nil {
+		return "", fmt.Errorf("failed to resolve current schema: %v", err)
+	}
+	schemaName = strings.TrimSpace(schemaName)
+	if schemaName == "" {
+		return "", fmt.Errorf("failed to resolve current schema: no schema on search_path exists")
+	}
+	return schemaName, nil
+}
+
 // GetFullTableName returns the fully qualified table name (schema.table)
 func (sm *SchemaManager) GetFullTableName(schemaName, tableName string) string {
 	if schemaName == "" || schemaName == "public" {

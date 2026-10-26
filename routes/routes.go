@@ -86,6 +86,7 @@ func RegisterRoutes() http.Handler {
 	// =====================================================
 	partner := r.PathPrefix("/api/v1/partner").Subrouter()
 	partner.Use(middleware.SecurityMiddleware)
+	partner.Use(middleware.APIKeyTenantMiddleware)
 	registerPartnerRoutes(partner)
 
 	// =====================================================

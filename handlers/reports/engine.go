@@ -109,7 +109,7 @@ func setCachedFormSchema(key string, schema []map[string]interface{}) {
 }
 
 // viewColumnsCache caches the set of actual columns present in each resolved table/view.
-// Used by resolveFieldExpression to emit NULL for stale/removed field references.
+// Used by resolveColumnRef to rewrite references to columns the view does not project.
 var viewColumnsCache = struct {
 	mu      sync.Mutex
 	entries map[string]struct {
@@ -133,17 +133,21 @@ func (re *ReportEngine) getViewColumns(qualifiedTable string) map[string]bool {
 	}
 	viewColumnsCache.mu.Unlock()
 
-	// Strip schema prefix and quotes for information_schema lookup.
+	// Strip quotes for information_schema lookup. Tenant tables also exist in
+	// public, so match the schema too when the name is qualified.
 	parts := strings.SplitN(qualifiedTable, ".", 2)
 	tablePart := strings.Trim(parts[len(parts)-1], `"`)
+	columnsQuery := `SELECT column_name FROM information_schema.columns WHERE lower(table_name) = lower(?) AND table_schema NOT IN ('pg_catalog','information_schema')`
+	columnsArgs := []interface{}{tablePart}
+	if len(parts) == 2 {
+		columnsQuery += ` AND table_schema = ?`
+		columnsArgs = append(columnsArgs, strings.Trim(parts[0], `"`))
+	}
 
 	var colRows []struct {
 		ColumnName string `gorm:"column:column_name"`
 	}
-	re.db.Raw(
-		`SELECT column_name FROM information_schema.columns WHERE lower(table_name) = lower(?) AND table_schema NOT IN ('pg_catalog','information_schema')`,
-		tablePart,
-	).Scan(&colRows)
+	re.db.Raw(columnsQuery, columnsArgs...).Scan(&colRows)
 
 	cols := make(map[string]bool, len(colRows))
 	for _, r := range colRows {
@@ -160,6 +164,14 @@ func (re *ReportEngine) getViewColumns(qualifiedTable string) map[string]bool {
 	return cols
 }
 
+// invalidateViewColumns drops the cached column set for a qualified table/view,
+// e.g. after a form report view is recreated with a different column list.
+func invalidateViewColumns(qualifiedTable string) {
+	viewColumnsCache.mu.Lock()
+	delete(viewColumnsCache.entries, strings.ToLower(qualifiedTable))
+	viewColumnsCache.mu.Unlock()
+}
+
 // ReportEngine handles dynamic report generation from form submission tables
 type ReportEngine struct {
 	db *gorm.DB
@@ -174,16 +186,16 @@ func NewReportEngine(db *gorm.DB) *ReportEngine {
 
 // currentSchema returns the first schema on the connection's search_path,
 // i.e. the tenant schema for a tenant-scoped session. Report data sources
-// must resolve against this rather than preferring "public": the per-tenant
-// tables (attendance_sessions, attendance_events, ...) exist in BOTH the
-// tenant schema and, empty, in public, so a public-first lookup silently
-// returns zero rows for every tenant.
+// resolve only within it: the per-tenant tables (attendance_sessions,
+// attendance_events, ...) also exist, empty, in public, and other tenants'
+// schemas are on the same server, so falling back anywhere else either
+// silently returns zero rows or reads another tenant's data.
 func (re *ReportEngine) currentSchema() string {
-	var schema string
-	if err := re.db.Raw(`SELECT current_schema()`).Scan(&schema).Error; err != nil {
+	schemaName, err := currentSchemaName(re.db)
+	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(schema)
+	return schemaName
 }
 
 // ReportResult represents the result of a report execution
@@ -358,6 +370,17 @@ func (re *ReportEngine) buildQuery(
 	}
 	dataSources = resolvedDataSources
 
+	// Resolved table per data source alias, so field references can be checked
+	// against the columns that table/view actually has.
+	sourceTables := make(map[string]string, len(dataSources))
+	for _, ds := range dataSources {
+		sourceTables[strings.ToLower(ds.Alias)] = ds.TableName
+	}
+
+	if err := validateDataSourceRefs(dataSources, fields, filters, groupings, aggregations, sortings); err != nil {
+		return "", nil, err
+	}
+
 	// SELECT clause
 	query.WriteString("SELECT ")
 	selectClauses := []string{}
@@ -374,18 +397,21 @@ func (re *ReportEngine) buildQuery(
 		}
 
 		if field.Aggregation != "" {
-			fieldRef, refErr := re.safeFieldRef(field.DataSource, field.FieldName)
+			fieldRef, refErr := re.resolveColumnRef(sourceTables, field.DataSource, field.FieldName)
 			if refErr != nil {
 				return "", nil, refErr
 			}
+			aggExpr, aggErr := aggregateExpr(field.Aggregation, fieldRef)
+			if aggErr != nil {
+				return "", nil, aggErr
+			}
 			selectClauses = append(selectClauses, fmt.Sprintf(
-				"%s(%s) AS %s",
-				strings.ToUpper(field.Aggregation),
-				fieldRef,
+				"%s AS %s",
+				aggExpr,
 				re.quoteIdentifier(alias),
 			))
 		} else {
-			fieldExpr, refErr := re.resolveFieldExpression(field)
+			fieldExpr, refErr := re.resolveFieldExpression(sourceTables, field)
 			if refErr != nil {
 				return "", nil, refErr
 			}
@@ -404,25 +430,20 @@ func (re *ReportEngine) buildQuery(
 			alias = fmt.Sprintf("%s_%s", strings.ToLower(agg.Function), agg.FieldName)
 		}
 
-		fieldRef, refErr := re.safeFieldRef(agg.DataSource, agg.FieldName)
+		fieldRef, refErr := re.resolveColumnRef(sourceTables, agg.DataSource, agg.FieldName)
 		if refErr != nil {
 			return "", nil, refErr
 		}
 
-		if agg.Function == "COUNT_DISTINCT" {
-			selectClauses = append(selectClauses, fmt.Sprintf(
-				"COUNT(DISTINCT %s) AS %s",
-				fieldRef,
-				re.quoteIdentifier(alias),
-			))
-		} else {
-			selectClauses = append(selectClauses, fmt.Sprintf(
-				"%s(%s) AS %s",
-				agg.Function,
-				fieldRef,
-				re.quoteIdentifier(alias),
-			))
+		aggExpr, aggErr := aggregateExpr(agg.Function, fieldRef)
+		if aggErr != nil {
+			return "", nil, aggErr
 		}
+		selectClauses = append(selectClauses, fmt.Sprintf(
+			"%s AS %s",
+			aggExpr,
+			re.quoteIdentifier(alias),
+		))
 	}
 
 	if len(selectClauses) == 0 {
@@ -446,16 +467,23 @@ func (re *ReportEngine) buildQuery(
 		query.WriteString("\n" + joinClause)
 	}
 
-	// JOIN clauses (for multi-table reports)
+	// JOIN clauses (for multi-table reports). join_type and join_on come from
+	// the saved definition, so both are rebuilt from validated parts.
+	joinScope := map[string]bool{strings.ToLower(baseAlias): true}
 	for i := 1; i < len(dataSources); i++ {
 		ds := dataSources[i]
 		dsAlias, dsAliasErr := re.safeIdentifier(ds.Alias)
 		if dsAliasErr != nil {
 			return "", nil, dsAliasErr
 		}
-		joinType := "LEFT JOIN"
-		if ds.JoinType != "" {
-			joinType = strings.ToUpper(ds.JoinType) + " JOIN"
+		joinType, joinTypeErr := joinKeyword(ds.JoinType)
+		if joinTypeErr != nil {
+			return "", nil, fmt.Errorf("data source %s: %w", dsAlias, joinTypeErr)
+		}
+		joinScope[strings.ToLower(dsAlias)] = true
+		joinOn, joinOnErr := renderJoinCondition(ds.JoinOn, joinScope)
+		if joinOnErr != nil {
+			return "", nil, fmt.Errorf("data source %s: %w", dsAlias, joinOnErr)
 		}
 
 		query.WriteString(fmt.Sprintf(
@@ -463,7 +491,7 @@ func (re *ReportEngine) buildQuery(
 			joinType,
 			ds.TableName,
 			dsAlias,
-			ds.JoinOn,
+			joinOn,
 		))
 	}
 
@@ -500,7 +528,7 @@ func (re *ReportEngine) buildQuery(
 
 	// Add filters
 	for _, filter := range filters {
-		clause, filterArgs, filterErr := re.buildFilterClause(filter, &argIndex)
+		clause, filterArgs, filterErr := re.buildFilterClause(sourceTables, filter, &argIndex)
 		if filterErr != nil {
 			return "", nil, filterErr
 		}
@@ -518,7 +546,7 @@ func (re *ReportEngine) buildQuery(
 	if len(groupings) > 0 {
 		groupClauses := []string{}
 		for _, group := range groupings {
-			groupRef, refErr := re.safeFieldRef(group.DataSource, group.FieldName)
+			groupRef, refErr := re.resolveColumnRef(sourceTables, group.DataSource, group.FieldName)
 			if refErr != nil {
 				return "", nil, refErr
 			}
@@ -537,7 +565,7 @@ func (re *ReportEngine) buildQuery(
 			}
 
 			if sort.DataSource != "" {
-				sortRef, refErr := re.safeFieldRef(sort.DataSource, sort.FieldName)
+				sortRef, refErr := re.resolveColumnRef(sourceTables, sort.DataSource, sort.FieldName)
 				if refErr != nil {
 					return "", nil, refErr
 				}
@@ -556,8 +584,32 @@ func (re *ReportEngine) buildQuery(
 	return query.String(), args, nil
 }
 
-func (re *ReportEngine) resolveFieldExpression(field models.ReportField) (string, error) {
-	switch field.FieldName {
+func (re *ReportEngine) resolveFieldExpression(sourceTables map[string]string, field models.ReportField) (string, error) {
+	// Form field IDs (e.g. "field_1775802520595") are stored as JSONB keys in
+	// form_submissions.form_data. Extract them with the ->> operator.
+	if formFieldIDPattern.MatchString(field.FieldName) {
+		safeAlias, err := re.safeIdentifier(field.DataSource)
+		if err != nil {
+			return "", err
+		}
+		aliasRef := re.quoteIdentifier(safeAlias)
+		// Safe: field.FieldName is validated to match ^field_\d+$ (no SQL injection risk).
+		// 1) If JSON value is an object, prefer its "name" display value.
+		// 2) Else, for UUID-like legacy values, try resolving site name.
+		// 3) Fallback to the raw text value.
+		return fmt.Sprintf(`CASE
+	WHEN jsonb_typeof(%s.form_data->'%s') = 'object' THEN COALESCE(%s.form_data->'%s'->>'name', %s.form_data->>'%s')
+	ELSE COALESCE((SELECT s.name FROM sites AS s WHERE s.id::text = %s.form_data->>'%s' AND s.deleted_at IS NULL LIMIT 1), %s.form_data->>'%s')
+END`, aliasRef, field.FieldName, aliasRef, field.FieldName, aliasRef, field.FieldName, aliasRef, field.FieldName, aliasRef, field.FieldName), nil
+	}
+	return re.resolveColumnRef(sourceTables, field.DataSource, field.FieldName)
+}
+
+// resolveColumnRef maps a field name offered by the report builder to a SQL
+// expression on its data source. Filters, groupings, sortings and aggregations
+// go through it too, so they accept the same fields the SELECT does.
+func (re *ReportEngine) resolveColumnRef(sourceTables map[string]string, dataSource, fieldName string) (string, error) {
+	switch fieldName {
 	case "submitted_by_name", "created_by_name":
 		return re.safeFieldRef("creator", "name")
 	case "site_name":
@@ -566,9 +618,9 @@ func (re *ReportEngine) resolveFieldExpression(field models.ReportField) (string
 		return re.safeFieldRef("business_verticals", "name")
 	case "submission_id":
 		// submission_id is an alias for the primary key 'id' of the form submissions view/table.
-		return re.safeFieldRef(field.DataSource, "id")
+		return re.safeFieldRef(dataSource, "id")
 	case "submitted_at", "current_state", "form_code":
-		return re.safeFieldRef(field.DataSource, field.FieldName)
+		return re.safeFieldRef(dataSource, fieldName)
 	case "wf_last_action":
 		return re.safeFieldRef("wf_latest", "action")
 	case "wf_last_action_by":
@@ -577,47 +629,37 @@ func (re *ReportEngine) resolveFieldExpression(field models.ReportField) (string
 		return re.safeFieldRef("wf_latest", "transitioned_at")
 	case "wf_last_comment":
 		return re.safeFieldRef("wf_latest", "comment")
-	default:
-		// Form field IDs (e.g. "field_1775802520595") are stored as JSONB keys in
-		// form_submissions.form_data. Extract them with the ->> operator.
-		if formFieldIDPattern.MatchString(field.FieldName) {
-			safeAlias, err := re.safeIdentifier(field.DataSource)
-			if err != nil {
-				return "", err
-			}
-			aliasRef := re.quoteIdentifier(safeAlias)
-			// Safe: field.FieldName is validated to match ^field_\d+$ (no SQL injection risk).
-			// 1) If JSON value is an object, prefer its "name" display value.
-			// 2) Else, for UUID-like legacy values, try resolving site name.
-			// 3) Fallback to the raw text value.
-			return fmt.Sprintf(`CASE
-	WHEN jsonb_typeof(%s.form_data->'%s') = 'object' THEN COALESCE(%s.form_data->'%s'->>'name', %s.form_data->>'%s')
-	ELSE COALESCE((SELECT s.name FROM sites AS s WHERE s.id::text = %s.form_data->>'%s' AND s.deleted_at IS NULL LIMIT 1), %s.form_data->>'%s')
-END`, aliasRef, field.FieldName, aliasRef, field.FieldName, aliasRef, field.FieldName, aliasRef, field.FieldName, aliasRef, field.FieldName), nil
-		}
-		// For raw column references, validate the column actually exists in the view.
-		// If it has been removed from the form schema, the view no longer has the column and
-		// the query would fail with SQLSTATE 42703. Emit NULL::text instead so stale reports
-		// degrade gracefully rather than error out.
-		safeFieldAlias, aliasErr := re.safeIdentifier(field.DataSource)
-		if aliasErr != nil {
-			return "", aliasErr
-		}
-		// Look up the resolved qualified table for this data source from the cache.
-		// Fall back to a best-effort lookup via the datasource alias as the table name.
-		qualifiedTable := ""
-		if cached, ok := getCachedResolvedTable(strings.ToLower(field.DataSource)); ok {
-			qualifiedTable = cached
-		}
-		if qualifiedTable != "" {
-			viewCols := re.getViewColumns(qualifiedTable)
-			if len(viewCols) > 0 && !viewCols[strings.ToLower(field.FieldName)] {
-				log.Printf("[REPORT ENGINE] column %q not found in view %s — substituting NULL", field.FieldName, qualifiedTable)
-				return fmt.Sprintf("NULL::text /* stale field: %s.%s */", safeFieldAlias, field.FieldName), nil
-			}
-		}
-		return re.safeFieldRef(field.DataSource, field.FieldName)
 	}
+
+	fieldRef, err := re.safeFieldRef(dataSource, fieldName)
+	if err != nil {
+		return "", err
+	}
+	dataSource, fieldName = strings.TrimSpace(dataSource), strings.TrimSpace(fieldName)
+
+	// Validate the column actually exists in the resolved table/view, otherwise
+	// the query fails with SQLSTATE 42703. Per-form views only project fields the
+	// form schema declares, but the report builder also offers keys inferred from
+	// submission form_data (fields since removed from the schema, or written
+	// outside it), so those have no view column.
+	qualifiedTable, ok := sourceTables[strings.ToLower(dataSource)]
+	if !ok {
+		return fieldRef, nil
+	}
+	viewCols := re.getViewColumns(qualifiedTable)
+	if len(viewCols) == 0 || viewCols[strings.ToLower(fieldName)] {
+		return fieldRef, nil
+	}
+	aliasRef := re.quoteIdentifier(dataSource)
+	if viewCols["form_data"] {
+		// Read the key straight from form_data, preferring the display "name" of
+		// object values (dropdown selections). Safe: fieldName passed safeIdentifier.
+		return fmt.Sprintf(`COALESCE(%s.form_data->'%s'->>'name', %s.form_data->>'%s')`,
+			aliasRef, fieldName, aliasRef, fieldName), nil
+	}
+	// No form_data to fall back on: emit NULL so stale reports degrade gracefully.
+	log.Printf("[REPORT ENGINE] column %q not found in %s — substituting NULL", fieldName, qualifiedTable)
+	return fmt.Sprintf("NULL::text /* stale field: %s.%s */", dataSource, fieldName), nil
 }
 
 func (re *ReportEngine) collectRequiredJoins(
@@ -627,6 +669,8 @@ func (re *ReportEngine) collectRequiredJoins(
 	sortings []models.ReportSorting,
 ) map[string]string {
 	joins := map[string]string{}
+	// dataSource is written into the join SQL; buildQuery has already checked it
+	// is a declared data source alias (validateDataSourceRefs).
 	register := func(fieldName string, dataSource string) {
 		switch fieldName {
 		case "submitted_by_name", "created_by_name":
@@ -662,9 +706,9 @@ func (re *ReportEngine) collectRequiredJoins(
 }
 
 // buildFilterClause constructs a WHERE clause for a filter
-func (re *ReportEngine) buildFilterClause(filter models.ReportFilter, argIndex *int) (string, []interface{}, error) {
+func (re *ReportEngine) buildFilterClause(sourceTables map[string]string, filter models.ReportFilter, argIndex *int) (string, []interface{}, error) {
 	var args []interface{}
-	fieldRef, refErr := re.resolveFilterFieldRef(filter)
+	fieldRef, refErr := re.resolveColumnRef(sourceTables, filter.DataSource, filter.FieldName)
 	if refErr != nil {
 		return "", nil, refErr
 	}
@@ -773,19 +817,6 @@ func (re *ReportEngine) buildFilterClause(filter models.ReportFilter, argIndex *
 	return "", nil, nil
 }
 
-func (re *ReportEngine) resolveFilterFieldRef(filter models.ReportFilter) (string, error) {
-	switch filter.FieldName {
-	case "created_by_name":
-		return re.safeFieldRef("creator", "name")
-	case "site_name":
-		return re.safeFieldRef("sites", "name")
-	case "business_vertical_name":
-		return re.safeFieldRef("business_verticals", "name")
-	default:
-		return re.safeFieldRef(filter.DataSource, filter.FieldName)
-	}
-}
-
 func (re *ReportEngine) safeIdentifier(identifier string) (string, error) {
 	id := strings.TrimSpace(identifier)
 	if id == "" {
@@ -837,11 +868,11 @@ func (re *ReportEngine) resolveDataSourceTable(ds models.DataSource) (string, er
 	// Form-based reports use a deterministic per-form view with extracted field_* columns.
 	// This keeps filters/grouping/sorting stable and avoids direct JSONB expressions everywhere.
 	if strings.TrimSpace(ds.FormCode) != "" {
-		viewName, err := EnsureReportFormViewByCode(re.db, ds.FormCode)
+		qualifiedView, err := EnsureReportFormViewByCode(re.db, ds.FormCode)
 		if err != nil {
 			return "", fmt.Errorf("failed to resolve report view for form_code %s: %w", ds.FormCode, err)
 		}
-		return re.quoteIdentifier("public") + "." + re.quoteIdentifier(viewName), nil
+		return qualifiedView, nil
 	}
 
 	// No form_code: use the literal table_name (for custom datasources or legacy reports).
@@ -862,31 +893,35 @@ func (re *ReportEngine) resolveDataSourceTable(ds models.DataSource) (string, er
 		if err := re.db.Where("LOWER(code) = LOWER(?) OR LOWER(db_table_name) = LOWER(?)", tableLookup, tableLookup).
 			Select("code").
 			First(&form).Error; err == nil && strings.TrimSpace(form.Code) != "" {
-			viewName, viewErr := EnsureReportFormViewByCode(re.db, form.Code)
+			qualifiedView, viewErr := EnsureReportFormViewByCode(re.db, form.Code)
 			if viewErr != nil {
 				return "", fmt.Errorf("failed to resolve report view for legacy datasource %s: %w", tableCandidate, viewErr)
 			}
-			return re.quoteIdentifier("public") + "." + re.quoteIdentifier(viewName), nil
+			return qualifiedView, nil
 		}
 	}
 
+	tenantSchema := re.currentSchema()
+	if tenantSchema == "" {
+		return "", fmt.Errorf("could not resolve the tenant schema for report data source %s", tableCandidate)
+	}
+
+	// Data sources resolve inside the tenant schema only. A "public." prefix
+	// is accepted for reports saved before tenants had their own schemas; any
+	// other schema would read another tenant's (or the control) data.
 	parts := strings.SplitN(tableCandidate, ".", 2)
+	cleanTableName := strings.Trim(parts[0], `"`)
 	if len(parts) == 2 {
 		schema := strings.Trim(parts[0], `"`)
-		table := strings.Trim(parts[1], `"`)
-		if _, err := re.safeIdentifier(schema); err == nil {
-			if _, err := re.safeIdentifier(table); err == nil {
-				return re.quoteIdentifier(schema) + "." + re.quoteIdentifier(table), nil
-			}
+		if schema != tenantSchema && schema != "public" {
+			return "", fmt.Errorf("report data source %s is outside the tenant schema", tableCandidate)
 		}
+		cleanTableName = strings.Trim(parts[1], `"`)
 	}
-
-	cleanTableName := strings.Trim(parts[0], `"`)
 	if _, err := re.safeIdentifier(cleanTableName); err != nil {
 		return "", fmt.Errorf("invalid table name '%s': %w", cleanTableName, err)
 	}
 
-	tenantSchema := re.currentSchema()
 	// Cache key is scoped by tenant schema: the same table name resolves to a
 	// different schema per tenant, so a bare name would leak one tenant's
 	// resolution to another via this process-wide cache.
@@ -909,14 +944,13 @@ func (re *ReportEngine) resolveDataSourceTable(ds models.DataSource) (string, er
 		FROM information_schema.tables
 		WHERE lower(table_name) = lower(?)
 		  AND table_type = 'BASE TABLE'
-		  AND table_schema NOT IN ('pg_catalog', 'information_schema')
-		ORDER BY CASE WHEN table_schema = ? THEN 0 WHEN table_schema = 'public' THEN 1 ELSE 2 END, table_schema
+		  AND table_schema = ?
 		LIMIT 1
 		`, cleanTableName, tenantSchema).Scan(&resolved).Error; dbErr != nil {
 			return "", dbErr
 		}
 		if resolved.TableName == "" {
-			return "", fmt.Errorf("report data source table not found: %s", cleanTableName)
+			return "", fmt.Errorf("report data source table not found in schema %s: %s", tenantSchema, cleanTableName)
 		}
 
 		qualified := re.quoteIdentifier(resolved.TableSchema) + "." + re.quoteIdentifier(resolved.TableName)
@@ -1105,13 +1139,13 @@ func (re *ReportEngine) GetFormTableSchema(tableName string) ([]map[string]inter
 			TableName   string `gorm:"column:table_name"`
 		}
 
+		// Tenant schema only — see currentSchema.
 		resolveQuery := `
 		SELECT table_schema, table_name
 		FROM information_schema.tables
 		WHERE lower(table_name) = lower(?)
 		  AND table_type = 'BASE TABLE'
-		  AND table_schema NOT IN ('pg_catalog', 'information_schema')
-		ORDER BY CASE WHEN table_schema = ? THEN 0 WHEN table_schema = 'public' THEN 1 ELSE 2 END, table_schema
+		  AND table_schema = ?
 		LIMIT 1
 	`
 

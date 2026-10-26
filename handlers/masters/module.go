@@ -2,14 +2,12 @@ package masters
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"p9e.in/ugcl/config"
-	"p9e.in/ugcl/handlers"
 	"p9e.in/ugcl/middleware"
 	"p9e.in/ugcl/models"
 )
@@ -202,34 +200,24 @@ func CreateModule(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Println("Module to create:", module)
 
-	// Generate schema name from module code
-	schemaManager := handlers.NewSchemaManager(db)
-	schemaName := schemaManager.GenerateSchemaName(module.Code)
-	module.SchemaName = schemaName
-
-	// Create database schema for this module
-	if err := schemaManager.CreateSchema(schemaName); err != nil {
-		log.Printf("Failed to create schema for module %s: %v", module.Code, err)
-		http.Error(w, fmt.Sprintf("failed to create module schema: %v", err), http.StatusInternalServerError)
-		return
-	}
+	// Modules no longer get their own Postgres schema: a schema named after the
+	// module code is shared by every tenant, while all form data lives in the
+	// tenant schema. The module's forms keep their tables there.
+	module.SchemaName = ""
 
 	// Create module record in database
 	if err := db.Create(&module).Error; err != nil {
-		// Attempt to clean up the schema if module creation fails
-		_ = schemaManager.DropSchema(schemaName, true)
 		log.Printf("Failed to create module %s: %v", module.Code, err)
 		http.Error(w, "failed to create module", http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("Successfully created module %s with schema %s", module.Code, schemaName)
+	log.Printf("Successfully created module %s", module.Code)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"module":      module,
-		"schema_name": schemaName,
-		"message":     fmt.Sprintf("Module created with dedicated database schema: %s", schemaName),
+		"module":  module,
+		"message": "Module created successfully",
 	})
 }
 

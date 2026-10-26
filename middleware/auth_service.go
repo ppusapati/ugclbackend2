@@ -48,19 +48,16 @@ func PrewarmAuthorizationCaches(userLimit int) {
 		return
 	}
 
-	// Preload active users with full auth graph used by LoadUserContext.
-	var users []models.User
-	if err := preloadAuthorizationGraph(config.DB). // config-db-ok: startup prewarm, runs before any request exists
-							Where("is_active = ?", true).
-							Order("updated_at DESC").
-							Limit(userLimit).
-							Find(&users).Error; err != nil {
-		log.Printf("[PREWARM] auth cache users load failed: %v", err)
-	} else {
-		for _, u := range users {
-			userCache.set(u.ID.String(), u)
-		}
-		log.Printf("[PREWARM] auth cache loaded users: %d", len(users))
+	// Preload active users with full auth graph used by LoadUserContext. Users
+	// are per-tenant, so load from each tenant's schema — the global DB would
+	// read public's copy and seed the cache tenant requests read first.
+	schemaNames, err := config.ActiveTenantSchemas()
+	if err != nil {
+		log.Printf("[PREWARM] auth cache tenant list load failed: %v", err)
+		return
+	}
+	for _, schemaName := range schemaNames {
+		prewarmTenantUsers(schemaName, userLimit)
 	}
 
 	// Deliberately not prewarming the super-admin accessible-verticals cache
@@ -70,6 +67,29 @@ func PrewarmAuthorizationCaches(userLimit int) {
 	// would be wrong to seed a tenant-keyed cache from the base config.DB
 	// connection's schema. It fills in lazily on first per-tenant request
 	// instead.
+}
+
+func prewarmTenantUsers(schemaName string, userLimit int) {
+	tenantDB, cleanup, err := config.TenantScopedSession(schemaName)
+	if err != nil {
+		log.Printf("[PREWARM] auth cache session for %s failed: %v", schemaName, err)
+		return
+	}
+	defer cleanup()
+
+	var users []models.User
+	if err := preloadAuthorizationGraph(tenantDB).
+		Where("is_active = ?", true).
+		Order("updated_at DESC").
+		Limit(userLimit).
+		Find(&users).Error; err != nil {
+		log.Printf("[PREWARM] auth cache users load failed for %s: %v", schemaName, err)
+		return
+	}
+	for _, u := range users {
+		userCache.set(u.ID.String(), u)
+	}
+	log.Printf("[PREWARM] auth cache loaded users for %s: %d", schemaName, len(users))
 }
 
 // AuthService provides centralized authorization logic

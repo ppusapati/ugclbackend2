@@ -954,7 +954,7 @@ func CreateForm(w http.ResponseWriter, r *http.Request) {
 
 	form.CreatedBy = claims.UserID
 
-	// Get the module to retrieve its schema name
+	// Validate the form's module exists
 	var module models.Module
 	if err := db.First(&module, "id = ?", form.ModuleID).Error; err != nil {
 		log.Printf("❌ Module not found for form %s: %v", form.Code, err)
@@ -998,20 +998,9 @@ func CreateForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create dedicated table for the form in the module's schema
-	var schemaName string
-	var tableCreated bool
-	if module.SchemaName != "" {
-		formTableManager := NewFormTableManager(db)
-		if err := formTableManager.CreateFormTableInSchema(&form, module.SchemaName); err != nil {
-			log.Printf("⚠️  Warning: Failed to create dedicated table for form %s in schema %s: %v", form.Code, module.SchemaName, err)
-			// Don't fail the request - the form is created, table creation is optional
-		} else {
-			schemaName = module.SchemaName
-			tableCreated = true
-			log.Printf("✅ Created dedicated table %s.%s for form %s", module.SchemaName, form.DBTableName, form.Code)
-		}
-	}
+	// No dedicated table is created here: forms that use one get it in the
+	// tenant schema on first submission (WorkflowEngineDedicated), which is
+	// where every dedicated-table read and write resolves.
 
 	log.Printf("✅ Created new form: %s", form.Code)
 	invalidateFormsCache()
@@ -1019,12 +1008,6 @@ func CreateForm(w http.ResponseWriter, r *http.Request) {
 	response := map[string]interface{}{
 		"message": "form created successfully",
 		"form":    form.ToDTO(),
-	}
-
-	if tableCreated {
-		response["schema_name"] = schemaName
-		response["table_name"] = form.DBTableName
-		response["full_table_name"] = fmt.Sprintf("%s.%s", schemaName, form.DBTableName)
 	}
 
 	w.Header().Set("Content-Type", "application/json")

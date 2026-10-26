@@ -16,8 +16,6 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	"golang.org/x/crypto/bcrypt"
-	"gorm.io/gorm"
 	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/models"
 )
@@ -52,6 +50,7 @@ const (
 
 type thirdPartyRequestContext struct {
 	IntegrationID string
+	TenantSchema  string // schema that owns the integration; requests run scoped to it
 	Name          string
 	Scopes        map[string]bool
 	AllowedURLs   map[string]bool
@@ -350,7 +349,14 @@ func (c *thirdPartyLookupCache) set(apiKey string, cfg APIClientConfig, valid bo
 var apiKeyConfigs = loadAPIKeyConfigs()
 var thirdPartyAPIKeyLookupCache = newThirdPartyLookupCache(thirdPartyLookupCacheSize, thirdPartyLookupCacheTTL)
 var trustedProxyNetworks = loadTrustedProxyNetworks()
-var thirdPartyIntegrationAccessQueue = make(chan string, thirdPartyAccessQueueSize)
+var thirdPartyIntegrationAccessQueue = make(chan integrationAccess, thirdPartyAccessQueueSize)
+
+// integrationAccess identifies an integration by tenant schema as well as ID:
+// integrations live in their tenant's schema, so the counter update must too.
+type integrationAccess struct {
+	tenantSchema  string
+	integrationID string
+}
 
 func startThirdPartyAccessBatcher() {
 	go func() {
@@ -360,7 +366,7 @@ func startThirdPartyAccessBatcher() {
 			}
 		}()
 
-		pending := make(map[string]int64)
+		pending := make(map[integrationAccess]int64)
 		ticker := time.NewTicker(thirdPartyAccessFlushInterval)
 		defer ticker.Stop()
 
@@ -369,29 +375,22 @@ func startThirdPartyAccessBatcher() {
 				return
 			}
 			now := time.Now().UTC()
-			for id, count := range pending {
+			for access, count := range pending {
 				if count <= 0 {
-					delete(pending, id)
+					delete(pending, access)
 					continue
 				}
-				if err := config.DB.Model(&models.ThirdPartyIntegration{}). // config-db-ok: background batcher goroutine started once at process init, not per-request
-												Where("id = ?", id).
-												Updates(map[string]interface{}{
-						"last_access_at": now,
-						"access_count":   gorm.Expr("access_count + ?", count),
-					}).Error; err != nil {
-					slog.Error("failed to batch record integration access", "integration_id", id, "error", err)
+				if err := config.RecordIntegrationAccess(access.tenantSchema, access.integrationID, count, now); err != nil {
+					slog.Error("failed to batch record integration access", "tenant_schema", access.tenantSchema, "integration_id", access.integrationID, "error", err)
 				}
-				delete(pending, id)
+				delete(pending, access)
 			}
 		}
 
 		for {
 			select {
-			case id := <-thirdPartyIntegrationAccessQueue:
-				if strings.TrimSpace(id) != "" {
-					pending[id]++
-				}
+			case access := <-thirdPartyIntegrationAccessQueue:
+				pending[access]++
 			case <-ticker.C:
 				flush()
 			}
@@ -531,17 +530,15 @@ func lookupThirdPartyIntegrationConfig(apiKey string) (APIClientConfig, bool) {
 		return APIClientConfig{}, false
 	}
 
-	var items []models.ThirdPartyIntegration
-	if err := config.DB.Where("status = ?", models.IntegrationStatusActive).Find(&items).Error; err != nil { // config-db-ok: result cached process-wide in thirdPartyAPIKeyLookupCache; runs in SecurityMiddleware ahead of JWT/tenant resolution
-		log.Printf("[SECURITY] failed to load third-party integrations: %v", err)
+	// Integrations live in their tenant's schema; the control-schema key
+	// registry says which one, since this runs ahead of any JWT/tenant.
+	tenantSchema, item, found, err := config.ResolveIntegrationKey(apiKey)
+	if err != nil {
+		log.Printf("[SECURITY] failed to resolve third-party integration key: %v", err)
 		return APIClientConfig{}, false
 	}
 
-	for _, item := range items {
-		if bcrypt.CompareHashAndPassword([]byte(item.APIKeyHash), []byte(apiKey)) != nil {
-			continue
-		}
-
+	if found {
 		allowedIPs := make(map[string]bool, len(item.AllowedIPs))
 		for _, ip := range item.AllowedIPs {
 			allowedIPs[ip] = true
@@ -567,6 +564,7 @@ func lookupThirdPartyIntegrationConfig(apiKey string) (APIClientConfig, bool) {
 			AllowedIPs:  allowedIPs,
 			Integration: &thirdPartyRequestContext{
 				IntegrationID: item.ID.String(),
+				TenantSchema:  tenantSchema,
 				Name:          item.Name,
 				Scopes:        scopes,
 				AllowedURLs:   allowedURLs,
@@ -628,14 +626,14 @@ func RequireIntegrationScope(scope string) func(http.Handler) http.Handler {
 	}
 }
 
-func enqueueThirdPartyIntegrationAccess(id string) {
-	if strings.TrimSpace(id) == "" {
+func enqueueThirdPartyIntegrationAccess(integration *thirdPartyRequestContext) {
+	if strings.TrimSpace(integration.IntegrationID) == "" || integration.TenantSchema == "" {
 		return
 	}
 	select {
-	case thirdPartyIntegrationAccessQueue <- id:
+	case thirdPartyIntegrationAccessQueue <- integrationAccess{tenantSchema: integration.TenantSchema, integrationID: integration.IntegrationID}:
 	default:
-		slog.Warn("integration access queue full; dropping event", "integration_id", id)
+		slog.Warn("integration access queue full; dropping event", "integration_id", integration.IntegrationID)
 	}
 }
 
@@ -733,11 +731,49 @@ func SecurityMiddleware(next http.Handler) http.Handler {
 
 		if clientConfig.Integration != nil {
 			ctx := context.WithValue(r.Context(), thirdPartyIntegrationKey, clientConfig.Integration)
+			// Integration keys belong to one tenant, so scope the request to it.
+			ctx = config.WithTenantSchema(ctx, clientConfig.Integration.TenantSchema)
 			r = r.WithContext(ctx)
-			enqueueThirdPartyIntegrationAccess(clientConfig.Integration.IntegrationID)
+			enqueueThirdPartyIntegrationAccess(clientConfig.Integration)
 		}
 
 		next.ServeHTTP(w, r)
+	})
+}
+
+// defaultTenantSchema is the tenant used for API-key-only requests that carry
+// no tenant of their own (the env-configured static keys). Empty means such
+// requests are rejected rather than served from the global DB's public schema.
+var defaultTenantSchema = loadDefaultTenantSchema()
+
+func loadDefaultTenantSchema() string {
+	schemaName := strings.TrimSpace(os.Getenv("DEFAULT_TENANT_SCHEMA"))
+	if schemaName == "" {
+		return ""
+	}
+	if err := config.ValidateTenantSchemaName(schemaName); err != nil {
+		log.Printf("[SECURITY] ignoring DEFAULT_TENANT_SCHEMA: %v", err)
+		return ""
+	}
+	return schemaName
+}
+
+// APIKeyTenantMiddleware scopes routes that authenticate by API key alone
+// (no JWT, so no TenantResolutionMiddleware) to a tenant. Integration keys
+// already carry their tenant from SecurityMiddleware; static env keys fall
+// back to DEFAULT_TENANT_SCHEMA, and are rejected when it is unset. Must run
+// after SecurityMiddleware.
+func APIKeyTenantMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if config.TenantSchemaFromContext(r.Context()) != "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if defaultTenantSchema == "" {
+			http.Error(w, "API key is not bound to a tenant", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(config.WithTenantSchema(r.Context(), defaultTenantSchema)))
 	})
 }
 

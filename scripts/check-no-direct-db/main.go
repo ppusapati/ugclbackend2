@@ -36,10 +36,9 @@ import (
 //   - config/config.go, config/migrations.go, config/unified_rbac_migration.go,
 //     config/seeding.go: startup/migration machinery, runs once at boot
 //     against the base connection before any request exists.
-//   - main.go: startup wiring and one background sync job
-//     (EnsureAllActiveFormReportViews) that is intentionally global-scoped,
-//     not per-tenant, as of this pass — revisit if that job needs to become
-//     tenant-aware later.
+//   - main.go: startup wiring. Its background jobs visit each tenant via
+//     config.ActiveTenantSchemas + config.TenantScopedSession rather than
+//     the global DB.
 //   - repos/*.go: dead code, confirmed unused by any handler (zero import
 //     sites) during the RBAC migration work. Not wired into any request
 //     path. Should be deleted rather than migrated if it stays unused.
@@ -48,13 +47,13 @@ import (
 var allowedFiles = map[string]string{
 	"config/tenant_context.go":         "accessor's own fallback implementation",
 	"config/tenant_provisioning.go":    "tenant provisioning, not per-request",
-	"config/tenant_registry.go":        "tenant registry setup, not per-request",
+	"config/tenant_registry.go":        "control-schema registry (tenants, integration keys), not tenant-scoped",
 	"config/tenant_seed.go":            "tenant seeding, not per-request",
 	"config/config.go":                 "startup connection setup",
 	"config/migrations.go":             "startup migration machinery",
 	"config/unified_rbac_migration.go": "one-time cutover tool",
 	"config/seeding.go":                "manual/dormant seeding tool, not wired into main.go's request path",
-	"main.go":                          "startup wiring + one intentionally global background job",
+	"main.go":                          "startup wiring",
 }
 
 // allowedDirs may reference config.DB anywhere inside them.

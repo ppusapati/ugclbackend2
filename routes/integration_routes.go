@@ -12,6 +12,7 @@ import (
 func RegisterIntegrationRoutes(r *mux.Router) {
 	integrations := r.PathPrefix("/api/v1/integrations").Subrouter()
 	integrations.Use(middleware.SecurityMiddleware)
+	integrations.Use(middleware.APIKeyTenantMiddleware)
 
 	integrations.HandleFunc("/health", handlers.IntegrationHealth).Methods(http.MethodGet)
 	integrations.HandleFunc("/webhook-contract", handlers.WebhookContract).Methods(http.MethodGet)

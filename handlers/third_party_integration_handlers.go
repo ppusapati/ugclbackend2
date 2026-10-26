@@ -16,6 +16,7 @@ import (
 	"github.com/gorilla/mux"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/datatypes"
+	"gorm.io/gorm"
 	"p9e.in/ugcl/config"
 	"p9e.in/ugcl/middleware"
 	"p9e.in/ugcl/models"
@@ -403,7 +404,13 @@ func CreateIntegration(w http.ResponseWriter, r *http.Request) {
 		CreatedBy:    creatorID,
 	}
 
-	if err := db.Create(&item).Error; err != nil {
+	tenantSchema := config.TenantSchemaFromContext(r.Context())
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&item).Error; err != nil {
+			return err
+		}
+		return config.RegisterIntegrationKey(tx, tenantSchema, item)
+	}); err != nil {
 		http.Error(w, "failed to create integration", http.StatusInternalServerError)
 		return
 	}
@@ -535,7 +542,14 @@ func UpdateIntegration(w http.ResponseWriter, r *http.Request) {
 		item.DataScopes = datatypes.JSONSlice[string](dataScopes)
 	}
 
-	if err := db.Save(&item).Error; err != nil {
+	tenantSchema := config.TenantSchemaFromContext(r.Context())
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Save(&item).Error; err != nil {
+			return err
+		}
+		// Status changes must reach the registry, or a deactivated key keeps resolving.
+		return config.RegisterIntegrationKey(tx, tenantSchema, item)
+	}); err != nil {
 		http.Error(w, "failed to update integration", http.StatusInternalServerError)
 		return
 	}
@@ -565,7 +579,13 @@ func DeleteIntegration(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := db.Delete(&models.ThirdPartyIntegration{}, "id = ?", id).Error; err != nil {
+	tenantSchema := config.TenantSchemaFromContext(r.Context())
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Delete(&models.ThirdPartyIntegration{}, "id = ?", id).Error; err != nil {
+			return err
+		}
+		return config.UnregisterIntegrationKey(tx, tenantSchema, id)
+	}); err != nil {
 		http.Error(w, "failed to delete integration", http.StatusInternalServerError)
 		return
 	}
@@ -611,10 +631,18 @@ func RegenerateIntegrationKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := db.Model(&item).Updates(map[string]interface{}{
-		"api_key_hash":   keyHash,
-		"api_key_prefix": plainKey[:12],
-	}).Error; err != nil {
+	tenantSchema := config.TenantSchemaFromContext(r.Context())
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&item).Updates(map[string]interface{}{
+			"api_key_hash":   keyHash,
+			"api_key_prefix": plainKey[:12],
+		}).Error; err != nil {
+			return err
+		}
+		item.APIKeyHash = keyHash
+		item.APIKeyPrefix = plainKey[:12]
+		return config.RegisterIntegrationKey(tx, tenantSchema, item)
+	}); err != nil {
 		http.Error(w, "failed to regenerate key", http.StatusInternalServerError)
 		return
 	}

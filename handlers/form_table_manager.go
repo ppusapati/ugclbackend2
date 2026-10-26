@@ -54,147 +54,6 @@ func (ftm *FormTableManager) CreateFormTable(form *models.AppForm) error {
 	return ftm.CreateFormTableWithSchema(form, nil)
 }
 
-// CreateFormTableInSchema creates a dedicated table for a form within a specific schema
-func (ftm *FormTableManager) CreateFormTableInSchema(form *models.AppForm, schemaName string) error {
-	return ftm.CreateFormTableInSchemaWithSchema(form, schemaName, nil)
-}
-
-// CreateFormTableInSchemaWithSchema creates a dedicated table with optional inferred schema in a specific database schema
-func (ftm *FormTableManager) CreateFormTableInSchemaWithSchema(form *models.AppForm, schemaName string, inferredSchema map[string]interface{}) error {
-	if form.DBTableName == "" {
-		return fmt.Errorf("form %s has no table name defined", form.Code)
-	}
-
-	// Ensure schema exists
-	if schemaName != "" && schemaName != "public" {
-		exists, err := ftm.schemaManager.SchemaExists(schemaName)
-		if err != nil {
-			return fmt.Errorf("failed to check schema existence: %v", err)
-		}
-		if !exists {
-			return fmt.Errorf("schema %s does not exist", schemaName)
-		}
-	}
-
-	// Get full table name (schema.table)
-	fullTableName := ftm.schemaManager.GetFullTableName(schemaName, form.DBTableName)
-
-	log.Printf("📊 Creating dedicated table: %s for form: %s in schema: %s", fullTableName, form.Code, schemaName)
-
-	// Parse form schema to get field definitions
-	var formSchema map[string]interface{}
-
-	// Priority: inferred schema > form_schema > steps
-	if inferredSchema != nil {
-		formSchema = inferredSchema
-		log.Printf("🔍 Using inferred schema with %d fields", len(inferredSchema["fields"].([]map[string]interface{})))
-	} else if len(form.FormSchema) > 0 && string(form.FormSchema) != "{}" {
-		if err := json.Unmarshal(form.FormSchema, &formSchema); err != nil {
-			return fmt.Errorf("failed to parse form schema: %v", err)
-		}
-	} else if len(form.Steps) > 0 && string(form.Steps) != "[]" {
-		// Extract fields from steps structure
-		fields, err := ftm.ExtractFieldsFromSteps(form.Steps)
-		if err != nil {
-			return fmt.Errorf("failed to extract fields from steps: %v", err)
-		}
-		if len(fields) > 0 {
-			formSchema = map[string]interface{}{
-				"fields": fields,
-			}
-			log.Printf("📋 Extracted %d fields from steps structure", len(fields))
-		}
-	}
-
-	// Build CREATE TABLE SQL with schema-qualified table name
-	sql := ftm.buildCreateTableSQLInSchema(schemaName, form.DBTableName, formSchema)
-
-	// Execute table creation
-	if err := ftm.db.Exec(sql).Error; err != nil {
-		return fmt.Errorf("failed to create table: %v", err)
-	}
-
-	log.Printf("✅ Successfully created table: %s in schema: %s", form.DBTableName, schemaName)
-	return nil
-}
-
-// buildCreateTableSQLInSchema generates the SQL for creating a form table within a specific schema
-func (ftm *FormTableManager) buildCreateTableSQLInSchema(schemaName, tableName string, formSchema map[string]interface{}) string {
-	var columns []string
-
-	// Get full table name
-	fullTableName := ftm.schemaManager.GetFullTableName(schemaName, tableName)
-
-	// Base fields (always present)
-	columns = append(columns,
-		"id UUID PRIMARY KEY DEFAULT gen_random_uuid()",
-		"created_by VARCHAR(255) NOT NULL",
-		"created_at TIMESTAMP NOT NULL DEFAULT NOW()",
-		"updated_by VARCHAR(255)",
-		"updated_at TIMESTAMP DEFAULT NOW()",
-		"deleted_by VARCHAR(255)",
-		"deleted_at TIMESTAMP",
-		"business_vertical_id UUID NOT NULL REFERENCES public.business_verticals(id)",
-		"site_id UUID REFERENCES public.sites(id)",
-		"workflow_id UUID REFERENCES public.workflow_definitions(id)",
-		"current_state VARCHAR(50) NOT NULL DEFAULT 'draft'",
-		"form_id UUID NOT NULL REFERENCES public.app_forms(id)",
-		"form_code VARCHAR(50) NOT NULL",
-	)
-
-	// Parse form fields from schema
-	if fields, ok := formSchema["fields"].([]interface{}); ok {
-		log.Printf("📋 Processing %d fields from formSchema", len(fields))
-		for idx, field := range fields {
-			if fieldMap, ok := field.(map[string]interface{}); ok {
-				log.Printf("🔍 Field %d: %+v", idx, fieldMap)
-				columnDef := ftm.getColumnDefinition(fieldMap)
-				if columnDef != "" {
-					log.Printf("✅ Adding column: %s", columnDef)
-					columns = append(columns, columnDef)
-				} else {
-					log.Printf("⚠️  Empty column definition for field %d", idx)
-				}
-			}
-		}
-	} else {
-		log.Printf("⚠️  formSchema['fields'] is not []interface{}, checking for []map[string]interface{}")
-		if fieldsRaw, exists := formSchema["fields"]; exists {
-			log.Printf("🔍 fields type: %T, value: %+v", fieldsRaw, fieldsRaw)
-			if fieldSlice, ok := fieldsRaw.([]map[string]interface{}); ok {
-				log.Printf("📋 Processing %d fields as []map[string]interface{}", len(fieldSlice))
-				for idx, fieldMap := range fieldSlice {
-					log.Printf("🔍 Field %d: %+v", idx, fieldMap)
-					columnDef := ftm.getColumnDefinition(fieldMap)
-					if columnDef != "" {
-						log.Printf("✅ Adding column: %s", columnDef)
-						columns = append(columns, columnDef)
-					} else {
-						log.Printf("⚠️  Empty column definition for field %d", idx)
-					}
-				}
-			}
-		} else {
-			log.Printf("⚠️  No 'fields' key in formSchema at all")
-		}
-	}
-
-	log.Printf("📊 Total columns: %d (base: 13, custom: %d)", len(columns), len(columns)-13)
-
-	// Create table with schema-qualified name
-	sql := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (\n  %s\n);", fullTableName, strings.Join(columns, ",\n  "))
-
-	// Add indexes with schema-qualified names
-	indexPrefix := strings.ReplaceAll(fullTableName, ".", "_")
-	sql += fmt.Sprintf("\nCREATE INDEX IF NOT EXISTS idx_%s_business_vertical ON %s(business_vertical_id);", indexPrefix, fullTableName)
-	sql += fmt.Sprintf("\nCREATE INDEX IF NOT EXISTS idx_%s_site ON %s(site_id);", indexPrefix, fullTableName)
-	sql += fmt.Sprintf("\nCREATE INDEX IF NOT EXISTS idx_%s_state ON %s(current_state);", indexPrefix, fullTableName)
-	sql += fmt.Sprintf("\nCREATE INDEX IF NOT EXISTS idx_%s_form ON %s(form_id);", indexPrefix, fullTableName)
-	sql += fmt.Sprintf("\nCREATE INDEX IF NOT EXISTS idx_%s_deleted ON %s(deleted_at);", indexPrefix, fullTableName)
-
-	return sql
-}
-
 // ExtractFieldsFromSteps extracts field definitions from the steps structure
 func (ftm *FormTableManager) ExtractFieldsFromSteps(steps json.RawMessage) ([]map[string]interface{}, error) {
 	log.Printf("🔍 ExtractFieldsFromSteps - Raw steps JSON: %s", string(steps))
@@ -799,9 +658,15 @@ func (ftm *FormTableManager) UpdateWorkflowStateInSchema(schemaName string, tabl
 	return nil
 }
 
-// DropFormTable drops a form's dedicated table (use with caution!)
+// DropFormTable drops a form's dedicated table (use with caution!). The name is
+// qualified with the tenant schema so a table missing there can never resolve
+// through search_path to, and drop, a same-named table in public.
 func (ftm *FormTableManager) DropFormTable(tableName string) error {
-	return ftm.DropFormTableInSchema("", tableName)
+	schemaName, err := ftm.schemaManager.CurrentSchema()
+	if err != nil {
+		return err
+	}
+	return ftm.DropFormTableInSchema(schemaName, tableName)
 }
 
 // DropFormTableInSchema drops a form's dedicated table within a specific schema (use with caution!)
@@ -820,15 +685,21 @@ func (ftm *FormTableManager) DropFormTableInSchema(schemaName string, tableName 
 	return nil
 }
 
-// TableExists checks if a table exists in the database
+// TableExists checks if a table exists in the tenant schema, which is where
+// the unqualified CREATE TABLE / INSERT / SELECT statements above resolve.
 func (ftm *FormTableManager) TableExists(tableName string) (bool, error) {
-	return ftm.TableExistsInSchema("public", tableName)
+	return ftm.TableExistsInSchema("", tableName)
 }
 
 // TableExistsInSchema checks if a table exists in a specific schema
+// (the tenant schema when schemaName is empty).
 func (ftm *FormTableManager) TableExistsInSchema(schemaName string, tableName string) (bool, error) {
 	if schemaName == "" {
-		schemaName = "public"
+		currentSchema, err := ftm.schemaManager.CurrentSchema()
+		if err != nil {
+			return false, err
+		}
+		schemaName = currentSchema
 	}
 	return ftm.schemaManager.TableExistsInSchema(schemaName, tableName)
 }

@@ -21,7 +21,8 @@ type Module struct {
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 
-	// Database schema for this module (stores form tables)
+	// Legacy per-module database schema. No longer created or used: form tables
+	// live in the tenant schema. Kept so existing rows still deserialize.
 	SchemaName string `gorm:"size:63" json:"schema_name,omitempty"`
 
 	// Access control - which business verticals can access this module

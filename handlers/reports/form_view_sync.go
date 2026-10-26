@@ -183,6 +183,7 @@ func ensureReportViewsForDataSources(db *gorm.DB, raw json.RawMessage) error {
 }
 
 // EnsureReportFormViewByCode creates or refreshes a deterministic per-form reporting view.
+// Returns the view's schema-qualified, quoted name (see EnsureReportFormViewForForm).
 func EnsureReportFormViewByCode(db *gorm.DB, formCode string) (string, error) {
 	trimmedCode := strings.TrimSpace(formCode)
 	if trimmedCode == "" {
@@ -204,30 +205,44 @@ func EnsureReportFormViewByCode(db *gorm.DB, formCode string) (string, error) {
 }
 
 // EnsureReportFormViewForForm creates or refreshes a report view using an in-memory form definition.
+// The view lives in the connection's current schema (the tenant schema for a
+// tenant-scoped session) and every table it reads is qualified with that same
+// schema, so its rows never depend on search_path or on which session last
+// rebuilt it. Returns the view's schema-qualified, quoted name.
 func EnsureReportFormViewForForm(db *gorm.DB, form models.AppForm) (string, error) {
 	viewName, err := reportFormViewName(form.Code)
 	if err != nil {
 		return "", err
 	}
+	schemaName, err := currentSchemaName(db)
+	if err != nil {
+		return "", err
+	}
+	qualifiedView := reportFormViewQualifiedName(schemaName, viewName)
 
 	signature := reportFormSyncSignature(form)
-	if isReportViewSyncCached(viewName, signature) {
-		exists, err := reportViewExists(db, viewName)
+	if isReportViewSyncCached(qualifiedView, signature) {
+		exists, err := reportViewExists(db, qualifiedView)
 		if err == nil && exists {
-			return viewName, nil
+			return qualifiedView, nil
 		}
 	}
 
-	sql, err := buildReportFormViewSQL(form, viewName)
+	schemaColumns, err := loadSchemaColumns(db, schemaName)
 	if err != nil {
 		return "", err
 	}
 
-	// Use a transaction-scoped advisory lock per view name to prevent concurrent
+	sql, err := buildReportFormViewSQL(form, schemaName, viewName, schemaColumns)
+	if err != nil {
+		return "", err
+	}
+
+	// Use a transaction-scoped advisory lock per view to prevent concurrent
 	// dashboard/report requests from racing on DROP/CREATE and triggering 42P07.
 	err = db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Exec(`SELECT pg_advisory_xact_lock(hashtext(?), 0)`, viewName).Error; err != nil {
-			return fmt.Errorf("failed to lock report view %s for sync: %w", viewName, err)
+		if err := tx.Exec(`SELECT pg_advisory_xact_lock(hashtext(?), 0)`, qualifiedView).Error; err != nil {
+			return fmt.Errorf("failed to lock report view %s for sync: %w", qualifiedView, err)
 		}
 
 		// sql is two semicolon-separated statements: DROP VIEW IF EXISTS + CREATE VIEW.
@@ -239,7 +254,7 @@ func EnsureReportFormViewForForm(db *gorm.DB, form models.AppForm) (string, erro
 				continue
 			}
 			if err := tx.Exec(stmt).Error; err != nil {
-				return fmt.Errorf("failed to create/update report view %s: %w", viewName, err)
+				return fmt.Errorf("failed to create/update report view %s: %w", qualifiedView, err)
 			}
 		}
 
@@ -249,9 +264,51 @@ func EnsureReportFormViewForForm(db *gorm.DB, form models.AppForm) (string, erro
 		return "", err
 	}
 
-	setReportViewSyncCached(viewName, signature)
+	setReportViewSyncCached(qualifiedView, signature)
+	// The column list may have changed.
+	invalidateViewColumns(qualifiedView)
 
-	return viewName, nil
+	return qualifiedView, nil
+}
+
+// currentSchemaName returns the first existing schema on the connection's
+// search_path: the tenant schema for a tenant-scoped session.
+func currentSchemaName(db *gorm.DB) (string, error) {
+	var schemaName string
+	if err := db.Raw(`SELECT current_schema()`).Scan(&schemaName).Error; err != nil {
+		return "", fmt.Errorf("resolve current schema: %w", err)
+	}
+	schemaName = strings.TrimSpace(schemaName)
+	if schemaName == "" {
+		return "", fmt.Errorf("resolve current schema: no schema on search_path exists")
+	}
+	return schemaName, nil
+}
+
+func reportFormViewQualifiedName(schemaName, viewName string) string {
+	return quoteSQLIdentifier(schemaName) + "." + quoteSQLIdentifier(viewName)
+}
+
+// loadSchemaColumns returns table → column set for every table/view in a schema,
+// so view SQL only references lookups that exist in that schema.
+func loadSchemaColumns(db *gorm.DB, schemaName string) (map[string]map[string]bool, error) {
+	var rows []struct {
+		TableName  string `gorm:"column:table_name"`
+		ColumnName string `gorm:"column:column_name"`
+	}
+	if err := db.Raw(`SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = ?`, schemaName).
+		Scan(&rows).Error; err != nil {
+		return nil, fmt.Errorf("load columns for schema %s: %w", schemaName, err)
+	}
+
+	columns := make(map[string]map[string]bool)
+	for _, row := range rows {
+		if columns[row.TableName] == nil {
+			columns[row.TableName] = make(map[string]bool)
+		}
+		columns[row.TableName][row.ColumnName] = true
+	}
+	return columns, nil
 }
 
 func reportFormSyncSignature(form models.AppForm) uint32 {
@@ -276,17 +333,16 @@ func setReportViewSyncCached(viewName string, signature uint32) {
 	reportViewSyncCache[viewName] = signature
 }
 
-func reportViewExists(db *gorm.DB, viewName string) (bool, error) {
-	qualified := fmt.Sprintf("public.%s", quoteSQLIdentifier(viewName))
+func reportViewExists(db *gorm.DB, qualifiedView string) (bool, error) {
 	var exists bool
-	if err := db.Raw(`SELECT to_regclass(?) IS NOT NULL`, qualified).Scan(&exists).Error; err != nil {
+	if err := db.Raw(`SELECT to_regclass(?) IS NOT NULL`, qualifiedView).Scan(&exists).Error; err != nil {
 		return false, err
 	}
 	return exists, nil
 }
 
-// EnsureAllActiveFormReportViews creates or refreshes report views for all active forms.
-// Returns the number of successfully synced form views.
+// EnsureAllActiveFormReportViews creates or refreshes report views for all active forms
+// in the db's current (tenant) schema. Returns the number of successfully synced form views.
 func EnsureAllActiveFormReportViews(db *gorm.DB) (int, error) {
 	var forms []models.AppForm
 	if err := db.Where("is_active = ?", true).
@@ -309,7 +365,11 @@ func EnsureAllActiveFormReportViews(db *gorm.DB) (int, error) {
 	return count, nil
 }
 
-func buildReportFormViewSQL(form models.AppForm, viewName string) (string, error) {
+// buildReportFormViewSQL returns DROP + CREATE statements for a form's report
+// view inside schemaName. schemaColumns (table → columns in that schema) gates
+// dropdown label lookups: a lookup table or column missing from the schema
+// falls back to the raw stored value instead of failing the whole view.
+func buildReportFormViewSQL(form models.AppForm, schemaName, viewName string, schemaColumns map[string]map[string]bool) (string, error) {
 	if strings.TrimSpace(form.Code) == "" {
 		return "", fmt.Errorf("cannot build report view: form code is empty")
 	}
@@ -317,6 +377,10 @@ func buildReportFormViewSQL(form models.AppForm, viewName string) (string, error
 	if !reportViewIdentifierPattern.MatchString(viewName) {
 		return "", fmt.Errorf("invalid report view identifier: %s", viewName)
 	}
+	if !reportViewIdentifierPattern.MatchString(schemaName) {
+		return "", fmt.Errorf("invalid report view schema: %s", schemaName)
+	}
+	schemaRef := quoteSQLIdentifier(schemaName)
 
 	selectedColumns := []string{
 		`fs.id AS id`,
@@ -382,7 +446,9 @@ func buildReportFormViewSQL(form models.AppForm, viewName string) (string, error
 		if res, ok := dropdownMap[alias]; ok &&
 			reportViewIdentifierPattern.MatchString(res.table) &&
 			reportViewIdentifierPattern.MatchString(res.labelCol) &&
-			reportViewIdentifierPattern.MatchString(res.valueCol) {
+			reportViewIdentifierPattern.MatchString(res.valueCol) &&
+			schemaColumns[res.table][res.labelCol] &&
+			schemaColumns[res.table][res.valueCol] {
 
 			rawExpr := rawExprs[0]
 			if len(rawExprs) > 1 {
@@ -397,9 +463,11 @@ func buildReportFormViewSQL(form models.AppForm, viewName string) (string, error
 				cond += " AND " + res.extraCond
 			}
 			selectedColumns = append(selectedColumns, fmt.Sprintf(
-				`COALESCE((SELECT %s.%s::text FROM %s WHERE %s LIMIT 1), %s) AS %s`,
+				`COALESCE((SELECT %s.%s::text FROM %s.%s AS %s WHERE %s LIMIT 1), %s) AS %s`,
 				quoteSQLIdentifier(res.table),
 				quoteSQLIdentifier(res.labelCol),
+				schemaRef,
+				quoteSQLIdentifier(res.table),
 				quoteSQLIdentifier(res.table),
 				cond,
 				rawExpr,
@@ -435,16 +503,18 @@ func buildReportFormViewSQL(form models.AppForm, viewName string) (string, error
 
 	// Return DROP + CREATE so that column type changes (e.g. text → varchar from a new
 	// COALESCE subquery) are always accepted. DROP IF EXISTS prevents errors on first run.
-	createDDL := fmt.Sprintf(`CREATE VIEW public.%s AS
+	qualifiedView := reportFormViewQualifiedName(schemaName, viewName)
+	createDDL := fmt.Sprintf(`CREATE VIEW %s AS
 SELECT
   %s
-FROM public.form_submissions AS fs
+FROM %s.form_submissions AS fs
 WHERE fs.form_code = '%s'`,
-		quoteSQLIdentifier(viewName),
+		qualifiedView,
 		strings.Join(selectedColumns, ",\n  "),
+		schemaRef,
 		escapeSQLLiteral(strings.TrimSpace(form.Code)),
 	)
-	dropDDL := fmt.Sprintf(`DROP VIEW IF EXISTS public.%s`, quoteSQLIdentifier(viewName))
+	dropDDL := fmt.Sprintf(`DROP VIEW IF EXISTS %s`, qualifiedView)
 	return dropDDL + "; " + createDDL, nil
 }
 
